@@ -1,0 +1,11 @@
+{
+  "id": "visual-evidence-selection",
+  "generatedAt": "2026-09-12T03:16:40.703Z",
+  "sources": [
+    {
+      "file": "modules/paper/artifacts/prompts/figure_selector_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are an expert academic paper figure curator.\n\nYour job: pick AT MOST {max_figures} figures out of the collected candidates that are the most useful for illustrating the paper's core narrative.\n\nIMPORTANT constraints:\n1. At MOST {max_figures} figures can be selected. Pick only the strongest / most distinctive illustrations.\n2. AVOID selecting figures that present the SAME information already covered by tables. If a table already shows the main quantitative comparison, prefer a figure illustrating a different angle (e.g., training curves, case study, qualitative comparison, ablation breakdown visualization that the table does not fully convey).\n3. Prefer diversity: cover different aspects of the paper if possible (method overview / main comparison / ablation / analysis / qualitative examples).\n\nPaper context\n-------------\n\n- Research topic:\n{research_topic}\n\n- Experiment section already written (use this to know what figures the text actually references and which narrative is already emphasized):\n{experiment_section}\n\nAvailable figures (candidates)\n------------------------------\n\n{figure_list}\n\nTables already chosen (avoid redundancy with these):\n-----------------------------------------------------\n\n{table_list}\n\n# (JSON formatting policy is provided by Foundation Layer.)\nReturn a JSON with exactly one field:\n{{\n  \"selected_figure_ids\": [\"figure_id_1\", \"figure_id_2\", ...]\n}}\n\nCRITICAL Requirements (MUST follow strictly):\n1. The list MUST have EXACTLY BETWEEN 0 AND {max_figures} items. AT MOST {max_figures}. NO EXCEPTIONS.\n2. The values MUST be artifact_id strings from the \"Available figures\" list exactly. Do not invent IDs.\n3. Order the list by relevance (most important first).\n4. If no figures are suitable, return an empty list.\n5. DO NOT include figures whose content is duplicative of the tables above.\n6. Return exactly one field: \"selected_figure_ids\" with the list of IDs."
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "id": "problem-definition",
+  "generatedAt": "2026-09-12T03:16:40.654Z",
+  "sources": [
+    {
+      "file": "modules/initiation/conversation/prompts/clarify_goal_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research goal clarifier. Based on the user's interests and pain points, clarify their research goals.\n\nInterests:\n{interests}\n\nPain Points:\n{pain_points}\n\nDefine clear research goals that address the pain points while building on the interests.\n\n# (JSON formatting policy is provided by Foundation Layer.)\n\n{{\n    \"goals\": [\"goal1\", \"goal2\"],\n    \"reasoning\": \"brief reasoning\"\n}}"
+    },
+    {
+      "file": "modules/initiation/conversation/prompts/analyze_interest_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research interest analyst. Based on the user input and research seed, identify their research interests.\n\nUser Input:\n{user_input}\n\nResearch Seed:\n{research_seed}\n\nIdentify the user's research interests and determine the domain.\n\n# (JSON formatting policy is provided by Foundation Layer.)\n\n{{\n    \"interests\": [\"interest1\", \"interest2\"],\n    \"domain\": \"research domain\",\n    \"reasoning\": \"brief reasoning\"\n}}"
+    },
+    {
+      "file": "modules/initiation/conversation/prompts/analyze_pain_points_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research pain point analyst. Based on the user's interests, identify their research pain points and challenges.\n\nUser Interests:\n{interests}\n\nUser Input:\n{user_input}\n\nIdentify the key pain points or challenges the user is facing in their research.\n\n# (JSON formatting policy is provided by Foundation Layer.)\n\n{{\n    \"pain_points\": [\"pain_point1\", \"pain_point2\"],\n    \"reasoning\": \"brief reasoning\"\n}}"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+# dependencies / build
+node_modules/
+.npm-cache/
+.tmp-npm/
+package-lock.json
+
+# logs & scratch
+*.log
+.DS_Store
+
+# 本地开发脚本和文档，不提交到GitHub
+/scripts/
+/docs/
+/dev-notes/
+# 忽略根目录开发文档，保留README和插件技能文档
+/*.md
+!README.md

@@ -1,0 +1,26 @@
+{
+  "id": "topic-understanding",
+  "generatedAt": "2026-09-12T03:16:40.651Z",
+  "sources": [
+    {
+      "file": "modules/initiation/trigger/prompts/detect_source_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research source detection expert. Analyze the user input and determine its source type.\n\nUser Input:\n{user_input}\n\nDetermine the source type from one of the following:\n- \"paper\": Academic paper, preprint, or publication\n- \"patent\": Patent document\n- \"code\": Code repository, implementation, or algorithm\n- \"dataset\": Dataset description or link\n- \"conversation\": Casual conversation, question, or exploratory discussion\n- \"experiment\": Experiment log or results\n- \"report\": Technical report or project report\n- \"other\": Other types\n\n# (JSON formatting policy is provided by Foundation Layer.)\n\n{{\n    \"source_type\": \"one of the types above\",\n    \"domain\": \"the research domain inferred (e.g., Computer Vision, NLP, etc.)\",\n    \"confidence\": 0.0-1.0,\n    \"reasoning\": \"brief reasoning for your decision\"\n}}"
+    },
+    {
+      "file": "modules/initiation/trigger/prompts/extract_content_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research content extraction expert. Extract the core research content from the input.\n\nSource Type: {source_type}\n\nInput Content:\n{user_input}\n\nExtract the following information:\n1. summary: A concise summary of the content (2-3 sentences)\n2. problems: Key research problems or challenges mentioned\n3. methods: Methods, approaches, or techniques mentioned\n\n# (JSON formatting policy is provided by Foundation Layer.)\n\n{{\n    \"summary\": \"concise summary\",\n    \"problems\": [\"problem1\", \"problem2\"],\n    \"methods\": [\"method1\", \"method2\"]\n}}"
+    },
+    {
+      "file": "modules/initiation/trigger/prompts/extract_research_signals_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research signal detection expert. Analyze the extracted content and identify research signals.\n\nSummary:\n{summary}\n\nProblems:\n{problems}\n\nMethods:\n{methods}\n\nIdentify:\n1. limitations: Limitations or gaps in the current work\n2. future_work: Potential future research directions mentioned or implied\n3. research_signals: Explicit or implicit research signals (trends, opportunities, open questions)\n\n# (JSON formatting policy is provided by Foundation Layer.)\n\n{{\n    \"limitations\": [\"limitation1\", \"limitation2\"],\n    \"future_work\": [\"future_direction1\", \"future_direction2\"],\n    \"research_signals\": [\"signal1\", \"signal2\"]\n}}"
+    },
+    {
+      "file": "modules/initiation/trigger/prompts/build_seed_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research seed builder. Consolidate all extracted information into a structured ResearchSeed.\n\nSource Type: {source_type}\nDomain: {domain}\nSummary: {summary}\n\nProblems:\n{problems}\n\nMethods:\n{methods}\n\nLimitations:\n{limitations}\n\nFuture Work:\n{future_work}\n\nResearch Signals:\n{research_signals}\n\nOutput a consolidated JSON with all the extracted information.\n\n# (JSON formatting policy is provided by Foundation Layer.)\n\n{{\n    \"research_seed\": {{\n        \"source_type\": \"{source_type}\",\n        \"domain\": \"{domain}\",\n        \"summary\": \"consolidated summary\",\n        \"problems\": [\"problem1\", \"problem2\"],\n        \"methods\": [\"method1\", \"method2\"],\n        \"limitations\": [\"limitation1\", \"limitation2\"],\n        \"future_work\": [\"future_direction1\", \"future_direction2\"],\n        \"research_signals\": [\"signal1\", \"signal2\"]\n    }}\n}}"
+    }
+  ]
+}

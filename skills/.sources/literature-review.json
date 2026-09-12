@@ -1,0 +1,31 @@
+{
+  "id": "literature-review",
+  "generatedAt": "2026-09-12T03:16:40.662Z",
+  "sources": [
+    {
+      "file": "modules/discovery/cognition/prompts/extract_problems_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research cognition analyst specializing in problem extraction.\n\nResearch Topic: {research_topic}\n\n## Papers\n{papers_str}\n\nBased on the papers above, extract the key research problems and task definitions.\nIdentify what specific tasks the papers address, the problem boundaries, and evaluation targets.\n\nOutput JSON:\n{{\n    \"extracted_tasks\": [\n        {{\n            \"name\": \"task name\",\n            \"description\": \"detailed task description\",\n            \"example_papers\": [\"paper title that addresses this task\"]\n        }}\n    ],\n    \"extracted_problem_definitions\": [\"problem definition 1\", \"problem definition 2\"]\n}}\n\nIMPORTANT: Output ONLY raw JSON. No markdown blocks."
+    },
+    {
+      "file": "modules/discovery/cognition/prompts/extract_methods_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research cognition analyst specializing in method extraction.\n\nResearch Topic: {research_topic}\n\n## Papers\n{papers_str}\n\nBased on the papers above, identify distinct method families used across the papers,\nand extract key innovations/contributions.\n\nOutput JSON:\n{{\n    \"extracted_method_families\": [\n        {{\n            \"name\": \"method family name\",\n            \"core_idea\": \"core idea description\",\n            \"representative_papers\": [\"paper title\"],\n            \"variations\": [\"variation 1\", \"variation 2\"]\n        }}\n    ],\n    \"extracted_innovations\": [\n        {{\n            \"type\": \"architecture/representation/training/paradigm\",\n            \"description\": \"innovation description\"\n        }}\n    ]\n}}\n\nIMPORTANT: Output ONLY raw JSON. No markdown blocks."
+    },
+    {
+      "file": "modules/discovery/cognition/prompts/extract_evidence_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research cognition analyst specializing in evidence extraction.\n\nResearch Topic: {research_topic}\n\n## Papers\n{papers_str}\n\nBased on the papers above, extract datasets used, benchmarks, evaluation metrics,\nand standard experimental settings.\n\nOutput JSON:\n{{\n    \"extracted_datasets\": [\n        {{\n            \"name\": \"dataset name\",\n            \"description\": \"dataset description\",\n            \"papers_used_in\": [\"paper title\"],\n            \"advantages\": [\"advantage 1\"],\n            \"limitations\": [\"limitation 1\"]\n        }}\n    ],\n    \"extracted_benchmarks\": [\n        {{\n            \"name\": \"benchmark name\",\n            \"description\": \"benchmark description\",\n            \"metrics\": [\"metric 1\"],\n            \"standard_tasks\": [\"task 1\"]\n        }}\n    ],\n    \"extracted_metrics\": [\"metric 1\", \"metric 2\"]\n}}\n\nIMPORTANT: Output ONLY raw JSON. No markdown blocks."
+    },
+    {
+      "file": "modules/discovery/cognition/prompts/method_cognition_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research cognition analyst specializing in method landscape analysis.\n\nResearch Topic: {research_topic}\n\n## Papers\n{papers_str}\n\n## Extracted Method Families\n{extracted_method_families}\n\n## Extracted Innovations\n{extracted_innovations}\n\nSynthesize a comprehensive method landscape: method families, dominant approaches, evolution trajectory.\n\nOutput JSON:\n{{\n    \"method_landscape\": {{\n        \"method_families\": [\n            {{\n                \"name\": \"method family name\",\n                \"core_idea\": \"core idea description\",\n                \"strengths\": [\"strength 1\"],\n                \"weaknesses\": [\"weakness 1\"],\n                \"representative_papers\": [\"paper title\"],\n                \"variations\": [\"variation 1\"]\n            }}\n        ],\n        \"dominant_approaches\": [\"approach 1\", \"approach 2\"],\n        \"evolution_trajectory\": \"description of how methods have evolved\"\n    }}\n}}\n\nIMPORTANT: Output ONLY raw JSON. No markdown blocks."
+    },
+    {
+      "file": "modules/discovery/cognition/prompts/evidence_cognition_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research cognition analyst specializing in evidence landscape analysis.\n\nResearch Topic: {research_topic}\n\n## Papers\n{papers_str}\n\n## Extracted Datasets\n{extracted_datasets}\n\n## Extracted Benchmarks\n{extracted_benchmarks}\n\n## Extracted Metrics\n{extracted_metrics}\n\nSynthesize a comprehensive evidence landscape: datasets, benchmarks, metrics, standard experiments.\n\nOutput JSON:\n{{\n    \"evidence_landscape\": {{\n        \"datasets\": [\n            {{\n                \"name\": \"dataset name\",\n                \"description\": \"dataset description\",\n                \"papers_used_in\": [\"paper title\"],\n                \"advantages\": [\"advantage 1\"],\n                \"limitations\": [\"limitation 1\"]\n            }}\n        ],\n        \"benchmarks\": [\n            {{\n                \"name\": \"benchmark name\",\n                \"description\": \"benchmark description\",\n                \"metrics\": [\"metric 1\"],\n                \"standard_tasks\": [\"task 1\"]\n            }}\n        ],\n        \"evaluation_metrics\": [\"metric 1\", \"metric 2\"],\n        \"standard_experiments\": [\"experiment setting 1\"]\n    }}\n}}\n\nIMPORTANT: Output ONLY raw JSON. No markdown blocks."
+    }
+  ]
+}

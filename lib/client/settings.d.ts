@@ -1,0 +1,139 @@
+/**
+ * ConvFusion 2.0 — 设置页本体（【设置】-【ConvFusion】-【本地设置】）
+ *
+ * ## v2 与 v0.1.5 的结构差异（重建依据见仓库根 `ConvFusion_setting.md`）
+ *
+ * ```text
+ * v0.1.5   模块（8 个，Python 管线）→ 提示词节点（110 个）
+ * v0.2     能力类别（taxonomy 的 9 个大类）→ 能力 / Skill（47 个）→ 可定制章节（6 个）
+ * ```
+ *
+ * 所以 v0.1.5 的「① 模块 / ② 提示词」两个下拉，在 v2 里是
+ * 「① 能力类别 / ② 能力」两个下拉 + 一个「③ 可定制章节」选择器。
+ *
+ * ## 术语（不要混用）
+ *
+ * | 词 | 指的是 |
+ * |---|---|
+ * | **能力 / Skill** | 库里的**一个**条目（`research-gap-analysis`）。它是可复用的方法片段 |
+ * | **能力类别** | 能力的分类（文献 / 实验 / 分析…）。**不是**研究方法 |
+ * | **能力库 / Skill Library** | 管理全部能力的地方（我们维护、只读） |
+ * | **研究方法** | 用户把**多个能力**逐个定制之后**形成的那一整套做法** —— |
+ * | | 它可以被分享给其他研究者使用。**一个 Skill 不等于一套研究方法。** |
+ *
+ * ## 两个数据源，不要混
+ *
+ * | 内容 | 通道 | 为什么 |
+ * |---|---|---|
+ * | 定制**文件名** | `settingsScope`（落 `settings.yaml`） | 它是配置，不是内容 |
+ * | 定制**正文** | 同源 `POST /dsh-convfusion/<endpoint>`（落 `$DSH_HOME/convfusion/<file>.json`） | 用户拍板：设置文件绝不能因定制而变大 |
+ *
+ * ## 依赖约束
+ *
+ * 只 import `react` 与本 bundle 的本地模块。跨插件服务（`slots` / `settingsScope`）
+ * 通过 cordis 的 inject face 拿到，并在这里**结构化镜像**其契约 ——
+ * 不 value-import 任何 `@deepseek-ai/*` 包（bundle 里它们本来就是 external）。
+ *
+ * 数据面用**同源 `fetch`**（不是 Connection RPC）：宿主侧的 RPC 渠道对外部插件不可用，
+ * 详见 `src/settings-rpc.ts` 文件头与 `scripts/probe-settings-rpc-route.mjs`。
+ * 路由带 Harness 的信任/鉴权栅栏，等价于 RPC 渠道的安全级别。
+ */
+/**
+ * settings scope 的快照。
+ *
+ * ⚠️ **刻意只读 `status`**：定制文件叫什么、放在哪，对用户不可见也不可配。
+ * 这里保留 `value` 只会诱导后来者又把它渲染出来（那正是被要求删掉的东西）。
+ */
+interface ScopeSnapshot {
+    status: 'loading' | 'ready' | 'unavailable';
+}
+interface SettingsScopeLike {
+    getSnapshot(): ScopeSnapshot;
+    subscribe(listener: () => void): () => void;
+    set(field: string, value: unknown): Promise<void>;
+    unset(field: string): Promise<void>;
+}
+interface RpcResult {
+    ok: boolean;
+    value?: unknown;
+    error?: {
+        code?: string;
+        message?: string;
+    };
+}
+/** 设置面的 HTTP 路由前缀（与宿主 `settings-rpc.ts` 的常量一致）。 */
+export declare const SETTINGS_ROUTE_PREFIX = "/dsh-convfusion";
+/** 一次端点调用；可替换，便于离线测试。 */
+export type SettingsSend = (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<RpcResult>;
+export interface ConvFusionSettingsProps {
+    scope: SettingsScopeLike;
+    /** 传输实现（缺省 = 浏览器同源 fetch）。 */
+    send?: SettingsSend | undefined;
+}
+interface HostSection {
+    section: string;
+    base: string;
+    overridden: boolean;
+    userText?: string;
+}
+interface HostSkill {
+    skillId: string;
+    skillName: string;
+    sections: HostSection[];
+    overriddenCount: number;
+}
+interface HostCategory {
+    categoryId: string;
+    categoryName: string;
+    skills: HostSkill[];
+    overriddenCount: number;
+    pointCount: number;
+}
+/**
+ * 设置页真正用到的状态。
+ *
+ * 宿主还会多返回 `config` / `file`（定制文件路径、是否存在、覆盖数）供诊断与测试用，
+ * 但**界面一个都不读** —— 所以这里也不声明，免得被顺手拿来渲染。
+ */
+interface HostState {
+    /** 宿主协议版本；与 bundle 内联值不一致 = 宿主半边没重启。 */
+    protocol?: number;
+    library: {
+        root: string;
+        skillCount: number;
+    };
+    customizableSections: string[];
+    categories: HostCategory[];
+    /** 只看可用性，**没有密钥**（密钥是 secret 字段，不回传浏览器）。 */
+    retrieval: {
+        configured: boolean;
+        source: 'settings' | 'env' | 'none';
+        envVar: string;
+    };
+}
+export type SettingsLoad = {
+    kind: 'ok';
+    state: HostState;
+} | {
+    kind: 'error';
+    message: string;
+};
+/** 状态读取的超时（毫秒）。挂起的请求也必须变成一条可见的错误，而不是空白页。 */
+export declare const SETTINGS_LOAD_TIMEOUT_MS = 15000;
+/**
+ * 默认传输：浏览器同源 `fetch` 到宿主注册的前缀路由。
+ *
+ * 始终带上凭据（同源下即 cookie），这样 Harness 的鉴权栅栏能认出这个请求。
+ */
+export declare const fetchSettingsSend: SettingsSend;
+/**
+ * 从宿主读取整页状态；**永不抛异常**（异常会变成 `{ kind: 'error' }`）。
+ *
+ * @param send 传输实现（缺省 {@link fetchSettingsSend}）
+ * @param options.timeoutMs 超时（测试用；缺省 {@link SETTINGS_LOAD_TIMEOUT_MS}）
+ */
+export declare function loadSettingsState(send?: SettingsSend, options?: {
+    timeoutMs?: number;
+}): Promise<SettingsLoad>;
+export declare function ConvFusionProjectSettings({ scope, send, }: ConvFusionSettingsProps): JSX.Element;
+export default ConvFusionProjectSettings;

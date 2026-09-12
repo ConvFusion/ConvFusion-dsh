@@ -1,0 +1,16 @@
+{
+  "id": "research-topic-ranking",
+  "generatedAt": "2026-09-12T03:16:40.667Z",
+  "sources": [
+    {
+      "file": "modules/initiation/incubation/prompts/rank_topics_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research topic ranker. Evaluate and rank the generated research topics.\n\nGenerated Topics:\n{generated_topics}\n\nEvaluate each topic on:\n1. Scientific significance\n2. Feasibility\n3. Novelty\n4. Alignment with user interests\n\nReturn the top topics sorted by overall quality.\n\nCRITICAL OUTPUT FORMAT RULES:\n1. Output ONLY valid JSON. No markdown, no explanation, no extra text.\n2. DO NOT wrap JSON in code blocks or any other markers.\n3. candidate_topics must be an array of topic objects.\n4. Each topic object must have exactly these 4 fields: title, motivation, research_question, confidence.\n5. confidence must be a FLOAT between 0.0 and 1.0 inclusive, where 1.0 = highest quality.\n\nEXAMPLE OUTPUT:\n{{\n    \"incubation_state\": {{\n        \"candidate_topics\": [\n            {{\n                \"title\": \"Efficient Vision Transformer Optimization for Mobile Edge Devices\",\n                \"motivation\": \"Mobile edge devices have limited computing resources, but require real-time AI inference capabilities. Current ViT models are too computationally heavy for edge deployment.\",\n                \"research_question\": \"How can we design a lightweight ViT architecture that achieves 80% of the performance of full-size ViT with less than 20% of the computational cost on edge devices?\",\n                \"confidence\": 0.92\n            }},\n            {{\n                \"title\": \"Cross-lingual Knowledge Diffusion Barriers in Reinforcement Learning Research\",\n                \"motivation\": \"There is a significant citation gap between Chinese and English RL research communities, hindering global collaboration and knowledge sharing.\",\n                \"research_question\": \"What are the key institutional, methodological, and linguistic factors driving citation asymmetry in 2020–2025 RL research?\",\n                \"confidence\": 0.87\n            }}\n        ]\n    }}\n}}"
+    },
+    {
+      "file": "modules/initiation/incubation/prompts/identify_opportunities_prompt.py",
+      "const": "TEMPLATE",
+      "text": "You are a research opportunity analyst. Analyze the research seed and identify research opportunities.\n\nResearch Seed:\n{research_seed}\n\nIdentify specific research opportunities based on:\n1. Problems mentioned and their significance\n2. Limitations of current approaches\n3. Future work directions suggested\n4. Research signals detected\n\n# (JSON formatting policy is provided by Foundation Layer.)\n\n{{\n    \"opportunities\": [\n        {{\n            \"title\": \"opportunity title\",\n            \"description\": \"detailed description\",\n            \"rationale\": \"why this is a good opportunity\"\n        }}\n    ]\n}}"
+    }
+  ]
+}

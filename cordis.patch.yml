@@ -1,0 +1,15 @@
+# dsh-convfusion — plugin row (ConvFusion 2.0 / Stage 1: Harness Runtime).
+#
+# ConvFusion 2.0 是推倒重来：没有 Module / Step / 固定流水线 / 子 Agent 编排 /
+# 自造会话事件 / 自绘原生 UI。插件只做四件事，全部通过 Harness 原生扩展点：
+#
+#   Research Context  → ctx.systemPrompt.context()     动态研究上下文（每次组装求值）
+#   Research Guide    → ctx.systemPrompt.section()     稳定说明（不含流程）
+#   Skills            → ctx.skills.registerProvider()  研究能力 = Harness 原生 Skill
+#   Runtime 观察       → ctx.on('agent/*')              只观察，不接管，不写会话日志
+#
+# 无配置项：研究项目由 workspace（会话 cwd）决定，能力由 skills/ 目录决定。
+# Harness 负责 Agent Loop / 工具 / 会话 / 流式 / Coding —— 插件不实现也不包装。
+- insert:
+    - id: convfusion
+      name: dsh-convfusion
