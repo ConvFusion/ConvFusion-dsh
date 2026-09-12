@@ -18,10 +18,10 @@ ConvFusion 是专为 DeepSeek Harness 打造的科研操作系统插件，为AI�
 
 ## 🚀 安装
 
-使用 [DSH-Launcher](https://github.com/ConvFusion/DSH-Launcher) 安装 DeepSeek Harness，然后执行：
+使用 [DSH-Launcher](https://github.com/ConvFusion/DSH-Launcher) 安装并启动 DeepSeek Harness，然后在插件管理页面中输入以下命令进行安装：
 
 ```bash
-dsh plugin add https://github.com/ConvFusion/ConvFusion-dsh
+npx @deepseek-ai/dsh plugin add https://github.com/ConvFusion/ConvFusion-dsh
 ```
 
 ## 📖 快速开始
