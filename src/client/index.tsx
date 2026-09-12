@@ -17,9 +17,16 @@ import type React from 'react'
 import logoUrl from '../../assets/favicon.svg'
 import { ConvFusionProjectSettings, loadSettingsState } from './settings.js'
 import { applyNavIcon, installNavIcon } from './nav-icon.js'
+import {
+  ResearchProgressCard,
+  ResearchProgressWarmer,
+  selectResearchTurn,
+  resetProgressCardState,
+} from './progress-card.js'
 
 /** 供离线测试直接调用（bundle 的 `apply`/`inject` 之外再导出这些）。 */
 export { loadSettingsState, applyNavIcon, installNavIcon, logoUrl }
+export { ResearchProgressCard, ResearchProgressWarmer, selectResearchTurn, resetProgressCardState }
 
 /* ════════════════════════════════════════════════════════════════════════
  * 服务的结构化契约（镜像，不 import：见文件头第 2 条）
@@ -45,6 +52,11 @@ interface SlotRegisterOptions {
   label?: () => string
   inject?: () => Record<string, unknown>
   priority?: number
+  /**
+   * chain 型槽位（如 `conversation.chat.turnTail`）的选择器：
+   * 按升序尝试，**首个返回非 null** 的条目渲染，全为 null 则回落到拥有者的默认。
+   */
+  select?: (owner: unknown) => unknown | null
 }
 
 interface SlotsService {
@@ -93,6 +105,27 @@ export function apply(ctx: ClientContext): void {
         inject: () => ({ scope }),
       },
       ConvFusionProjectSettings as unknown as React.ComponentType<unknown>,
+    ),
+  )
+
+  // ── 研究进展卡（`v2-Progress.md`：对话结束后、在对话流里显示）──────────
+  // 宿主把回合报告算好（只来自磁盘真实资产），这里只负责在**研究会话**的回合尾部
+  // 渲染成卡片。为什么不用会话消息：DSH 必然把 plugin 来源的消息显示成"上下文注入"。
+  //
+  // 两个槽位分工：
+  //   · `conversation.input.dock`（list = 追加式）→ 预热"本会话是否研究项目"，渲染 null；
+  //   · `conversation.chat.turnTail`（chain = 首个命中者）→ 进度卡本体。
+  //     selector 只在研究会话命中，其它回合让位给官方 `deliverables`。
+  ctx.slots.inject('conversation.input.dock', () =>
+    ctx.slots.register(
+      { name: 'conversation.input.dock', id: 'convfusion-progress-warm', order: 900 },
+      ResearchProgressWarmer as unknown as React.ComponentType<unknown>,
+    ),
+  )
+  ctx.slots.inject('conversation.chat.turnTail', () =>
+    ctx.slots.register(
+      { name: 'conversation.chat.turnTail', id: 'convfusion-progress-card', order: -100, select: selectResearchTurn },
+      ResearchProgressCard as unknown as React.ComponentType<unknown>,
     ),
   )
 

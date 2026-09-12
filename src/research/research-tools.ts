@@ -20,6 +20,7 @@
  * | `research_decision` | 记录研究决策 | **必须有 reason 或 evidence** |
  * | `research_state_read` | 读取当前研究状态 | 只读 |
  * | `research_state_propose` | **提出**状态更新 | **只提案，绝不自动应用**（§20 / §21） |
+ * | `research_project` | 查询/更新研究主题 | 主题**必须**带理由与依据；初始输入永久保留，只动 frontmatter |
  *
  * ## 不允许出现的工具（重要的"没有"）
  *
@@ -81,8 +82,10 @@ import {
   traceOutputProvenance,
 } from './output.js'
 import { getOutputProfile, listOutputProfiles } from './output-profiles.js'
+import { listTopicChanges, loadProjectFile, updateProjectTopic } from './project.js'
 
 /** 工具名（`research_` 命名空间，与 Skill/Plan 资产一致）。 */
+export const PROJECT_TOOL = 'research_project'
 export const EVIDENCE_TOOL = 'research_evidence'
 export const CLAIM_TOOL = 'research_claim'
 export const DECISION_TOOL = 'research_decision'
@@ -100,14 +103,15 @@ function fail(error: string, extra: Record<string, unknown> = {}): Record<string
 /**
  * 构造研究资产工具集。
  *
- * @param resolveWorkspace 读取当前会话 workspace
- */
-/**
- * @param resolveWorkspace 当前研究 workspace
+ * @param resolveWorkspace 解析**本次工具调用所属会话**的研究根目录。
+ *        必须按会话解析（参数 = 调用的 `exec.agent`）：研究数据写盘的位置取决于
+ *        会话自己的工作区，而不是插件进程的全局"当前 cwd" —— 多会话并行时全局值
+ *        可能已被其它会话覆盖，会把研究数据写进别人的工作区（2026-09 事故：一条
+ *        state proposal 被写进插件开发仓库根目录的 `research/`）。
  * @param literatureDeps 文献检索依赖（API Key 解析）；缺省时不注册检索工具
  */
 export function defineResearchTools(
-  resolveWorkspace: () => string,
+  resolveWorkspace: (agent?: { id?: unknown } | null) => string,
   literatureDeps?: {
     apiKey: () => string
     mailto?: () => string | undefined
@@ -188,8 +192,8 @@ export function defineResearchTools(
       },
     },
     isConcurrencySafe: () => false,
-    async execute(args) {
-      const ws = resolveWorkspace()
+    async execute(args, exec) {
+      const ws = resolveWorkspace(exec?.agent)
       const a = args as Record<string, unknown>
       const action = String(a.action ?? '')
 
@@ -301,8 +305,8 @@ export function defineResearchTools(
       },
     },
     isConcurrencySafe: () => false,
-    async execute(args) {
-      const ws = resolveWorkspace()
+    async execute(args, exec) {
+      const ws = resolveWorkspace(exec?.agent)
       const a = args as Record<string, unknown>
       const action = String(a.action ?? '')
       try {
@@ -368,8 +372,8 @@ export function defineResearchTools(
       },
     },
     isConcurrencySafe: () => false,
-    async execute(args) {
-      const ws = resolveWorkspace()
+    async execute(args, exec) {
+      const ws = resolveWorkspace(exec?.agent)
       const a = args as Record<string, unknown>
       const action = String(a.action ?? '')
       try {
@@ -435,8 +439,8 @@ export function defineResearchTools(
       },
     },
     isConcurrencySafe: () => true,
-    async execute() {
-      const ws = resolveWorkspace()
+    async execute(_args, exec) {
+      const ws = resolveWorkspace(exec?.agent)
       try {
         const state = loadResearchState(ws)
         const index = buildResearchIndex(ws)
@@ -513,8 +517,8 @@ export function defineResearchTools(
       },
     },
     isConcurrencySafe: () => false,
-    async execute(args) {
-      const ws = resolveWorkspace()
+    async execute(args, exec) {
+      const ws = resolveWorkspace(exec?.agent)
       const a = args as Record<string, unknown>
       const action = String(a.action ?? 'propose')
       try {
@@ -566,6 +570,126 @@ export function defineResearchTools(
       }
     },
     presentCall: () => ({ card: 'generic', title: 'Propose research state update', kind: 'execute' }),
+  })
+
+  /* ── Research Project（主题演进）────────────────────────────────────── */
+  const projectTool = defineTool({
+    name: PROJECT_TOOL,
+    description:
+      'Work with the research project definition (project.md) — the project topic.\n' +
+      'The topic is NOT frozen at creation: as the research converges (an ambiguity is ruled, ' +
+      'the mechanism is settled, the scope is narrowed), the finally-adopted statement of what ' +
+      'is actually being researched becomes the project topic, and every display (research ' +
+      'context, /research output) follows it.\n' +
+      'Actions:\n' +
+      '- `status`: show the current (adopted) topic, the originally-input topic, and the topic ' +
+      'evolution history.\n' +
+      '- `set_topic`: update the project topic to the finally-adopted one. The originally-input ' +
+      'topic is preserved as the initial topic, and the change is logged ' +
+      '(from → to, reason, evidence) — never silently, never without a reason.\n' +
+      'Call `set_topic` only when the research has genuinely converged on a different, sharper ' +
+      'statement of the topic (e.g. after problem refinement or a scoping decision is accepted) ' +
+      '— not for cosmetic rewordings.',
+    parameters: {
+      action: { type: 'string', description: 'One of: status | set_topic.', enum: ['status', 'set_topic'] },
+      topic: { type: 'string', description: 'For `set_topic`: the finally-adopted topic (one line).' },
+      reason: {
+        type: 'string',
+        description:
+          'For `set_topic`: why the topic evolved — which decision or finding settled it (e.g. ' +
+          '"D001 裁定读法 B，目标从外参标定收窄为位姿误差校正").',
+      },
+      evidence: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'For `set_topic`: decision/evidence ids the new topic rests on (e.g. ["D001", "D002"]).',
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => {
+        const v = value as {
+          ok?: boolean
+          error?: string
+          topic?: string
+          initialTopic?: string
+          changed?: boolean
+          previous?: string
+          history?: Array<{ from: string; to: string; at: string; reason?: string }>
+        }
+        if (v.ok === false) return [{ type: 'text' as const, text: `Project action failed: ${v.error ?? ''}` }]
+        if (v.changed === true) {
+          return [
+            {
+              type: 'text' as const,
+              text:
+                `Topic updated: ${v.previous} → ${v.topic}\n` +
+                'The originally-input topic is preserved as the initial topic; the change is logged in `research/topic-history.json`.',
+            },
+          ]
+        }
+        if (v.changed === false && v.previous !== undefined) {
+          return [{ type: 'text' as const, text: `Topic unchanged: ${v.topic ?? v.previous}` }]
+        }
+        const lines = [`Topic (adopted): ${v.topic ?? ''}`]
+        if (v.initialTopic && v.initialTopic !== v.topic) lines.push(`Initial topic: ${v.initialTopic}`)
+        lines.push(`Topic changes: ${v.history?.length ?? 0}`)
+        return [{ type: 'text' as const, text: lines.join('\n') }]
+      },
+    },
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const ws = resolveWorkspace(exec?.agent)
+      const a = args as Record<string, unknown>
+      const action = String(a.action ?? 'status')
+      try {
+        if (action === 'status') {
+          const project = loadProjectFile(ws)
+          if (!project) return fail('No research project in this workspace.')
+          const history = listTopicChanges(ws)
+          return losslessJson({
+            ok: true,
+            topic: project.topic,
+            ...(project.initialTopic ? { initialTopic: project.initialTopic } : {}),
+            ...(project.updatedAt ? { updatedAt: project.updatedAt } : {}),
+            history,
+          }) as unknown as Record<string, JsonValue>
+        }
+        if (action === 'set_topic') {
+          const topic = String(a.topic ?? '').trim()
+          if (!topic) return fail('Provide `topic` — the finally-adopted topic, one line.')
+          const reason = String(a.reason ?? '').trim()
+          if (!reason) {
+            return fail('Provide `reason`: which decision or finding settled this topic. A topic change without a reason is not auditable.')
+          }
+          const res = updateProjectTopic(ws, {
+            topic,
+            reason,
+            ...(Array.isArray(a.evidence) ? { evidence: a.evidence.map(String) } : {}),
+            by: 'agent',
+          })
+          if (!res.changed && 'error' in res) return fail(res.error)
+          if (!res.changed) {
+            return losslessJson({ ok: true, changed: false, topic: res.current, previous: res.previous }) as unknown as Record<string, JsonValue>
+          }
+          return losslessJson({
+            ok: true,
+            changed: true,
+            topic: res.current,
+            previous: res.previous,
+            initialTopic: res.initial,
+          }) as unknown as Record<string, JsonValue>
+        }
+        return fail(`Unknown action "${action}".`, { allowed: ['status', 'set_topic'] })
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e))
+      }
+    },
+    presentCall: (args) => {
+      const a = args as { action?: string }
+      return { card: 'generic', title: `Research project · ${a.action ?? 'status'}`, kind: 'execute' }
+    },
   })
 
   /* ── Research Output（Stage 5.1：专利 / 技术报告 / 演讲）────────────── */
@@ -653,8 +777,8 @@ export function defineResearchTools(
       },
     },
     isConcurrencySafe: () => false,
-    async execute(args) {
-      const ws = resolveWorkspace()
+    async execute(args, exec) {
+      const ws = resolveWorkspace(exec?.agent)
       const a = args as Record<string, unknown>
       const action = String(a.action ?? 'status')
       try {
@@ -837,8 +961,8 @@ export function defineResearchTools(
       },
     },
     isConcurrencySafe: () => false,
-    async execute(args) {
-      const ws = resolveWorkspace()
+    async execute(args, exec) {
+      const ws = resolveWorkspace(exec?.agent)
       const a = args as Record<string, unknown>
       const paperId = typeof a.paper === 'string' && a.paper.trim() ? a.paper.trim() : DEFAULT_PAPER_ID
       const action = String(a.action ?? 'status')
@@ -1039,6 +1163,7 @@ export function defineResearchTools(
   })
 
   return [
+    projectTool as ToolDefinition,
     evidenceTool as ToolDefinition,
     claimTool as ToolDefinition,
     decisionTool as ToolDefinition,

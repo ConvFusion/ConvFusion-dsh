@@ -47,9 +47,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { ensureWorkspaceLayout } from './workspace-layout.js'
+import { ensureResearchState } from './research-state.js'
 import { hasProjectDefinition, loadProjectFile, saveProjectFile } from './project.js'
+import { researchWorkspaceOf } from './workspace.js'
 import { loadSkillLibrary } from './library.js'
 import { listPlans, loadPlanLibrary, syncPlanHistoryDetailed } from './plan-library.js'
 import { createPlanMessage } from './plan.js'
@@ -78,11 +80,27 @@ export const RESEARCH_LABEL = '/research'
  */
 const SKELETON_DIRS: string[] = []
 
-/** 从 invocation 解析当前会话 workspace。 */
-function workspaceOf(invocation: CommandInvocation): string {
+/** 从 invocation 解析**会话工作区**（裸 cwd；它本身不一定是研究根目录）。 */
+function sessionWorkspaceOf(invocation: CommandInvocation): string {
   const session = (invocation.agent as { session?: { header?: { cwd?: string } } } | undefined)?.session
   const cwd = session?.header?.cwd
   return cwd && cwd.trim() ? cwd : process.cwd()
+}
+
+/**
+ * 从 invocation 解析**研究根目录**（ConvFusion 数据文件所在目录）。
+ *
+ * 新布局 = 会话工作区下的 `workspace/` 子目录；旧布局（研究数据直接在会话工作区根）
+ * 由 {@link researchWorkspaceOf} 自动兼容。
+ */
+function workspaceOf(invocation: CommandInvocation): string {
+  return researchWorkspaceOf(sessionWorkspaceOf(invocation))
+}
+
+/** 研究根目录相对会话工作区的展示前缀（空串 = 旧布局，直接就是会话工作区）。 */
+function rootPrefixOf(invocation: CommandInvocation): string {
+  const rel = relative(resolve(sessionWorkspaceOf(invocation)), resolve(workspaceOf(invocation)))
+  return rel && rel !== '.' && !isAbsolute(rel) && !rel.startsWith('..') ? `${rel}/` : ''
 }
 
 /**
@@ -92,6 +110,12 @@ function workspaceOf(invocation: CommandInvocation): string {
  * 研究项目是用户的资产，不是插件的工作区，**不覆盖用户手写内容**。
  */
 function openProject(workspace: string, topic: string): { created: boolean } {
+  // 新布局下研究根目录 = 会话工作区的 `workspace/` 子目录，创建前必须存在
+  try {
+    mkdirSync(workspace, { recursive: true })
+  } catch {
+    /* 目录已存在或不可写：不阻断（后续写入失败会走同一兜底） */
+  }
   for (const d of SKELETON_DIRS) {
     try {
       mkdirSync(join(workspace, d), { recursive: true })
@@ -101,10 +125,12 @@ function openProject(workspace: string, topic: string): { created: boolean } {
   }
   // `created` 必须在写入前判定 —— 写完之后 `project.md` 必然存在
   const created = !hasProjectDefinition(workspace)
-  // v2 规范：建立核心目录骨架 + 写 `project.md`（研究定义）
+  // v2 规范：建立核心目录骨架 + 写 `project.md`（研究定义）+ 初始化 `research-state.md`
   try {
     ensureWorkspaceLayout(workspace)
     saveProjectFile(workspace, { topic })
+    // Research State 与 Research Definition 同层：建项目时一并初始化（幂等）。
+    ensureResearchState(workspace)
   } catch {
     /* 目录/文件不可写时不阻断，后续提示由调用方给出 */
   }
@@ -132,6 +158,9 @@ function describeProject(workspace: string): string {
   const evidence = listEvidence(workspace)
 
   const lines = [`Research project: ${project.topic}`]
+  if (project.initialTopic && project.initialTopic !== project.topic) {
+    lines.push(`Initial topic: ${project.initialTopic}（开题输入；主题已演进）`)
+  }
   if (project.domain) lines.push(`Domain: ${project.domain}`)
   if (project.goal) lines.push(`Goal: ${project.goal}`)
   if (project.questions?.length) {
@@ -200,17 +229,17 @@ function followup(
  * 用中文：这条消息在对话里**对用户可见**（它是 user turn），界面全中文，不要出现
  * 一堵英文墙。模型侧的系统提示与 Research Context 仍是英文，两者不冲突。
  */
-function buildKickoffText(workspace: string, topic: string): string {
+function buildKickoffText(workspace: string, topic: string, root = 'workspace/'): string {
   void workspace
   return [
     `开始这项研究：${topic}`,
     '',
-    '研究定义已经写在 `project.md`（工作区根目录）。',
+    `研究定义已经写在 \`${root}project.md\`（研究根目录是 \`${root || '.'}\`，相对会话工作区）。`,
     '',
     '这是一项**长期研究**，不是一次问答。请自己判断现在最该做什么 —— 澄清问题、查文献、',
     '研判新意、设计方案、跑实验、写论文都可以，没有固定流程，也不需要按任何阶段顺序。',
     '',
-    '如果这件事需要真正的执行（写代码、跑实验、处理数据），先把方案写进 `plans/*.md`，',
+    `如果这件事需要真正的执行（写代码、跑实验、处理数据），先把方案写进 \`${root}plans/*.md\`，`,
     '让用户能先看再改，然后再执行。',
   ].join('\n')
 }
@@ -220,7 +249,7 @@ function buildKickoffText(workspace: string, topic: string): string {
  *
  * 只把**当前状态 + 已有 Plan + 用户意图**交给 Harness，**不规定步骤**。
  */
-function buildContinueText(workspace: string, intent: string): string {
+function buildContinueText(workspace: string, intent: string, root = ''): string {
   const project = loadProjectFile(workspace)
   const plans = listPlans(workspace)
   const lines: string[] = []
@@ -237,13 +266,14 @@ function buildContinueText(workspace: string, intent: string): string {
   }
   if (plans.length > 0) {
     lines.push('- Existing plans (Markdown assets you can read and refine):')
-    for (const p of plans) lines.push(`  - \`${p.path}\` [${p.status ?? 'draft'}] — ${p.title}`)
+    for (const p of plans) lines.push(`  - \`${root}${p.path}\` [${p.status ?? 'draft'}] — ${p.title}`)
   }
   lines.push('')
   lines.push(
-    'Read the research workspace as needed (`project.md`, `research-state.md`, `plans/`, `papers/`, `research/`). ' +
+    `Read the research workspace as needed (research root \`${root || '.'}\`, relative to the session workspace: ` +
+      `\`${root}project.md\`, \`${root}research-state.md\`, \`${root}plans/\`, \`${root}papers/\`, \`${root}research/\`). ` +
       'Decide yourself what this needs — there is no fixed pipeline. ' +
-      'If this work needs substantial execution, write or update a plan under `plans/` first so the ' +
+      `If this work needs substantial execution, write or update a plan under \`${root}plans/\` first so the ` +
       'user can refine it, then carry it out.',
   )
   return lines.join('\n')
@@ -270,6 +300,7 @@ export function defineResearchCommand(
       handler: (invocation: CommandInvocation): CommandResult => {
         const arg = (invocation.rawInput ?? '').trim()
         const workspace = workspaceOf(invocation)
+        const root = rootPrefixOf(invocation)
         void resolveCurrentWorkspace
 
         try {
@@ -308,15 +339,21 @@ export function defineResearchCommand(
           // 建项目 → 把主题作为任务交给原生 Agent（Think / 工具 / 编码全部原生）。
           if (!project) {
             openProject(workspace, arg)
-            followup(ctx, agent, buildKickoffText(workspace, arg), 'kickoff')
+            followup(ctx, agent, buildKickoffText(workspace, arg, root), 'kickoff')
             return {
               kind: 'success',
-              text: [`研究项目已创建：${arg}`, `工作区：\`${workspace}\``, '', 'Agent 已开始推进。'].join('\n'),
+              text: [`研究项目已创建：${arg}`, `研究根目录：\`${workspace}\``, '', 'Agent 已开始推进。'].join('\n'),
             } as CommandResult
           }
 
           // ── 已有项目：作为"继续推进"的意图交给 Harness ────────────────
-          followup(ctx, agent, buildContinueText(workspace, arg), 'continue')
+          // 幂等补建：若 `research-state.md` 被误删，这里无痕恢复（已存在则不动）。
+          try {
+            ensureResearchState(workspace)
+          } catch {
+            /* 不可写时不阻断推进 */
+          }
+          followup(ctx, agent, buildContinueText(workspace, arg, root), 'continue')
           return {
             kind: 'success',
             text: [

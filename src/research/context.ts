@@ -30,6 +30,7 @@
  * 本服务只做一件事：**如实、精简地告诉 Agent「这个研究项目现在是什么样子」**。
  */
 
+import { isAbsolute, relative, resolve } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { PromptContext, PromptSection } from '@deepseek-ai/dsh-system-prompt'
 import type { ResearchContext } from './data.js'
@@ -83,7 +84,9 @@ export const RESEARCH_GUIDE_TEXT = [
   '# Research project mode',
   '',
   'This session is attached to a long-lived ConvFusion research project.',
-  'The project workspace holds the research intent, skills, plans and paper.',
+  'All research files live under one research root — by default the `workspace/` ' +
+    'subdirectory of the session workspace (the context below states the actual root ' +
+    'for this session).',
   'The research context below reflects that project as it currently stands.',
   '',
   'How to work here:',
@@ -103,8 +106,13 @@ export const RESEARCH_GUIDE_TEXT = [
 
 /** 组装 Research Context 所需的运行时输入。 */
 export interface ResearchContextSource {
-  /** 当前研究 workspace（绝对路径）。 */
+  /** 当前**研究根目录**（ConvFusion 数据文件所在目录；绝对路径）。 */
   workspace: string
+  /**
+   * 会话工作区（新布局下研究根目录 = `<会话工作区>/workspace`）。
+   * 用于计算研究根目录的展示前缀 —— Agent 用原生工具读文件时按**会话工作区**解析路径。
+   */
+  sessionWorkspace?: string
   /** 当前用户输入，用于"相关选择"（§8：按任务动态选择，不无条件全量注入）。 */
   userInput?: string
   /**
@@ -120,7 +128,16 @@ export interface ResearchContextSource {
 export function collectResearchContext(source: ResearchContextSource): ResearchContext {
   const ws = source.workspace
   const paper = loadPaper(ws)
+  // 研究根目录相对会话工作区的展示前缀：新布局 → 'workspace'；旧布局（研究根 = 会话
+  // 工作区）→ 不设置（路径按原样渲染，行为与旧版一致）。非常规位置（自定义配置在
+  // 会话工作区之外）时同样不设置，避免渲染出 `../..` 之类的误导前缀。
+  let rootPrefix: string | undefined
+  if (source.sessionWorkspace) {
+    const rel = relative(resolve(source.sessionWorkspace), resolve(ws))
+    if (rel && rel !== '.' && !isAbsolute(rel) && !rel.startsWith('..')) rootPrefix = rel
+  }
   return {
+    ...(rootPrefix ? { rootPrefix } : {}),
     project: loadProject(ws),
     paperTitle: paper.title,
     paperExcerpt: paper.excerpt,
@@ -240,9 +257,21 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
   lines.push('')
 
   const p = ctx.project
+  // 研究根目录提示：新布局下所有研究文件在会话工作区的 `workspace/` 子目录里，
+  // 必须先说清楚 —— 否则 Agent 按会话 cwd 去读 `project.md` 会扑空。
+  const root = ctx.rootPrefix ? `${ctx.rootPrefix}/` : ''
   lines.push('## Research project')
   lines.push('')
+  if (ctx.rootPrefix) {
+    lines.push(
+      `- Files root: \`${root}\` — all research files live in this subdirectory of the session ` +
+        'workspace; every path in this context is relative to that root.',
+    )
+  }
+  // topic = **当前采纳的主题**（会随研究收敛被 `research_project set_topic` 更新）；
+  // 初始输入主题只要发生过演进就作为第二行给出 —— 演进可追溯，但不喧宾夺主。
   lines.push(`- Topic: ${p.topic}`)
+  if (p.initialTopic && p.initialTopic !== p.topic) lines.push(`- Initial topic: ${p.initialTopic}`)
   if (p.domain) lines.push(`- Domain: ${p.domain}`)
   if (p.goal) lines.push(`- Goal: ${p.goal}`)
   if (p.questions && p.questions.length > 0) {
@@ -265,7 +294,7 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
         lines.push(ctx.paperExcerpt)
       }
     } else {
-      lines.push('- (Full manuscript available at `paper/`; read it when the task needs it.)')
+      lines.push(`- (Full manuscript available at \`${root}paper/\`; read it when the task needs it.)`)
     }
     lines.push('')
   }
@@ -275,7 +304,7 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
     lines.push('')
     for (const plan of ctx.plans) {
       const status = plan.status ? ` [${plan.status}]` : ''
-      lines.push(`- \`${plan.path}\` — ${plan.title}${status}`)
+      lines.push(`- \`${root}${plan.path}\` — ${plan.title}${status}`)
     }
     lines.push('')
   }
@@ -296,7 +325,7 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
     if (established.length > 0) lines.push(`- Established dimensions: ${established.join(', ')}`)
     else lines.push('- Established dimensions: none yet (an empty state is normal early on)')
     if (maturity.length > 0) lines.push(`- Maturity: ${maturity.join(', ')}`)
-    lines.push(`- Full state: \`${RESEARCH_STATE_REF}\``)
+    lines.push(`- Full state: \`${root}${RESEARCH_STATE_REF}\``)
     lines.push('')
   }
 
@@ -339,7 +368,7 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
     lines.push(`- Evidence used in the manuscript: ${p.evidence.usedInManuscript}/${p.evidence.total}`)
     if (p.maturity.established.length) lines.push(`- Maturity established: ${p.maturity.established.join(', ')}`)
     if (p.openProposals > 0) lines.push(`- ${p.openProposals} revision proposal(s) awaiting your review`)
-    lines.push(`- Paper files: \`papers/${p.paperId}/\``)
+    lines.push(`- Paper files: \`${root}papers/${p.paperId}/\``)
     lines.push('')
   }
 
@@ -350,7 +379,7 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
     lines.push('The same research expressed in other forms (a paper is one of them):')
     lines.push('')
     for (const o of ctx.outputs) {
-      lines.push(`- \`${o.id}\` [${o.status}] v${o.version} (${o.type}) — ${o.title}  · \`${o.relPath}\``)
+      lines.push(`- \`${o.id}\` [${o.status}] v${o.version} (${o.type}) — ${o.title}  · \`${root}${o.relPath}\``)
     }
     const drafts = ctx.outputs.filter((o) => o.status === 'draft').length
     if (drafts > 0) lines.push('', `${drafts} output(s) are drafts awaiting review.`)
@@ -450,6 +479,8 @@ export type WorkspaceResolver = () => string
  */
 export class ResearchContextService extends Service {
   private readonly resolveWorkspace: WorkspaceResolver
+  /** 会话工作区（≠ 研究根目录；新布局下研究根 = `<会话工作区>/workspace`）。 */
+  private readonly resolveSessionWorkspace?: WorkspaceResolver
   /**
    * 取能力**生效正文**（含用户定制）。
    *
@@ -465,10 +496,12 @@ export class ResearchContextService extends Service {
     ctx: Context,
     resolveWorkspace: WorkspaceResolver,
     skillContent?: (id: string) => string | undefined,
+    resolveSessionWorkspace?: WorkspaceResolver,
   ) {
     super(ctx, 'convfusionResearch')
     this.resolveWorkspace = resolveWorkspace
     this.skillContent = skillContent
+    this.resolveSessionWorkspace = resolveSessionWorkspace
   }
 
   /** 最近一次注入给模型的 Research Context 文本（`''` = 当前会话不是研究项目）。 */
@@ -512,6 +545,7 @@ export class ResearchContextService extends Service {
         const collected = collectResearchContext({
           workspace: ws,
           ...(this.skillContent ? { skillContent: this.skillContent } : {}),
+          ...(this.resolveSessionWorkspace ? { sessionWorkspace: this.resolveSessionWorkspace() } : {}),
         })
         const rendered = renderResearchContext(collected)
         this.lastRendered = rendered

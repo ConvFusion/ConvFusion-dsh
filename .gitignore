@@ -12,6 +12,8 @@ package-lock.json
 /scripts/
 /docs/
 /dev-notes/
+# 研究运行数据（ConvFusion 研究根目录，当前工作区本地测试用，不提交）
+/workspace/
 # 忽略根目录开发文档，保留README和插件技能文档
 /*.md
 !README.md

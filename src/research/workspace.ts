@@ -11,8 +11,11 @@
  *
  * 所以"研究项目在哪"不能等于"当前会话在哪"。本文件负责回答这个问题：
  *
- *   1. **定位**当前研究的 workspace（默认 = 会话 cwd；v2 不引入锚文件，
- *      而是用"存在 `project.md` / `research-state.md`"来识别研究项目 —— `v2-Workspace.md` §2）；
+ *   1. **定位**当前研究的 workspace（= 会话工作区下的 **`workspace/` 子目录**；
+ *      v2 不引入锚文件，而是用"存在 `project.md` / `research-state.md`"来识别研究项目
+ *      —— `v2-Workspace.md` §2）。为什么多一层 `workspace/`：DSH 会话工作区是**用户的
+ *      工作区**，用户会先放进去自己检索到的论文、数据集等原始材料（或任何其它文件）
+ *      再开始研究；ConvFusion 产生的全部数据文件收进 `workspace/`，两边互不污染。
  *   2. **读取**研究数据（只读；Stage 1 不写任何研究数据文件）。
  *
  * ## 与旧实现的关键差异
@@ -104,13 +107,46 @@ export function isResearchWorkspace(dir: string): boolean {
   return existsSync(join(dir, PROJECT_FILE)) || existsSync(join(dir, RESEARCH_STATE_FILE))
 }
 
-/** 解析研究 workspace：显式配置优先，否则用会话 cwd（非研究目录也返回，由上层决定渲染）。 */
+/** 解析**会话工作区**：显式配置优先，否则用会话 cwd（非研究目录也返回，由上层决定渲染）。 */
 export function resolveWorkspace(cwd: string | undefined | null, configured?: string): string {
   if (configured && configured.trim()) {
     const p = configured.trim()
     return isAbsolute(p) ? p : resolve(process.cwd(), p)
   }
   return cwd && cwd.trim() ? resolve(cwd) : process.cwd()
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 研究根目录（`workspace/` 子目录约定，v2-Workspace.md §2）
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * ConvFusion 全部数据文件所在目录（**相对会话工作区**的名字）。
+ *
+ * 为什么多这一层：DSH 会话工作区是**用户的工作区** —— 用户会先放进自己检索到的
+ * 论文、数据集等原始材料（或其它任何文件）再开始研究。ConvFusion 产生的
+ * project.md / research-state.md / plans/ / research/ / papers/ / outputs/ 全部
+ * 收进 `workspace/`，用户材料与研究成果互不污染。
+ */
+export const RESEARCH_ROOT_DIR = 'workspace'
+
+/**
+ * 由**会话工作区**解析**研究根目录**（ConvFusion 数据文件所在目录）。
+ *
+ * 优先级：
+ *   1. `<ws>/workspace` 有研究定义 → **新布局**，用 `<ws>/workspace`；
+ *   2. 否则 `<ws>` 本身有研究定义 → **旧布局**（早期版本直接用会话工作区当研究
+ *      workspace），为兼容仍用 `<ws>`，旧项目无损延续；
+ *   3. 尚无定义 → 返回 `<ws>/workspace`（创建流程会按需建立，新研究一律新布局）。
+ *
+ * 判据复用 {@link isResearchWorkspace}（存在 `project.md` / `research-state.md`）。
+ */
+export function researchWorkspaceOf(sessionWorkspace: string): string {
+  const base = resolve(sessionWorkspace)
+  const nested = join(base, RESEARCH_ROOT_DIR)
+  if (isResearchWorkspace(nested)) return nested
+  if (isResearchWorkspace(base)) return base
+  return nested
 }
 
 /* ════════════════════════════════════════════════════════════════════════

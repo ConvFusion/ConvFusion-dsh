@@ -1,16 +1,23 @@
 /**
  * ConvFusion 2.0 — Workspace 数据规范（对齐 `v2-Workspace.md`）
  *
- * ## 一个 Harness Workspace = 一个完整 Research
+ * ## 会话工作区 / 研究根目录（两级，`v2-Workspace.md` §2）
+ *
+ * DSH 会话工作区是**用户的工作区**（放用户自己的论文、数据等）；ConvFusion 产生的
+ * 全部数据文件收在会话工作区下的 **`workspace/` 子目录**（研究根目录）里：
  *
  * ```text
- * Workspace
- * ├── Research Definition   project.md · research-state.md
- * ├── Research Inputs       attachments/
- * ├── Research Assets       plans/ · experiments/ · research/
- * ├── Research Outputs      papers/ · outputs/
- * └── Harness Runtime       harness/
+ * 会话工作区（用户材料可自由放置）
+ * └── workspace/            ← 研究根目录：一个研究根目录 = 一个完整 Research
+ *     ├── Research Definition   project.md · research-state.md
+ *     ├── Research Inputs       attachments/
+ *     ├── Research Assets       plans/ · experiments/ · research/
+ *     ├── Research Outputs      papers/ · outputs/
+ *     └── Harness Runtime       harness/
  * ```
+ *
+ * 兼容：早期版本直接用会话工作区当研究根目录（无 `workspace/` 一层），
+ * 这类旧布局仍被识别与沿用（见 `workspace.ts` 的 `researchWorkspaceOf`）。
  *
  * ## 三个必须坚持的边界（§16）
  *
@@ -198,6 +205,8 @@ export interface WorkspaceInspection {
 const ALLOWED_TOP_LEVEL = new Set([
   PROJECT_FILE,
   RESEARCH_STATE_FILE,
+  // 研究数据根目录（新布局：会话工作区下多一层 `workspace/`，v2-Workspace.md §2）
+  'workspace',
   'attachments',
   'plans',
   'experiments',

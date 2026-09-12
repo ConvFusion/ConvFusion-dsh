@@ -85,6 +85,8 @@ import {
 } from './research/skill-customization.js'
 import type { Config } from './config.js'
 import { describeOpenAlexKey, redactConfig, resolveCustomizationPath } from './config.js'
+import { isResearchWorkspace, researchWorkspaceOf } from './research/workspace.js'
+import { latestTurnReport } from './research/progress-bridge.js'
 
 /**
  * 设置面的 HTTP 路由前缀（客户端必须用同一个）。
@@ -265,6 +267,14 @@ export interface SettingsRpcDeps {
   store: SkillCustomizationStore
   /** 覆盖路径解析（测试用；缺省按配置解析）。 */
   resolvePath?: (config: Config) => string
+  /**
+   * 会话 id → 该会话的工作区（**权威来源**：`ctx.sessions.get(id).header.cwd`）。
+   *
+   * 进度报告必须按**会话自己的工作区**判定"这是不是一个研究项目"，
+   * 而不是按插件进程的启动目录 —— 否则会把另一个项目的上下文/进展显示到本会话
+   * （2026-09 实测发生）。
+   */
+  resolveSessionWorkspace?: (sessionId: string) => string | undefined
 }
 
 function asString(v: unknown): string {
@@ -296,6 +306,41 @@ export function createSettingsRpcHandler(
       switch (endpoint) {
         case 'state':
           return { ok: true, value: state() }
+
+        /* ── 研究进展（对话流尾部的进度卡）─────────────────────────────────
+         *
+         * `v2-Progress.md`：对话结束后、在**对话流**里显示本轮研究进展。
+         * 报告由宿主在 `agent/turn-stopping` 算好（只来自磁盘真实资产），
+         * 客户端在 `conversation.chat.turnTail` 渲染 —— 这里只负责把数据交出去，
+         * 并按**会话自己的工作区**判定要不要显示。
+         */
+        case 'progress/session': {
+          const sessionId = asString(p.sessionId)
+          const workspace = deps.resolveSessionWorkspace?.(sessionId)
+          return {
+            ok: true,
+            value: {
+              sessionId,
+              workspace: workspace ?? null,
+              research: workspace ? isResearchWorkspace(researchWorkspaceOf(workspace)) : false,
+            },
+          }
+        }
+
+        case 'progress/latest': {
+          const sessionId = asString(p.sessionId)
+          const workspace = deps.resolveSessionWorkspace?.(sessionId)
+          const research = workspace ? isResearchWorkspace(researchWorkspaceOf(workspace)) : false
+          return {
+            ok: true,
+            value: {
+              sessionId,
+              workspace: workspace ?? null,
+              research,
+              report: research ? (latestTurnReport(sessionId) ?? null) : null,
+            },
+          }
+        }
 
         case 'customization/save': {
           const skillId = asString(p.skillId)

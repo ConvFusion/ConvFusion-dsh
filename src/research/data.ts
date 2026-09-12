@@ -24,7 +24,8 @@ import type { PaperStatusSummary } from './paper-evolution.js'
  *
  * 数据落盘顺序（Stage 2–5 会扩展，但不会推翻这里的三个概念）：
  *
- *   workspace/                     ← 一个 workspace = 一个 Research Project
+ *   workspace/                     ← 研究根目录（= 会话工作区下的 `workspace/` 子目录）
+ *                                    一个研究根目录 = 一个 Research Project
  *   ├── project.md                 ← 研究定义（ResearchProject）
  *   ├── research-state.md          ← Research State
  *   ├── plans/*.md                 ← Plan 资产
@@ -46,8 +47,17 @@ import type { PaperStatusSummary } from './paper-evolution.js'
  * 研究的进展不由流程游标表达（v2-Stage0 §17 Principle 9）。
  */
 export interface ResearchProject {
-  /** 研究主题（用户可读的一句话）。 */
+  /**
+   * 研究主题（用户可读的一句话）。
+   *
+   * ⚠️ 这是**当前采纳的主题**，不是创建时的初始输入。研究会收敛出比初始输入
+   * 更准确的主题表述（歧义裁定、机制收窄、范围缩小），`set_topic` 把它更新为
+   * 最后采纳的主题；初始输入保留在 {@link initialTopic}，完整演进史在
+   * `research/topic-history.json`（见 `project.ts`）。
+   */
   topic: string
+  /** 开题时的初始输入主题（只读保留，用于追溯"主题是怎么演进的"）。 */
+  initialTopic?: string
   /** 领域（可选，用于检索上下文）。 */
   domain?: string
   /** 研究问题列表。 */
@@ -67,6 +77,14 @@ export interface ResearchProject {
  * 并且由 `ResearchContextService` 在**每次组装时**重新求值（§6）。
  */
 export interface ResearchContext {
+  /**
+   * 研究根目录相对**会话工作区**的展示前缀（如 `workspace`）。
+   *
+   * Agent 用原生工具按会话工作区解析路径：新布局（研究数据在 `<会话工作区>/workspace/`）
+   * 下渲染上下文必须带上前缀，否则 `project.md` 这类相对路径会扑空；
+   * 旧布局（研究根 = 会话工作区）下为 undefined，路径按原样渲染。
+   */
+  rootPrefix?: string
   /** 研究项目（缺失代表还没有 `project.md` —— 走通用助手模式）。 */
   project: ResearchProject | null
   /** 当前 Paper 的标题（来自 paper/ 下的一级标题；Stage 5 会扩展）。 */

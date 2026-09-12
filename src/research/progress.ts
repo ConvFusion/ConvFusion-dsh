@@ -306,6 +306,123 @@ export function renderProgressNotice(
   return { summary: summary.slice(0, 120), text: lines.join('\n') }
 }
 
+/** 全部计数项的显示名（报告与 notice 共用，避免两处文案漂移）。 */
+export function countLabel(key: string): string {
+  return COUNT_LABEL[key] ?? key
+}
+
+/**
+ * 当前缺口（只陈述事实，不猜）。
+ *
+ * `v2-Progress.md` 的 C 段：Research State 现在暴露了什么需求。
+ */
+export function researchGaps(snapshot: ProgressSnapshot): string[] {
+  const out: string[] = []
+  out.push(
+    snapshot.stage
+      ? `科研过程当前阶段：${snapshot.stage.label}（尚未落地）`
+      : '科研过程各阶段均已有落地资产',
+  )
+  const unsupported = snapshot.counts.claims - snapshot.counts.claimsSupported
+  if (unsupported > 0) out.push(`${unsupported} 条主张尚缺支撑证据`)
+  const noArtifact = snapshot.counts.evidence - snapshot.counts.evidenceWithArtifact
+  if (noArtifact > 0) out.push(`${noArtifact} 条证据缺原始产物引用（provenance 不完整）`)
+  if (snapshot.counts.openQuestions > 0) out.push(`${snapshot.counts.openQuestions} 个开放问题待解`)
+  return out
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 回合报告（界面用结构化数据）
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * 一轮对话结束后的研究进展报告（`v2-Progress.md` 的三段式）。
+ *
+ * 为什么返回**结构化数据**而不是 Markdown：报告现在由**客户端**在对话流尾部
+ * 渲染成卡片（`conversation.chat.turnTail`），结构化的字段才能排版成图表，
+ * 而不是把 Markdown 字符串塞进界面。
+ */
+export interface TurnProgressReport {
+  /** 生成时刻（ISO）。 */
+  at: string
+  /** 回合号（未知为 -1）。 */
+  turn: number
+  /** 一行摘要（界面自己加图标）。 */
+  summary: string
+  /** 折算后的整体成熟度变化（0..1）。 */
+  overall: { before: number; after: number }
+  /** A. 研究现在到了哪里。 */
+  progress: {
+    dimensions: Array<{ dimension: string; level: MaturityLevel; scale: number }>
+    stage: string | null
+  }
+  /** B. 刚才这轮改变了什么。 */
+  changes: {
+    changed: boolean
+    maturity: Array<{ dimension: string; from: MaturityLevel; to: MaturityLevel }>
+    counts: Array<{ key: string; label: string; from: number; to: number }>
+  }
+  /** C. 接下来最值得做什么。 */
+  need: {
+    gaps: string[]
+    clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown'
+    basis: string
+    nextStep?: string
+    needsUserDecision?: string
+  }
+  /** 本轮是否推进了（供界面决定强调程度）。 */
+  moved: boolean
+}
+
+/** 由差异 + 快照构造界面用的回合报告。 */
+export function buildTurnReport(
+  diff: ProgressDiff,
+  turn: number,
+  advance?: AdvanceAssessment,
+  at: Date = new Date(),
+): TurnProgressReport {
+  const moved = diff.changed
+  const ovDelta = Math.round((diff.overallAfter - diff.overallBefore) * 100)
+  const summary =
+    `研究进展 · 成熟度折算 ${pct(diff.overallBefore)} → ${pct(diff.overallAfter)}` +
+    (ovDelta !== 0 ? ` (${ovDelta > 0 ? '+' : ''}${ovDelta})` : '') +
+    (diff.countChanges.length > 0 ? ` · ${diff.countChanges.length} 项资产变化` : ' · 本轮无资产变化') +
+    (advance ? (advance.clarity === 'clear' ? ' · 可继续' : ' · 待你定') : '')
+
+  return {
+    at: at.toISOString(),
+    turn,
+    summary,
+    overall: { before: diff.overallBefore, after: diff.overallAfter },
+    progress: {
+      dimensions: MATURITY_DIMENSIONS.map((d) => ({
+        dimension: d,
+        level: diff.after.maturity[d],
+        scale: MATURITY_SCALE[diff.after.maturity[d]],
+      })),
+      stage: diff.after.stage?.label ?? null,
+    },
+    changes: {
+      changed: moved,
+      maturity: diff.maturityChanges.map((m) => ({ dimension: m.dimension, from: m.from, to: m.to })),
+      counts: diff.countChanges.map((c) => ({
+        key: String(c.key),
+        label: countLabel(String(c.key)),
+        from: c.from,
+        to: c.to,
+      })),
+    },
+    need: {
+      gaps: researchGaps(diff.after),
+      clarity: advance?.clarity ?? 'unknown',
+      basis: advance?.basis ?? '',
+      ...(advance?.nextStep ? { nextStep: advance.nextStep } : {}),
+      ...(advance?.needsUserDecision ? { needsUserDecision: advance.needsUserDecision } : {}),
+    },
+    moved,
+  }
+}
+
 /** 供 `/research` 状态展示用：紧凑的一行。 */
 export function renderProgressLine(snapshot: ProgressSnapshot): string {
   const overall = meanScale(snapshot.maturity)

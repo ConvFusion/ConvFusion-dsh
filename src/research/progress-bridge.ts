@@ -1,72 +1,88 @@
 /**
- * ConvFusion 2.0 — 研究进展桥（每轮对话结束展示一次）
+ * ConvFusion 2.0 — 研究进展桥（每轮对话结束报告一次）
  *
  * ## 它做什么
  *
  * ```text
  * agent/pre-step（新一轮开始）→ 记下"本轮开始前"的快照
- * agent/turn-stopping（本轮结束）→ 采新快照 → 求差 → 作为原生 notice 追加进会话
+ * agent/turn-stopping（本轮结束）→ 采新快照 → 求差 → 存成回合报告（内存）
+ *                                          ↓
+ *                        界面 RPC 读走 → 客户端在对话流尾部渲染进度卡
  * ```
  *
- * ## 为什么这是一个合法的原生通道
+ * ## 为什么报告不再进会话日志（2026-09 用户拍板）
  *
- * 追加的是**已知事件类型** `user/message`，来源声明为
- * `{ kind: 'plugin', plugin: 'convfusion', form: 'notice', summary }`：
+ * 曾经把报告作为 `user/message`（`{kind:'plugin', plugin:'convfusion', form:'notice'}`）
+ * 追加进会话。但 DSH 把**所有** plugin 来源的消息渲染成"上下文注入"折叠行
+ * （`ContextMessageNodeView`，按 `kind: 'context'` 路由），form 取什么值都不改变观感；
+ * 而能进入对话表面的事件类型只有 4 种（`system/message` / `user/message` /
+ * `assistant/message` / `tool/result`），**无法自定义**事件类型来另开一种渲染。
  *
- *   - `form: 'notice'` 是 DSH 自己的语境形态（*"a one-off account of something that just
- *     happened; it supersedes nothing"*），会渲染为**收起的转写行**，展开可见正文；
- *   - `surfaceOp: 'append'` 是必需的 —— 人类转写正是由"append 来源的 surface 事件"构成的
- *     （替换型事件只进模型历史，不进人类转写）；
- *   - 因此**不新增任何自定义事件类型**（那会让会话日志不可恢复，见 v2-Stage0）。
+ * 所以按 `v2-Progress.md` 的要求（对话结束后、在**对话流**里显示研究进展），
+ * 展示完全交给客户端：`conversation.chat.turnTail`（回合尾部、按 selector 命中渲染）。
+ * 宿主只负责**算准**并把结构化报告交给界面 RPC —— 计算仍然只来自磁盘上的真实资产。
  *
- * ## 三条产品约束
+ * ## 两条产品约束
  *
  * 1. **不猜**：快照全部来自磁盘上的真实资产（`progress.ts`）；
- * 2. **不强制**：缺口只陈述，用户可忽略；
- * 3. **不打断**：只在 `turn-stopping` 追加一条记录，**不唤醒新一轮**（不用 `followup`）。
+ * 2. **不打断**：`turn-stopping` 只记录报告；自动推进另走 `followup` 闸门。
  */
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Context } from '@deepseek-ai/cordis'
-import { captureProgress, diffProgress, renderProgressNotice, type ProgressSnapshot } from './progress.js'
+import {
+  buildTurnReport,
+  captureProgress,
+  diffProgress,
+  type ProgressSnapshot,
+  type TurnProgressReport,
+} from './progress.js'
 import { DEFAULT_AUTO_CONTINUE, shouldAutoContinue, type AutoContinuePolicy } from './advance.js'
-import { isResearchWorkspace } from './workspace.js'
+import { isResearchWorkspace, researchWorkspaceOf } from './workspace.js'
+import { resolveSessionWorkspace } from './session-workspace.js'
 
 /** 插件在会话里标识自己的名字。 */
 export const PROGRESS_PLUGIN = 'convfusion'
 
-/** 会话的最小视图（只用到 append）。 */
-interface SessionLike {
-  append: (type: string, data: unknown, opts?: { surfaceOp: 'append' }) => unknown
-}
-
 /** `agent/turn-stopping` 载荷的最小视图。 */
 interface TurnPayload {
-  agent?: { session?: SessionLike }
+  agent?: { id?: unknown; session?: { id?: unknown } }
   turn?: number
 }
 
-/**
- * 把一条进展以 **notice** 形式追加进会话。
+/** 取会话 id（`Agent.id` 就是 SessionId；`session.id` 作为兜底）。 */
+function sessionIdOf(p: TurnPayload): string | undefined {
+  const id = p.agent?.id ?? p.agent?.session?.id
+  return id == null ? undefined : String(id)
+}
+
+/* ── 回合报告存储（供界面 RPC 读取）───────────────────────────────────────
  *
- * @returns 追加成功返回 true；会话不可用时返回 false（不抛错）
+ * ⚠️ 为什么不再往会话里追加消息：
+ * DSH 把**所有** `plugin` 来源的会话消息渲染成"上下文注入"折叠行
+ * （`ContextMessageNodeView`，按 `kind: 'context'` 路由），form 取什么值都改变不了；
+ * 而进入对话表面的事件类型只有 4 种（`system/message` / `user/message` /
+ * `assistant/message` / `tool/result`），无法自定义。所以"在对话流里显示研究进展"
+ * 只能由**客户端**在回合尾部渲染（`conversation.chat.turnTail`），宿主只提供数据。
  */
-export function appendProgressNotice(session: SessionLike | undefined, summary: string, text: string): boolean {
-  if (!session || typeof session.append !== 'function') return false
-  try {
-    session.append(
-      'user/message',
-      createUserMessage({
-        content: [{ type: 'text', text }],
-        source: { kind: 'plugin', plugin: PROGRESS_PLUGIN },
-      }),
-      { surfaceOp: 'append' },
-    )
-    return true
-  } catch {
-    // 展示失败绝不能影响研究本身
-    return false
+const latestReports = new Map<string, TurnProgressReport>()
+/** 最多缓存多少个会话的最近报告（防止长驻进程无界增长）。 */
+const LATEST_REPORTS_MAX = 64
+
+/** 记住某个会话最近一次的回合报告。 */
+export function rememberTurnReport(sessionId: string | undefined, report: TurnProgressReport): void {
+  if (!sessionId) return
+  latestReports.delete(sessionId)
+  latestReports.set(sessionId, report)
+  for (const key of [...latestReports.keys()]) {
+    if (latestReports.size <= LATEST_REPORTS_MAX) break
+    latestReports.delete(key)
   }
+}
+
+/** 读某个会话最近一次的回合报告（没有则 undefined）。 */
+export function latestTurnReport(sessionId: string | undefined): TurnProgressReport | undefined {
+  return sessionId ? latestReports.get(sessionId) : undefined
 }
 
 /**
@@ -91,6 +107,21 @@ export function mountProgressBridge(
   /** 用户是否在自动推进期间插过话（插话即视为接管，停止自动推进）。 */
   let userIntervened = false
 
+  /**
+   * 本轮事件所属会话的研究根目录：优先按**事件自己的会话**解析
+   * （权威来源 = 会话自己的 `header.cwd`，见 `session-workspace.ts`）。
+   *
+   * 为什么不用全局 `resolveWorkspace()`：它依赖 `agent/pre-step` 同步的全局
+   * `currentCwd`，多会话并行时可能已被其它会话覆盖 —— 进展快照就会从**别的项目**
+   * 捕获（与 2026-09 研究数据错位事故同一根因）。拿不到会话身份时退化为全局解析。
+   */
+  const workspaceOfEvent = (p: TurnPayload): string => {
+    const sid = sessionIdOf(p)
+    const sessionWs = sid ? resolveSessionWorkspace(ctx, sid) : undefined
+    if (sessionWs) return researchWorkspaceOf(sessionWs)
+    return resolveWorkspace()
+  }
+
   ctx.on('agent/inbox/inserted', (payload: unknown) => {
     // 任何非本插件来源的输入都视为用户接管 → 立刻停止自动推进
     try {
@@ -105,10 +136,10 @@ export function mountProgressBridge(
   const onPreStep = (payload: unknown, next: () => unknown): unknown => {
     // ⚠️ `agent/pre-step` 是 waterfall：必须放行，否则会阻断 Agent 运行。
     try {
-      const ws = resolveWorkspace()
+      const p = payload as TurnPayload
+      const ws = workspaceOfEvent(p)
       // 非研究工作区不捕获快照
       if (!isResearchWorkspace(ws)) return next()
-      const p = payload as TurnPayload
       const turn = typeof p.turn === 'number' ? p.turn : -1
       if (turn >= 0 && !baseline.has(turn)) {
         baseline.set(turn, captureProgress(ws, skillContent))
@@ -125,7 +156,7 @@ export function mountProgressBridge(
     try {
       const p = payload as TurnPayload
       const turn = typeof p.turn === 'number' ? p.turn : -1
-      const ws = resolveWorkspace()
+      const ws = workspaceOfEvent(p)
       // 非研究工作区不显示进展提示
       if (!isResearchWorkspace(ws)) return
       const after = captureProgress(ws, skillContent)
@@ -147,8 +178,9 @@ export function mountProgressBridge(
       if (grew) autoRounds = 0
 
       const diff = diffProgress(before, after)
-      const { summary, text } = renderProgressNotice(diff, after.advance)
-      appendProgressNotice(p.agent?.session, summary, text)
+      // 报告交给客户端在回合尾部渲染（`conversation.chat.turnTail`）。
+      // 刻意**不**追加会话消息：plugin 来源的消息必然被 DSH 显示成"上下文注入"。
+      rememberTurnReport(sessionIdOf(p), buildTurnReport(diff, turn, after.advance))
 
       // ── 自主推进闸门 ────────────────────────────────────────────────
       // 方向明确且用户没插话、预算未尽 → 直接继续；否则停下等用户。

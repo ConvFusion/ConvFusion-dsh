@@ -181,6 +181,14 @@ export interface SettingsRpcDeps {
     store: SkillCustomizationStore;
     /** 覆盖路径解析（测试用；缺省按配置解析）。 */
     resolvePath?: (config: Config) => string;
+    /**
+     * 会话 id → 该会话的工作区（**权威来源**：`ctx.sessions.get(id).header.cwd`）。
+     *
+     * 进度报告必须按**会话自己的工作区**判定"这是不是一个研究项目"，
+     * 而不是按插件进程的启动目录 —— 否则会把另一个项目的上下文/进展显示到本会话
+     * （2026-09 实测发生）。
+     */
+    resolveSessionWorkspace?: (sessionId: string) => string | undefined;
 }
 /**
  * 建立一个端点分发器。

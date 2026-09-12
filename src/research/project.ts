@@ -17,8 +17,8 @@
  * **workspace 路径本身就是研究身份**，不需要额外锚文件。所以研究定义只有 `project.md` 一份。
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { PROJECT_FILE } from './research-data.js'
 import { parseListItems, stripFrontmatter, parseFrontmatter, renderFrontmatter } from './markdown.js'
 import type { ResearchProject } from './data.js'
@@ -66,6 +66,7 @@ export function loadProjectFile(workspace: string): ResearchProject | null {
   const statement = section('Research Statement')
   const topic = fm.topic || firstLine(statement)
   if (!topic) return null
+  const initialTopic = fm.initial_topic || undefined
 
   // 用共享的段落级解析：跨行的条目要合成一条，且不能被 `**加粗**` 的
   // `*` 误当列表标记（曾经把 `**Q1（…）**` 解析成 `Q1（…）**`）
@@ -73,6 +74,7 @@ export function loadProjectFile(workspace: string): ResearchProject | null {
 
   return {
     topic,
+    ...(initialTopic ? { initialTopic } : {}),
     ...(fm.domain || section('Domain') ? { domain: fm.domain || firstLine(section('Domain')) } : {}),
     ...(questions.length > 0 ? { questions } : {}),
     ...(section('Motivation') ? { goal: firstLine(section('Motivation')) } : {}),
@@ -88,6 +90,7 @@ function firstLine(text: string): string {
 /** 序列化 `project.md`（研究定义）。 */
 export function serializeProject(input: {
   topic: string
+  initialTopic?: string
   domain?: string
   goal?: string
   questions?: readonly string[]
@@ -97,6 +100,8 @@ export function serializeProject(input: {
   const front = renderFrontmatter({
     type: 'research-project',
     topic: input.topic,
+    // 初始输入主题：创建时等于 topic；主题演进后与 topic 不同（追溯"怎么演进的"）
+    initial_topic: input.initialTopic ?? input.topic,
     domain: input.domain,
     created_at: input.createdAt,
     updated_at: input.updatedAt ?? new Date().toISOString(),
@@ -132,6 +137,8 @@ export function saveProjectFile(
 
   const merged: ResearchProject = {
     topic: input.topic.trim(),
+    // 初始主题只允许"首次确定"：已有值（含前次演进保留下来的）绝不覆盖
+    initialTopic: existing?.initialTopic ?? input.topic.trim(),
     ...(input.domain ?? existing?.domain ? { domain: (input.domain ?? existing?.domain)! } : {}),
     ...(input.goal ?? existing?.goal ? { goal: (input.goal ?? existing?.goal)! } : {}),
     ...(input.questions?.length ?? existing?.questions?.length
@@ -143,6 +150,140 @@ export function saveProjectFile(
 
   writeFileSync(file, serializeProject(merged), 'utf8')
   return merged
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 主题演进（topic evolution）
+ *
+ * 课题**不冻结在初始输入**。研究会收敛出更准确的主题表述 —— 歧义被裁定
+ * （如 D001）、机制被收窄、范围被限定 —— 此时 `topic`（当前采纳的主题）
+ * 应当更新为**最后采纳的主题**，而不是永远显示开题时那句话。
+ *
+ * 三条硬约束：
+ *   1. **初始输入不丢**：第一次更新时把旧主题写入 `initial_topic`，之后只读保留；
+ *   2. **正文零改动**：`project.md` 是用户资产（研究陈述 / 范围 / 领域都是手写的）。
+ *      更新**只做 frontmatter 行的外科手术**，绝不走 `serializeProject`
+ *      （那会用骨架重新生成整个文件，把手写内容洗掉）；
+ *   3. **留痕**：每次变更追加一条记录到 `research/topic-history.json`
+ *      （from / to / 时间 / 理由 / 依据 / 谁改的），与 state-proposals 的
+ *      applied.json 同一纪律 —— 历史不被擦除。
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** 主题变更记录。 */
+export interface TopicChange {
+  from: string
+  to: string
+  /** ISO 8601。 */
+  at: string
+  /** 为什么主题演进（依据哪个裁定 / 发现）。 */
+  reason?: string
+  /** 新主题所依据的决策 / 证据 id（如 `D001`）。 */
+  evidence?: string[]
+  by: 'agent' | 'user'
+}
+
+/** 主题演进历史（与 `project.md` 同层的结构化资产，放 `research/` 下）。 */
+export const TOPIC_HISTORY_FILE = 'research/topic-history.json'
+
+/** 读取主题演进历史；缺失 / 损坏 → 空列表。 */
+export function listTopicChanges(workspace: string): TopicChange[] {
+  try {
+    const raw = JSON.parse(readFileSync(join(workspace, TOPIC_HISTORY_FILE), 'utf8')) as TopicChange[]
+    return Array.isArray(raw) ? raw : []
+  } catch {
+    return []
+  }
+}
+
+/** 把任意输入收敛成可安全写入 frontmatter 的单行主题。 */
+function sanitizeTopic(raw: string): string {
+  return raw.replace(/\s+/g, ' ').trim().replace(/^["']+|["']+$/g, '')
+}
+
+export type TopicUpdateResult =
+  | { changed: true; previous: string; current: string; initial: string }
+  | { changed: false; previous: string; current: string }
+  | { changed: false; error: string }
+
+/**
+ * 把项目主题更新为最后采纳的主题（**外科手术式**，只动 frontmatter 指定行）。
+ *
+ * - 主题相同 → 幂等 no-op；
+ * - 首次更新时（旧项目没有 `initial_topic`）把**当前**主题固化为初始输入；
+ * - 变更追加到 `research/topic-history.json`。
+ */
+export function updateProjectTopic(
+  workspace: string,
+  input: { topic: string; reason?: string; evidence?: readonly string[]; by?: 'agent' | 'user' },
+): TopicUpdateResult {
+  const file = projectPath(workspace)
+  if (!existsSync(file)) return { changed: false, error: 'No project.md in this workspace.' }
+
+  const source = readFileSync(file, 'utf8')
+  const current = loadProjectFile(workspace)?.topic ?? ''
+  const next = sanitizeTopic(input.topic)
+  if (!next) return { changed: false, error: 'Topic must be a non-empty single line.' }
+  if (next === current) {
+    return { changed: false, previous: current, current }
+  }
+
+  const fm = parseFrontmatter(source)
+  // 旧项目没有 initial_topic：此刻的（即将被替换的）主题就是初始输入
+  const initial = fm.initial_topic || current
+
+  // ── 外科手术：逐行处理 frontmatter，只替换/插入目标键，其余行原样保留 ──
+  const m = source.match(/^(---\r?\n)([\s\S]*?)(\r?\n---)/)
+  if (!m) return { changed: false, error: 'project.md has no frontmatter block.' }
+
+  const now = new Date().toISOString()
+  const lines = m[2].split(/\r?\n/)
+  const out: string[] = []
+  let topicDone = false
+  let initialDone = Boolean(fm.initial_topic)
+  for (const line of lines) {
+    const key = line.split(':')[0]?.trim()
+    if (key === 'topic') {
+      out.push(`topic: ${next}`)
+      if (!initialDone) {
+        out.push(`initial_topic: ${initial}`)
+        initialDone = true
+      }
+      topicDone = true
+      continue
+    }
+    if (key === 'initial_topic') {
+      out.push(line)
+      initialDone = true
+      continue
+    }
+    if (key === 'updated_at') {
+      out.push(`updated_at: ${now}`)
+      continue
+    }
+    out.push(line)
+  }
+  if (!initialDone) out.unshift(`initial_topic: ${initial}`)
+  if (!topicDone) out.unshift(`topic: ${next}`)
+  if (!fm.updated_at) out.push(`updated_at: ${now}`)
+
+  writeFileSync(file, `${m[1]}${out.join('\n')}${m[3]}${source.slice(m[0].length)}`, 'utf8')
+
+  // ── 留痕：追加变更记录（历史不被擦除）──
+  const change: TopicChange = {
+    from: current,
+    to: next,
+    at: now,
+    by: input.by ?? 'agent',
+    ...(input.reason ? { reason: input.reason.replace(/\s+/g, ' ').trim() } : {}),
+    ...(input.evidence && input.evidence.length ? { evidence: [...input.evidence] } : {}),
+  }
+  const history = listTopicChanges(workspace)
+  history.push(change)
+  const historyFile = join(workspace, TOPIC_HISTORY_FILE)
+  mkdirSync(dirname(historyFile), { recursive: true })
+  writeFileSync(historyFile, JSON.stringify(history, null, 2) + '\n', 'utf8')
+
+  return { changed: true, previous: current, current: next, initial }
 }
 
 /** 研究定义是否存在（即 `project.md`）。 */

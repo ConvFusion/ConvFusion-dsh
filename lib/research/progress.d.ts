@@ -110,6 +110,70 @@ export declare function renderProgressNotice(diff: ProgressDiff, advance?: Advan
     summary: string;
     text: string;
 };
+/** 全部计数项的显示名（报告与 notice 共用，避免两处文案漂移）。 */
+export declare function countLabel(key: string): string;
+/**
+ * 当前缺口（只陈述事实，不猜）。
+ *
+ * `v2-Progress.md` 的 C 段：Research State 现在暴露了什么需求。
+ */
+export declare function researchGaps(snapshot: ProgressSnapshot): string[];
+/**
+ * 一轮对话结束后的研究进展报告（`v2-Progress.md` 的三段式）。
+ *
+ * 为什么返回**结构化数据**而不是 Markdown：报告现在由**客户端**在对话流尾部
+ * 渲染成卡片（`conversation.chat.turnTail`），结构化的字段才能排版成图表，
+ * 而不是把 Markdown 字符串塞进界面。
+ */
+export interface TurnProgressReport {
+    /** 生成时刻（ISO）。 */
+    at: string;
+    /** 回合号（未知为 -1）。 */
+    turn: number;
+    /** 一行摘要（界面自己加图标）。 */
+    summary: string;
+    /** 折算后的整体成熟度变化（0..1）。 */
+    overall: {
+        before: number;
+        after: number;
+    };
+    /** A. 研究现在到了哪里。 */
+    progress: {
+        dimensions: Array<{
+            dimension: string;
+            level: MaturityLevel;
+            scale: number;
+        }>;
+        stage: string | null;
+    };
+    /** B. 刚才这轮改变了什么。 */
+    changes: {
+        changed: boolean;
+        maturity: Array<{
+            dimension: string;
+            from: MaturityLevel;
+            to: MaturityLevel;
+        }>;
+        counts: Array<{
+            key: string;
+            label: string;
+            from: number;
+            to: number;
+        }>;
+    };
+    /** C. 接下来最值得做什么。 */
+    need: {
+        gaps: string[];
+        clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown';
+        basis: string;
+        nextStep?: string;
+        needsUserDecision?: string;
+    };
+    /** 本轮是否推进了（供界面决定强调程度）。 */
+    moved: boolean;
+}
+/** 由差异 + 快照构造界面用的回合报告。 */
+export declare function buildTurnReport(diff: ProgressDiff, turn: number, advance?: AdvanceAssessment, at?: Date): TurnProgressReport;
 /** 供 `/research` 状态展示用：紧凑的一行。 */
 export declare function renderProgressLine(snapshot: ProgressSnapshot): string;
 //# sourceMappingURL=progress.d.ts.map

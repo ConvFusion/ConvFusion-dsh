@@ -26,6 +26,7 @@ export declare function loadProjectFile(workspace: string): ResearchProject | nu
 /** 序列化 `project.md`（研究定义）。 */
 export declare function serializeProject(input: {
     topic: string;
+    initialTopic?: string;
     domain?: string;
     goal?: string;
     questions?: readonly string[];
@@ -43,6 +44,48 @@ export declare function saveProjectFile(workspace: string, input: {
     goal?: string;
     questions?: readonly string[];
 }): ResearchProject;
+/** 主题变更记录。 */
+export interface TopicChange {
+    from: string;
+    to: string;
+    /** ISO 8601。 */
+    at: string;
+    /** 为什么主题演进（依据哪个裁定 / 发现）。 */
+    reason?: string;
+    /** 新主题所依据的决策 / 证据 id（如 `D001`）。 */
+    evidence?: string[];
+    by: 'agent' | 'user';
+}
+/** 主题演进历史（与 `project.md` 同层的结构化资产，放 `research/` 下）。 */
+export declare const TOPIC_HISTORY_FILE = "research/topic-history.json";
+/** 读取主题演进历史；缺失 / 损坏 → 空列表。 */
+export declare function listTopicChanges(workspace: string): TopicChange[];
+export type TopicUpdateResult = {
+    changed: true;
+    previous: string;
+    current: string;
+    initial: string;
+} | {
+    changed: false;
+    previous: string;
+    current: string;
+} | {
+    changed: false;
+    error: string;
+};
+/**
+ * 把项目主题更新为最后采纳的主题（**外科手术式**，只动 frontmatter 指定行）。
+ *
+ * - 主题相同 → 幂等 no-op；
+ * - 首次更新时（旧项目没有 `initial_topic`）把**当前**主题固化为初始输入；
+ * - 变更追加到 `research/topic-history.json`。
+ */
+export declare function updateProjectTopic(workspace: string, input: {
+    topic: string;
+    reason?: string;
+    evidence?: readonly string[];
+    by?: 'agent' | 'user';
+}): TopicUpdateResult;
 /** 研究定义是否存在（即 `project.md`）。 */
 export declare function hasProjectDefinition(workspace: string): boolean;
 /** 供工具/命令：取研究主题。 */

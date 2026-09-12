@@ -98,6 +98,7 @@ const SYSTEM_TAXONOMY: ReadonlyArray<{ group: string; name: string; leaves: Read
       ['experiment-design', 'Experiment Design'],
       ['dataset-selection', 'Dataset Selection'],
       ['baseline-selection', 'Baseline Selection'],
+      ['simulation', 'Simulation & Expected Results'],
       ['evaluation', 'Evaluation'],
       ['ablation', 'Ablation'],
       ['reproducibility', 'Reproducibility'],

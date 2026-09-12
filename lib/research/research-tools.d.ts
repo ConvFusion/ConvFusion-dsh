@@ -20,6 +20,7 @@
  * | `research_decision` | 记录研究决策 | **必须有 reason 或 evidence** |
  * | `research_state_read` | 读取当前研究状态 | 只读 |
  * | `research_state_propose` | **提出**状态更新 | **只提案，绝不自动应用**（§20 / §21） |
+ * | `research_project` | 查询/更新研究主题 | 主题**必须**带理由与依据；初始输入永久保留，只动 frontmatter |
  *
  * ## 不允许出现的工具（重要的"没有"）
  *
@@ -30,6 +31,7 @@
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
 import { openQuestions } from './research-state.js';
 /** 工具名（`research_` 命名空间，与 Skill/Plan 资产一致）。 */
+export declare const PROJECT_TOOL = "research_project";
 export declare const EVIDENCE_TOOL = "research_evidence";
 export declare const CLAIM_TOOL = "research_claim";
 export declare const DECISION_TOOL = "research_decision";
@@ -41,13 +43,16 @@ export declare const LITERATURE_TOOL = "research_literature_search";
 /**
  * 构造研究资产工具集。
  *
- * @param resolveWorkspace 读取当前会话 workspace
- */
-/**
- * @param resolveWorkspace 当前研究 workspace
+ * @param resolveWorkspace 解析**本次工具调用所属会话**的研究根目录。
+ *        必须按会话解析（参数 = 调用的 `exec.agent`）：研究数据写盘的位置取决于
+ *        会话自己的工作区，而不是插件进程的全局"当前 cwd" —— 多会话并行时全局值
+ *        可能已被其它会话覆盖，会把研究数据写进别人的工作区（2026-09 事故：一条
+ *        state proposal 被写进插件开发仓库根目录的 `research/`）。
  * @param literatureDeps 文献检索依赖（API Key 解析）；缺省时不注册检索工具
  */
-export declare function defineResearchTools(resolveWorkspace: () => string, literatureDeps?: {
+export declare function defineResearchTools(resolveWorkspace: (agent?: {
+    id?: unknown;
+} | null) => string, literatureDeps?: {
     apiKey: () => string;
     mailto?: () => string | undefined;
     fetchImpl?: import('./literature.js').FetchLike;

@@ -60,8 +60,13 @@ export declare const RESEARCH_GUIDE_NAME = "convfusion:research-guide";
 export declare const RESEARCH_GUIDE_TEXT: string;
 /** 组装 Research Context 所需的运行时输入。 */
 export interface ResearchContextSource {
-    /** 当前研究 workspace（绝对路径）。 */
+    /** 当前**研究根目录**（ConvFusion 数据文件所在目录；绝对路径）。 */
     workspace: string;
+    /**
+     * 会话工作区（新布局下研究根目录 = `<会话工作区>/workspace`）。
+     * 用于计算研究根目录的展示前缀 —— Agent 用原生工具读文件时按**会话工作区**解析路径。
+     */
+    sessionWorkspace?: string;
     /** 当前用户输入，用于"相关选择"（§8：按任务动态选择，不无条件全量注入）。 */
     userInput?: string;
     /**
@@ -97,6 +102,8 @@ export type WorkspaceResolver = () => string;
  */
 export declare class ResearchContextService extends Service {
     private readonly resolveWorkspace;
+    /** 会话工作区（≠ 研究根目录；新布局下研究根 = `<会话工作区>/workspace`）。 */
+    private readonly resolveSessionWorkspace?;
     /**
      * 取能力**生效正文**（含用户定制）。
      *
@@ -107,7 +114,7 @@ export declare class ResearchContextService extends Service {
     /** 最近一次渲染的上下文（供 UI / 调试读取；§20 要求 Research Context 用户可见）。 */
     private lastRendered;
     private lastWorkspace;
-    constructor(ctx: Context, resolveWorkspace: WorkspaceResolver, skillContent?: (id: string) => string | undefined);
+    constructor(ctx: Context, resolveWorkspace: WorkspaceResolver, skillContent?: (id: string) => string | undefined, resolveSessionWorkspace?: WorkspaceResolver);
     /** 最近一次注入给模型的 Research Context 文本（`''` = 当前会话不是研究项目）。 */
     get current(): string;
     /** 最近一次解析出的 workspace 路径。 */

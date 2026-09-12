@@ -15,8 +15,10 @@
 import logoUrl from '../../assets/favicon.svg';
 import { loadSettingsState } from './settings.js';
 import { applyNavIcon, installNavIcon } from './nav-icon.js';
+import { ResearchProgressCard, ResearchProgressWarmer, selectResearchTurn, resetProgressCardState } from './progress-card.js';
 /** 供离线测试直接调用（bundle 的 `apply`/`inject` 之外再导出这些）。 */
 export { loadSettingsState, applyNavIcon, installNavIcon, logoUrl };
+export { ResearchProgressCard, ResearchProgressWarmer, selectResearchTurn, resetProgressCardState };
 interface ScopeSnapshot {
     status: 'loading' | 'ready' | 'unavailable';
     value: {
@@ -38,6 +40,11 @@ interface SlotRegisterOptions {
     label?: () => string;
     inject?: () => Record<string, unknown>;
     priority?: number;
+    /**
+     * chain 型槽位（如 `conversation.chat.turnTail`）的选择器：
+     * 按升序尝试，**首个返回非 null** 的条目渲染，全为 null 则回落到拥有者的默认。
+     */
+    select?: (owner: unknown) => unknown | null;
 }
 interface SlotsService {
     inject(key: string, fn: () => unknown): unknown;
