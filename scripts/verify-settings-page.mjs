@@ -274,6 +274,11 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / 研究方法库 / 系统�
   assert(bundleText.includes('重新检查'), '有「重新检查」按钮')
   assert(/dependencies\/check/.test(src), '「重新检查」走 dependencies/check 端点')
   assert(/已安装/.test(src) && /未安装/.test(src), '展示已安装/未安装状态徽章')
+  // 已安装是常态：此时卡片必须压成一行，安装说明不得无谓地占据高度
+  const depCard = src.slice(src.indexOf('function SystemTab('))
+  const guardIdx = depCard.indexOf('dep && !dep.available')
+  const installIdx = depCard.indexOf('brew install tectonic')
+  assert(guardIdx > -1 && installIdx > guardIdx, '安装说明只在「未安装」分支渲染（已安装时卡片只有一行）')
 }
 
 /* ════════════════════════════════════════════════════════════════════════

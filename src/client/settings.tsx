@@ -1082,8 +1082,6 @@ function SystemTab({
     }
   }
 
-  const installCmd: React.CSSProperties = { ...S.mono, display: 'inline-block' }
-
   return (
     <>
       {/* ── 本地依赖：tectonic ─────────────────────────────────────── */}
@@ -1100,73 +1098,13 @@ function SystemTab({
           )}
         </div>
         <div style={S.cardBody}>
-          <div style={{ ...S.hint, lineHeight: 1.7 }}>
-            论文最终要交付 LaTeX/PDF，编译由本机的{' '}
-            <span style={S.mono}>tectonic</span> 完成。它<b>不是 npm 依赖</b>，需要单独安装；
-            未安装时 LaTeX 组装仍然可用，但无法产出 PDF。
-          </div>
-
-          {dep ? (
-            <div style={S.field}>
-              <div style={S.label}>tectonic</div>
-              <div style={{ ...S.hint, lineHeight: 1.9 }}>
-                {dep.available ? '已找到可执行文件。' : '未在本机找到可执行文件。'}
-                {dep.path ? (
-                  <>
-                    <br />
-                    路径：<span style={S.mono}>{dep.path}</span>
-                  </>
-                ) : null}
-                {dep.version ? (
-                  <>
-                    <br />
-                    版本：<span style={S.mono}>{dep.version}</span>
-                  </>
-                ) : null}
-                {dep.viaEnv ? (
-                  <>
-                    <br />
-                    由环境变量 <span style={S.mono}>{dep.envVar}</span> 指定
-                  </>
-                ) : null}
-                <br />
-                用途：{dep.purpose}
-              </div>
-            </div>
-          ) : null}
-
-          {dep && !dep.available ? (
-            <div style={S.field}>
-              <div style={S.label}>安装方法（任选其一）</div>
-              <div style={{ ...S.hint, lineHeight: 2.1 }}>
-                macOS（Homebrew）：
-                <br />
-                <span style={installCmd}>brew install tectonic</span>
-                <br />
-                Conda / Mamba：
-                <br />
-                <span style={installCmd}>mamba install -c conda-forge tectonic</span>
-                <br />
-                Rust（Cargo）：
-                <br />
-                <span style={installCmd}>cargo install tectonic</span>
-                <br />
-                或从 <span style={S.mono}>tectonic-typesetting.github.io</span> 下载发行版。
-                <br />
-                <b>首次编译</b>会按需下载宏包（约 40 MB），缓存在研究工作区内，之后复用。
-              </div>
-            </div>
-          ) : null}
-
-          <div style={S.field}>
-            <div style={S.label}>装在了非标准位置？</div>
-            <div style={{ ...S.hint, lineHeight: 1.8 }}>
-              设置环境变量 <span style={S.mono}>{dep?.envVar ?? 'CONVFUSION_TECTONIC'}</span>{' '}
-              指向可执行文件（绝对路径），然后点「重新检查」。
-            </div>
-          </div>
-
-          <div style={S.footer}>
+          {/* 状态行：名称 · 版本 · 路径 · 重新检查 —— 已安装时本卡片就只有这一行 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={S.mono}>tectonic</span>
+            {dep?.version ? <span style={S.hint}>{dep.version}</span> : null}
+            {dep?.path ? <span style={{ ...S.hint, opacity: 0.7 }}>{dep.path}</span> : null}
+            {dep?.viaEnv ? <span style={S.hint}>（由 {dep.envVar} 指定）</span> : null}
+            <span style={{ flex: '1 1 auto' }} />
             <button
               type="button"
               style={{ ...S.ghostBtn, opacity: checking ? 0.55 : 1 }}
@@ -1176,6 +1114,22 @@ function SystemTab({
               {checking ? '检查中…' : '重新检查'}
             </button>
           </div>
+
+          {/* 未安装才展开：这时那些字才是用户真正需要的 */}
+          {dep && !dep.available ? (
+            <div style={{ ...S.hint, lineHeight: 2, marginTop: 8 }}>
+              论文编译成 PDF 需要本机的 <span style={S.mono}>tectonic</span>（不是 npm 依赖）。安装任一即可：
+              <br />
+              <span style={S.mono}>brew install tectonic</span>
+              <br />
+              <span style={S.mono}>mamba install -c conda-forge tectonic</span>
+              <br />
+              <span style={S.mono}>cargo install tectonic</span>
+              <br />
+              装在别处就设 <span style={S.mono}>{dep.envVar || 'CONVFUSION_TECTONIC'}</span>{' '}
+              指向它，再点「重新检查」。首次编译会下载宏包（约 40 MB），之后复用。
+            </div>
+          ) : null}
         </div>
       </div>
 
