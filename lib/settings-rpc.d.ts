@@ -3,7 +3,7 @@
  *
  * ## 它服务谁
  *
- * 【设置】-【ConvFusion】-【本地设置】（浏览器半边）通过**自己的同源 HTTP 路由**
+ * 【设置】-【ConvFusion】-【本地研究方法】（浏览器半边）通过**自己的同源 HTTP 路由**
  * 读/写用户定制：
  *
  * ```text
@@ -132,7 +132,39 @@ export interface RetrievalKeyStatus {
     /** 提供 Key 的环境变量名（仅提示，不是值）。 */
     envVar: string;
 }
-/** 【本地设置】整页状态。 */
+/**
+ * 一个**本地外部依赖**的可用性（目前只有 tectonic —— 它不在 Node 生态里，用户可能没装）。
+ *
+ * 论文写到最后要出 LaTeX/PDF，编译由 tectonic 完成；它不是 npm 依赖，装没装只有本机能查。
+ * 因此设置页需要能看到"有没有 / 在哪 / 什么版本 / 没装怎么办"。
+ */
+export interface LocalDependencyStatus {
+    /** 依赖名（展示用）。 */
+    name: string;
+    /** 是否可用。 */
+    available: boolean;
+    /** 可执行文件绝对路径（可用时）。 */
+    path?: string;
+    /** 版本字符串（可用时）。 */
+    version?: string;
+    /** 是否由环境变量覆盖指定。 */
+    viaEnv: boolean;
+    /** 覆盖用的环境变量名。 */
+    envVar: string;
+    /** 用途一句话（设置页直接展示，避免用户不知道为什么要装）。 */
+    purpose: string;
+}
+/** 本机外部依赖的检测结果。 */
+export interface LocalDependencyReport {
+    tectonic: LocalDependencyStatus;
+}
+/**
+ * 检测本地外部依赖。
+ *
+ * **每次调用都重新探测**（用户可能刚装完就回来看），且只做只读检查（`--version`）。
+ */
+export declare function describeLocalDependencies(env?: NodeJS.ProcessEnv): LocalDependencyReport;
+/** 【本地研究方法】整页状态。 */
 export interface SettingsState {
     /** 宿主协议版本；与客户端内联值不一致 = 宿主未重启。 */
     protocol: number;
@@ -166,13 +198,15 @@ export interface SettingsState {
      * 远端读取会被 `redactSecrets` 摘掉，界面也从不持有明文。
      */
     retrieval: RetrievalKeyStatus;
+    /** 本地外部依赖（tectonic 等）的可用性 —— 【系统设置】页展示。 */
+    dependencies: LocalDependencyReport;
 }
 /**
  * 组装整页状态（纯函数：给定 store 与配置即可算出，便于离线验证）。
  *
  * 分组在这里做，客户端只负责渲染 —— 设置页不该自己理解 Skill 的存储结构。
  */
-export declare function buildSettingsState(config: Config, store: SkillCustomizationStore, resolvePath?: (c: Config) => string): SettingsState;
+export declare function buildSettingsState(config: Config, store: SkillCustomizationStore, resolvePath?: (c: Config) => string, probeDependencies?: () => LocalDependencyReport): SettingsState;
 /** 设置面依赖（由插件入口注入，便于离线测试）。 */
 export interface SettingsRpcDeps {
     /** 当前生效配置（每次调用重新取，文件改名后立即生效）。 */
@@ -198,6 +232,7 @@ export interface SettingsRpcDeps {
  * | endpoint | payload | 说明 |
  * |---|---|---|
  * | `state` | `{}` | 整页状态（类别 → Skill → 章节） |
+ * | `dependencies/check` | `{}` | 重新探测本地外部依赖（tectonic），供【系统设置】的"重新检查" |
  * | `customization/save` | `{ skillId, section, text }` | 写入覆盖（空文本 = 清除） |
  * | `customization/reset` | `{ skillId, section }` | 清除一个章节的覆盖 |
  * | `customization/resetSkill` | `{ skillId }` | 清除一个 Skill 的全部覆盖 |

@@ -1,5 +1,5 @@
 /**
- * ConvFusion 2.0 — 设置页本体（【设置】-【ConvFusion】-【本地设置】）
+ * ConvFusion 2.0 — 设置页本体（【设置】-【ConvFusion】-【本地研究方法】）
  *
  * ## v2 与 v0.1.5 的结构差异（重建依据见仓库根 `ConvFusion_setting.md`）
  *
@@ -110,6 +110,20 @@ interface HostState {
         source: 'settings' | 'env' | 'none';
         envVar: string;
     };
+    /** 本地外部依赖（tectonic）——【系统设置】页的"配置检查"。 */
+    dependencies?: {
+        tectonic: HostDependency;
+    };
+}
+/** 一个本地外部依赖的检测结果（与 host 的 LocalDependencyStatus 对应）。 */
+interface HostDependency {
+    name: string;
+    available: boolean;
+    path?: string;
+    version?: string;
+    viaEnv: boolean;
+    envVar: string;
+    purpose: string;
 }
 export type SettingsLoad = {
     kind: 'ok';

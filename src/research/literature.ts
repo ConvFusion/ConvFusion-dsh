@@ -377,7 +377,7 @@ export async function searchOpenAlex(
         status: res.status,
         message:
           res.status === 401 || res.status === 403
-            ? `OpenAlex 拒绝了这次请求（HTTP ${res.status}）：API Key 可能无效或已过期。请在【设置】-【ConvFusion】-【检索源】检查。`
+            ? `OpenAlex 拒绝了这次请求（HTTP ${res.status}）：API Key 可能无效或已过期。请在【设置】-【ConvFusion】-【系统设置】检查。`
             : `OpenAlex 返回 HTTP ${res.status}。`,
       }
     }

@@ -3,7 +3,7 @@
  *
  * ## 它服务谁
  *
- * 【设置】-【ConvFusion】-【本地设置】（浏览器半边）通过**自己的同源 HTTP 路由**
+ * 【设置】-【ConvFusion】-【本地研究方法】（浏览器半边）通过**自己的同源 HTTP 路由**
  * 读/写用户定制：
  *
  * ```text
@@ -74,6 +74,7 @@
  */
 
 import { existsSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { OPENALEX_API_KEY_ENV } from './config.js'
 import { HOST_PROTOCOL, HOST_PROTOCOL_FIELD } from './protocol.js'
 import type { SkillCustomizationStore } from './research/skill-customization.js'
@@ -87,6 +88,7 @@ import type { Config } from './config.js'
 import { describeOpenAlexKey, redactConfig, resolveCustomizationPath } from './config.js'
 import { isResearchWorkspace, researchWorkspaceOf } from './research/workspace.js'
 import { latestTurnReport } from './research/progress-bridge.js'
+import { findTectonic, tectonicVersion, TECTONIC_ENV } from './research/latex-compile.js'
 
 /**
  * 设置面的 HTTP 路由前缀（客户端必须用同一个）。
@@ -153,7 +155,56 @@ export interface RetrievalKeyStatus {
   envVar: string
 }
 
-/** 【本地设置】整页状态。 */
+/**
+ * 一个**本地外部依赖**的可用性（目前只有 tectonic —— 它不在 Node 生态里，用户可能没装）。
+ *
+ * 论文写到最后要出 LaTeX/PDF，编译由 tectonic 完成；它不是 npm 依赖，装没装只有本机能查。
+ * 因此设置页需要能看到"有没有 / 在哪 / 什么版本 / 没装怎么办"。
+ */
+export interface LocalDependencyStatus {
+  /** 依赖名（展示用）。 */
+  name: string
+  /** 是否可用。 */
+  available: boolean
+  /** 可执行文件绝对路径（可用时）。 */
+  path?: string
+  /** 版本字符串（可用时）。 */
+  version?: string
+  /** 是否由环境变量覆盖指定。 */
+  viaEnv: boolean
+  /** 覆盖用的环境变量名。 */
+  envVar: string
+  /** 用途一句话（设置页直接展示，避免用户不知道为什么要装）。 */
+  purpose: string
+}
+
+/** 本机外部依赖的检测结果。 */
+export interface LocalDependencyReport {
+  tectonic: LocalDependencyStatus
+}
+
+/**
+ * 检测本地外部依赖。
+ *
+ * **每次调用都重新探测**（用户可能刚装完就回来看），且只做只读检查（`--version`）。
+ */
+export function describeLocalDependencies(env: NodeJS.ProcessEnv = process.env): LocalDependencyReport {
+  const override = (env[TECTONIC_ENV] ?? '').trim()
+  const bin = findTectonic(env)
+  return {
+    tectonic: {
+      name: 'tectonic',
+      available: Boolean(bin),
+      ...(bin ? { path: bin } : {}),
+      ...(bin ? { version: tectonicVersion(bin) } : {}),
+      viaEnv: Boolean(override && bin === override),
+      envVar: TECTONIC_ENV,
+      purpose: '把论文的 LaTeX 源码编译成 PDF（研究论文最终交付格式）。',
+    },
+  }
+}
+
+/** 【本地研究方法】整页状态。 */
 export interface SettingsState {
   /** 宿主协议版本；与客户端内联值不一致 = 宿主未重启。 */
   protocol: number
@@ -184,6 +235,8 @@ export interface SettingsState {
    * 远端读取会被 `redactSecrets` 摘掉，界面也从不持有明文。
    */
   retrieval: RetrievalKeyStatus
+  /** 本地外部依赖（tectonic 等）的可用性 —— 【系统设置】页展示。 */
+  dependencies: LocalDependencyReport
 }
 
 /**
@@ -195,6 +248,7 @@ export function buildSettingsState(
   config: Config,
   store: SkillCustomizationStore,
   resolvePath: (c: Config) => string = resolveCustomizationPath,
+  probeDependencies: () => LocalDependencyReport = describeLocalDependencies,
 ): SettingsState {
   const customizations = store.load()
   const path = resolvePath(config)
@@ -252,6 +306,7 @@ export function buildSettingsState(
       ...describeOpenAlexKey(config),
       envVar: OPENALEX_API_KEY_ENV,
     },
+    dependencies: probeDependencies(),
   }
 }
 
@@ -289,6 +344,7 @@ function asString(v: unknown): string {
  * | endpoint | payload | 说明 |
  * |---|---|---|
  * | `state` | `{}` | 整页状态（类别 → Skill → 章节） |
+ * | `dependencies/check` | `{}` | 重新探测本地外部依赖（tectonic），供【系统设置】的"重新检查" |
  * | `customization/save` | `{ skillId, section, text }` | 写入覆盖（空文本 = 清除） |
  * | `customization/reset` | `{ skillId, section }` | 清除一个章节的覆盖 |
  * | `customization/resetSkill` | `{ skillId }` | 清除一个 Skill 的全部覆盖 |
@@ -306,6 +362,15 @@ export function createSettingsRpcHandler(
       switch (endpoint) {
         case 'state':
           return { ok: true, value: state() }
+
+        /**
+         * 重新探测本地外部依赖。
+         *
+         * 用户可能刚装完 tectonic 就回到设置页 —— 整页 `state` 重载较重，
+         * 这里只返回依赖检测结果，供"重新检查"按钮就地刷新。
+         */
+        case 'dependencies/check':
+          return { ok: true, value: describeLocalDependencies() }
 
         /* ── 研究进展（对话流尾部的进度卡）─────────────────────────────────
          *

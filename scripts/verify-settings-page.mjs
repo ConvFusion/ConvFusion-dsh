@@ -220,10 +220,10 @@ console.log('\n[1d] 定制文件不出现在界面上')
 /* ════════════════════════════════════════════════════════════════════════
  * 1e. 三个 Tab
  * ════════════════════════════════════════════════════════════════════════ */
-console.log('\n[1e] 三个 Tab：本地设置 / 研究方法库 / 检索源')
+console.log('\n[1e] 三个 Tab：本地研究方法 / 研究方法库 / 系统设置')
 {
   const bundleText = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
-  for (const label of ['本地设置', '研究方法库', '检索源']) {
+  for (const label of ['本地研究方法', '研究方法库', '系统设置']) {
     assert(bundleText.includes(label), `Tab 存在：${label}`)
   }
   const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
@@ -248,7 +248,7 @@ console.log('\n[1e] 三个 Tab：本地设置 / 研究方法库 / 检索源')
   assert(bundleText.includes('演示数据'), '演示列表带「演示数据」徽章')
   assert(bundleText.includes('以上为界面演示'), '演示列表有脚注说明不是真实数据')
   assert(bundleText.includes('登录 ConvFusion.com 可获得更多研究方法'), '提醒登录可获得更多方法')
-  const community = src.slice(src.indexOf('function CommunityTab()'), src.indexOf('function RetrievalTab('))
+  const community = src.slice(src.indexOf('function CommunityTab()'), src.indexOf('function SystemTab('))
   assert(!/<input/.test(community), '研究方法库没有登录表单（未实现，不假装能登录）')
   assert(!/fetch\(/.test(community), '研究方法库不发任何网络请求')
   assert(!/password/i.test(community), '研究方法库不收集口令')
@@ -256,14 +256,24 @@ console.log('\n[1e] 三个 Tab：本地设置 / 研究方法库 / 检索源')
   assert(!/已登录|已同步|下载/.test(community), '演示数据不宣称任何已发生的联网行为')
   assert((community.match(/disabled/g) ?? []).length >= 2, '「套用」与「登录」都是禁用态')
 
-  // ── Tab 3：检索源 —— OpenAlex Key ──
+  // ── Tab 3：系统设置 —— OpenAlex 凭据 + 本地依赖检查 ──
   assert(bundleText.includes('OpenAlex'), '提到 OpenAlex')
   assert(bundleText.includes('免费注册并复制 API Key'), '提示免费申请并引导获取 Key')
   assert(bundleText.includes('openalex.org'), '给出申请入口')
-  const retrieval = src.slice(src.indexOf('function RetrievalTab('))
+  const retrieval = src.slice(src.indexOf('function SystemTab('))
   assert(/type="password"/.test(retrieval), 'Key 输入框 type=password')
   assert(/autoComplete="off"/.test(retrieval), 'Key 输入框关闭自动填充')
   assert(/不会发送到浏览器|不会回传浏览器/.test(retrieval), '说明密钥不回传浏览器')
+
+  // ── Tab 3：本地依赖（tectonic）—— 用户可能没装，必须给出检查与安装说明 ──
+  assert(bundleText.includes('tectonic'), '系统设置提到 tectonic')
+  assert(bundleText.includes('本地依赖'), '有「本地依赖」区块')
+  assert(bundleText.includes('brew install tectonic'), '给出 macOS（Homebrew）安装命令')
+  assert(bundleText.includes('conda-forge tectonic'), '给出 Conda/Mamba 安装命令')
+  assert(bundleText.includes('CONVFUSION_TECTONIC'), '给出环境变量覆盖入口（非标准位置）')
+  assert(bundleText.includes('重新检查'), '有「重新检查」按钮')
+  assert(/dependencies\/check/.test(src), '「重新检查」走 dependencies/check 端点')
+  assert(/已安装/.test(src) && /未安装/.test(src), '展示已安装/未安装状态徽章')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -297,6 +307,41 @@ console.log('\n[1f] OpenAlex Key 的存储与暴露面')
   assert(!JSON.stringify(st).includes(secret), 'state 里**没有**密钥明文（浏览器永远拿不到）')
   assert(!JSON.stringify(st.config).includes(secret), 'config 里的密钥被剔除')
   assert(st.config.openalexApiKey === undefined, '返回给界面的 config 不含该字段')
+
+  // ── 本地依赖（tectonic）：论文编译靠本机装的它，用户可能没装 ──
+  // 设置页要能看到"有没有 / 在哪 / 什么版本 / 没装怎么办"，因此 state 必须带回检测结果。
+  assert(st.dependencies !== undefined, 'state 带回本地依赖检测结果')
+  const dep = st.dependencies.tectonic
+  assertEq(typeof dep.available, 'boolean', 'tectonic 可用性是布尔（不假设本机装没装）')
+  assertEq(dep.name, 'tectonic', '依赖名正确')
+  assertEq(dep.envVar, 'CONVFUSION_TECTONIC', '给出覆盖用环境变量名')
+  assert(dep.purpose.length > 0, 'tectonic 带用途说明（界面直接展示，用户才知道为什么要装）')
+  if (dep.available) assert(typeof dep.path === 'string' && dep.path.length > 0, '可用时给出可执行文件路径')
+
+  // 探测结果可注入 → 可离线断言"未安装"分支的形状
+  const missing = RPC.buildSettingsState(
+    { customizationFile: 'x.json', customizationDir: '/tmp', openalexApiKey: '' },
+    CUST.createMemoryCustomizationStore(),
+    undefined,
+    () => ({
+      tectonic: {
+        name: 'tectonic',
+        available: false,
+        viaEnv: false,
+        envVar: 'CONVFUSION_TECTONIC',
+        purpose: 'compile LaTeX to PDF',
+      },
+    }),
+  )
+  assertEq(missing.dependencies.tectonic.available, false, '可注入探测结果（未安装分支）')
+  assertEq(missing.dependencies.tectonic.path, undefined, '未安装时没有路径')
+
+  // 「重新检查」端点：只返回依赖报告，不重算整页
+  const depHost = makeHost()
+  const depRes = await depHost.handler('dependencies/check', {})
+  assertEq(depRes.ok, true, 'dependencies/check 端点可用')
+  assertEq(typeof depRes.value.tectonic.available, 'boolean', '端点返回 tectonic 状态')
+  assert(!('categories' in depRes.value), '端点只返回依赖报告（不重算整页状态）')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -541,7 +586,7 @@ console.log('\n[7] 静态边界：客户端不引入禁用依赖、无凭据字�
   const settingsSrc = readFileSync(join(dir, 'settings.tsx'), 'utf8')
   const community = settingsSrc.slice(
     settingsSrc.indexOf('function CommunityTab()'),
-    settingsSrc.indexOf('function RetrievalTab('),
+    settingsSrc.indexOf('function SystemTab('),
   )
   assert(community.length > 200, '找得到 CommunityTab 的实现')
   assert(!/<input/.test(community), '研究方法库没有登录表单（未实现，不假装能登录）')
@@ -549,7 +594,7 @@ console.log('\n[7] 静态边界：客户端不引入禁用依赖、无凭据字�
   assert(!/password/i.test(community), '研究方法库不收集口令')
 
   // OpenAlex Key 的输入必须是 password 类型 + 不自动填充
-  const retrieval = settingsSrc.slice(settingsSrc.indexOf('function RetrievalTab('))
+  const retrieval = settingsSrc.slice(settingsSrc.indexOf('function SystemTab('))
   assert(/type="password"/.test(retrieval), 'Key 输入框 type=password')
   assert(/autoComplete="off"/.test(retrieval), 'Key 输入框关闭自动填充')
 }

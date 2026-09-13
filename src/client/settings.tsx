@@ -1,5 +1,5 @@
 /**
- * ConvFusion 2.0 — 设置页本体（【设置】-【ConvFusion】-【本地设置】）
+ * ConvFusion 2.0 — 设置页本体（【设置】-【ConvFusion】-【本地研究方法】）
  *
  * ## v2 与 v0.1.5 的结构差异（重建依据见仓库根 `ConvFusion_setting.md`）
  *
@@ -122,6 +122,21 @@ interface HostState {
   categories: HostCategory[]
   /** 只看可用性，**没有密钥**（密钥是 secret 字段，不回传浏览器）。 */
   retrieval: { configured: boolean; source: 'settings' | 'env' | 'none'; envVar: string }
+  /** 本地外部依赖（tectonic）——【系统设置】页的"配置检查"。 */
+  dependencies?: {
+    tectonic: HostDependency
+  }
+}
+
+/** 一个本地外部依赖的检测结果（与 host 的 LocalDependencyStatus 对应）。 */
+interface HostDependency {
+  name: string
+  available: boolean
+  path?: string
+  version?: string
+  viaEnv: boolean
+  envVar: string
+  purpose: string
 }
 
 /** 设置页的三个 Tab。 */
@@ -564,6 +579,26 @@ export function ConvFusionProjectSettings({
     }
   }, [reload])
 
+  /**
+   * 重新探测本地外部依赖（【系统设置】的"重新检查"）。
+   *
+   * ⚠️ 不能走 {@link call}：`call` 会把返回值当作**整页 HostState** 覆盖进 state，
+   * 而 `dependencies/check` 只返回依赖报告。这里就地合并那一个字段。
+   */
+  const recheckDependencies = React.useCallback(async (): Promise<HostDependency | null> => {
+    try {
+      const res = await send('dependencies/check', {})
+      if (!res || res.ok !== true) return null
+      const report = res.value as { tectonic?: HostDependency }
+      const tectonic = report?.tectonic
+      if (!tectonic) return null
+      setState((prev) => (prev ? { ...prev, dependencies: { tectonic } } : prev))
+      return tectonic
+    } catch {
+      return null
+    }
+  }, [send])
+
   const category = state?.categories.find((c) => c.categoryId === categoryId) ?? null
   const skill = category?.skills.find((s) => s.skillId === skillId) ?? null
   const point = skill?.sections.find((s) => s.section === section) ?? null
@@ -655,16 +690,16 @@ export function ConvFusionProjectSettings({
       {/* ── Tabs ─────────────────────────────────────────────────── */}
       <div style={S.tabs}>
         <TabButton active={tab === 'local'} onClick={() => setTab('local')}>
-          ⚙ 本地设置
+          ⚙ 本地研究方法
         </TabButton>
         <TabButton active={tab === 'community'} onClick={() => setTab('community')}>
           ◈ 研究方法库
           <span style={{ ...S.hint, marginLeft: 6 }}>即将开放</span>
         </TabButton>
         <TabButton active={tab === 'retrieval'} onClick={() => setTab('retrieval')}>
-          ⌕ 检索源
-          {state && !state.retrieval.configured ? (
-            <span style={{ ...S.hint, marginLeft: 6 }}>未配置</span>
+          ⚙ 系统设置
+          {state && (!state.retrieval.configured || state.dependencies?.tectonic.available === false) ? (
+            <span style={{ ...S.hint, marginLeft: 6 }}>待配置</span>
           ) : null}
         </TabButton>
       </div>
@@ -724,12 +759,14 @@ export function ConvFusionProjectSettings({
       {/* ── Tab 2：研究方法库（社区，**尚未开放**）──────────────────── */}
       {tab === 'community' ? <CommunityTab /> : null}
 
-      {/* ── Tab 3：检索源（OpenAlex API Key）──────────────────────── */}
+      {/* ── Tab 3：系统设置（OpenAlex 凭据 + 本地依赖检查）──────────── */}
       {tab === 'retrieval' ? (
-        <RetrievalTab
+        <SystemTab
           configured={state?.retrieval.configured ?? false}
           source={state?.retrieval.source ?? 'none'}
           envVar={state?.retrieval.envVar ?? 'OPENALEX_API_KEY'}
+          tectonic={state?.dependencies?.tectonic ?? null}
+          onRecheck={recheckDependencies}
           scope={scope}
           onNotice={setNotice}
         />
@@ -952,7 +989,7 @@ function CommunityTab(): JSX.Element {
             登录 ConvFusion.com 可获得更多研究方法
           </div>
           <div style={S.hint}>
-            登录后还可将你在「本地设置」里定制好的研究方法发布给其他研究者。
+            登录后还可将你在「本地研究方法」里定制好的研究方法发布给其他研究者。
           </div>
           <div style={S.footer}>
             <button type="button" style={{ ...S.primaryBtn, opacity: 0.55 }} disabled>
@@ -967,27 +1004,41 @@ function CommunityTab(): JSX.Element {
 }
 
 /* ════════════════════════════════════════════════════════════════════════
- * Tab 3 — 检索源（OpenAlex API Key）
+ * Tab 3 — 系统设置（本地依赖检查 + 文献检索凭据）
  *
- * 密钥是 `role('secret')` 字段：**明文从不经过浏览器**。
- * 这里只拿 `configured / source` 两个布尔级信息，写入走 settings scope。
+ * 这里放"研究过程中要用到的系统级东西"，而不是研究方法本身（后者在【本地研究方法】）：
+ *
+ *   1. **本地依赖**：论文最终要编译成 LaTeX/PDF，靠本机装的 `tectonic`。它不是 npm 依赖，
+ *      用户可能没装 —— 所以给出可用性、路径、版本与安装方法，并提供"重新检查"。
+ *   2. **文献检索凭据**：OpenAlex API Key。密钥是 `role('secret')` 字段，
+ *      **明文从不经过浏览器**；这里只拿 `configured / source`。
  * ════════════════════════════════════════════════════════════════════════ */
 
-function RetrievalTab({
+function SystemTab({
   configured,
   source,
   envVar,
+  tectonic,
+  onRecheck,
   scope,
   onNotice,
 }: {
   configured: boolean
   source: 'settings' | 'env' | 'none'
   envVar: string
+  tectonic: HostDependency | null
+  onRecheck: () => Promise<HostDependency | null>
   scope: SettingsScopeLike
   onNotice: (n: { tone: 'success' | 'error'; text: string } | null) => void
 }): JSX.Element {
   const [draft, setDraft] = React.useState('')
   const [busy, setBusy] = React.useState(false)
+  const [checking, setChecking] = React.useState(false)
+  // 本地点一份，避免"重新检查"后要等整页状态回填
+  const [dep, setDep] = React.useState<HostDependency | null>(tectonic)
+  React.useEffect(() => {
+    setDep(tectonic)
+  }, [tectonic])
 
   const save = async (): Promise<void> => {
     if (!draft.trim()) return
@@ -1016,58 +1067,171 @@ function RetrievalTab({
     }
   }
 
+  const recheck = async (): Promise<void> => {
+    setChecking(true)
+    try {
+      const next = await onRecheck()
+      setDep(next)
+      if (next?.available) {
+        onNotice({ tone: 'success', text: `tectonic 可用${next.version ? `：${next.version}` : ''}` })
+      } else {
+        onNotice({ tone: 'error', text: '未找到 tectonic，请按下方说明安装后重新检查' })
+      }
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  const installCmd: React.CSSProperties = { ...S.mono, display: 'inline-block' }
+
   return (
-    <div style={S.card}>
-      <div style={S.cardHead}>
-        ⌕ 检索源
-        <span style={{ flex: '1 1 auto' }} />
-        {configured ? <Badge tone="success">已配置</Badge> : <Badge tone="warn">未配置</Badge>}
-      </div>
-      <div style={S.cardBody}>
-        <div style={S.hint}>
-          文献检索使用 OpenAlex。请前往{' '}
-          <span style={S.mono}>openalex.org</span> 免费注册并复制 API Key。
+    <>
+      {/* ── 本地依赖：tectonic ─────────────────────────────────────── */}
+      <div style={S.card}>
+        <div style={S.cardHead}>
+          🧩 本地依赖
+          <span style={{ flex: '1 1 auto' }} />
+          {dep === null ? (
+            <Badge tone="neutral">未知</Badge>
+          ) : dep.available ? (
+            <Badge tone="success">已安装</Badge>
+          ) : (
+            <Badge tone="warn">未安装</Badge>
+          )}
         </div>
-
-        <div style={S.field}>
-          <div style={S.label}>OpenAlex API Key</div>
-          <input
-            style={S.input}
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={draft}
-            placeholder={configured ? '已设置，输入新值可覆盖' : '粘贴 API Key'}
-            onChange={(e) => setDraft(e.target.value)}
-          />
-          <div style={S.hint}>
-            留空则不修改。密钥仅保存在本机，不会发送到浏览器。
-            {source === 'env' ? ` 当前使用环境变量 ${envVar}。` : ''}
+        <div style={S.cardBody}>
+          <div style={{ ...S.hint, lineHeight: 1.7 }}>
+            论文最终要交付 LaTeX/PDF，编译由本机的{' '}
+            <span style={S.mono}>tectonic</span> 完成。它<b>不是 npm 依赖</b>，需要单独安装；
+            未安装时 LaTeX 组装仍然可用，但无法产出 PDF。
           </div>
-        </div>
 
-        <div style={S.footer}>
-          {source === 'settings' ? (
+          {dep ? (
+            <div style={S.field}>
+              <div style={S.label}>tectonic</div>
+              <div style={{ ...S.hint, lineHeight: 1.9 }}>
+                {dep.available ? '已找到可执行文件。' : '未在本机找到可执行文件。'}
+                {dep.path ? (
+                  <>
+                    <br />
+                    路径：<span style={S.mono}>{dep.path}</span>
+                  </>
+                ) : null}
+                {dep.version ? (
+                  <>
+                    <br />
+                    版本：<span style={S.mono}>{dep.version}</span>
+                  </>
+                ) : null}
+                {dep.viaEnv ? (
+                  <>
+                    <br />
+                    由环境变量 <span style={S.mono}>{dep.envVar}</span> 指定
+                  </>
+                ) : null}
+                <br />
+                用途：{dep.purpose}
+              </div>
+            </div>
+          ) : null}
+
+          {dep && !dep.available ? (
+            <div style={S.field}>
+              <div style={S.label}>安装方法（任选其一）</div>
+              <div style={{ ...S.hint, lineHeight: 2.1 }}>
+                macOS（Homebrew）：
+                <br />
+                <span style={installCmd}>brew install tectonic</span>
+                <br />
+                Conda / Mamba：
+                <br />
+                <span style={installCmd}>mamba install -c conda-forge tectonic</span>
+                <br />
+                Rust（Cargo）：
+                <br />
+                <span style={installCmd}>cargo install tectonic</span>
+                <br />
+                或从 <span style={S.mono}>tectonic-typesetting.github.io</span> 下载发行版。
+                <br />
+                <b>首次编译</b>会按需下载宏包（约 40 MB），缓存在研究工作区内，之后复用。
+              </div>
+            </div>
+          ) : null}
+
+          <div style={S.field}>
+            <div style={S.label}>装在了非标准位置？</div>
+            <div style={{ ...S.hint, lineHeight: 1.8 }}>
+              设置环境变量 <span style={S.mono}>{dep?.envVar ?? 'CONVFUSION_TECTONIC'}</span>{' '}
+              指向可执行文件（绝对路径），然后点「重新检查」。
+            </div>
+          </div>
+
+          <div style={S.footer}>
             <button
               type="button"
-              style={{ ...S.ghostBtn, opacity: busy ? 0.55 : 1 }}
-              disabled={busy}
-              onClick={() => void clear()}
+              style={{ ...S.ghostBtn, opacity: checking ? 0.55 : 1 }}
+              disabled={checking}
+              onClick={() => void recheck()}
             >
-              清除
+              {checking ? '检查中…' : '重新检查'}
             </button>
-          ) : null}
-          <button
-            type="button"
-            style={{ ...S.primaryBtn, opacity: draft.trim() && !busy ? 1 : 0.55 }}
-            disabled={!draft.trim() || busy}
-            onClick={() => void save()}
-          >
-            {busy ? '保存中…' : '保存'}
-          </button>
+          </div>
         </div>
       </div>
-    </div>
+
+      {/* ── 文献检索凭据：OpenAlex ─────────────────────────────────── */}
+      <div style={S.card}>
+        <div style={S.cardHead}>
+          ⌕ 文献检索
+          <span style={{ flex: '1 1 auto' }} />
+          {configured ? <Badge tone="success">已配置</Badge> : <Badge tone="warn">未配置</Badge>}
+        </div>
+        <div style={S.cardBody}>
+          <div style={S.hint}>
+            文献检索使用 OpenAlex。请前往 <span style={S.mono}>openalex.org</span> 免费注册并复制 API Key。
+            未配置时仍可通过公共池检索，但速率较低。
+          </div>
+
+          <div style={S.field}>
+            <div style={S.label}>OpenAlex API Key</div>
+            <input
+              style={S.input}
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={draft}
+              placeholder={configured ? '已设置，输入新值可覆盖' : '粘贴 API Key'}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+            <div style={S.hint}>
+              留空则不修改。密钥仅保存在本机，不会发送到浏览器。
+              {source === 'env' ? ` 当前使用环境变量 ${envVar}。` : ''}
+            </div>
+          </div>
+
+          <div style={S.footer}>
+            {source === 'settings' ? (
+              <button
+                type="button"
+                style={{ ...S.ghostBtn, opacity: busy ? 0.55 : 1 }}
+                disabled={busy}
+                onClick={() => void clear()}
+              >
+                清除
+              </button>
+            ) : null}
+            <button
+              type="button"
+              style={{ ...S.primaryBtn, opacity: draft.trim() && !busy ? 1 : 0.55 }}
+              disabled={!draft.trim() || busy}
+              onClick={() => void save()}
+            >
+              {busy ? '保存中…' : '保存'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
   )
 }
 

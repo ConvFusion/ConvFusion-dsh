@@ -20,7 +20,7 @@
  * ## 过程定义本身是一个 Skill（用户可定制）
  *
  * 阶段列表**不再硬编码**：它来自 `research-process` 这个能力（`skills/research-management/
- * research-process.md`）里的一段机器可读围栏块。用户可以在【设置】-【ConvFusion】-【本地设置】
+ * research-process.md`）里的一段机器可读围栏块。用户可以在【设置】-【ConvFusion】-【本地研究方法】
  * 里覆盖该能力的 `Research Method` 章节，**规定自己的研究进展过程** —— 不同学科的过程确实不同。
  *
  * 解析规则：取**第一个**含 `stage:` 行的块。因为用户定制在合成时排在原文**之前**，

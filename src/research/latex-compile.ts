@@ -43,6 +43,9 @@ import { dirname, join } from 'node:path'
  */
 export const COMPILE_TIMEOUT_MS = 300000
 
+/** 指定 tectonic 可执行文件的环境变量名（用户未安装到标准位置时的覆盖入口）。 */
+export const TECTONIC_ENV = 'CONVFUSION_TECTONIC'
+
 /** 候选 tectonic 路径（PATH 之外常见位置）。 */
 const TECTONIC_CANDIDATES = [
   'tectonic',
@@ -53,7 +56,7 @@ const TECTONIC_CANDIDATES = [
 
 /** 定位 tectonic 可执行文件；找不到返回 undefined。 */
 export function findTectonic(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const override = (env.CONVFUSION_TECTONIC ?? '').trim()
+  const override = (env[TECTONIC_ENV] ?? '').trim()
   if (override && existsSync(override)) return override
   for (const c of TECTONIC_CANDIDATES) {
     if (!c.includes('/')) {
@@ -66,6 +69,17 @@ export function findTectonic(env: NodeJS.ProcessEnv = process.env): string | und
     if (existsSync(c)) return c
   }
   return undefined
+}
+
+/** 探测 tectonic 版本字符串（`Tectonic 0.16.9`）；失败返回 undefined。 */
+export function tectonicVersion(bin: string): string | undefined {
+  try {
+    const res = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 10000 })
+    const out = `${res.stdout ?? ''}${res.stderr ?? ''}`.trim().split(/\r?\n/)[0]
+    return out || undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** 一条编译错误。 */

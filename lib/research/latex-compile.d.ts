@@ -33,8 +33,12 @@
  * 180 秒不够 —— 实测在真实工作区因超时而失败，故与旧版对齐取 300 秒。
  */
 export declare const COMPILE_TIMEOUT_MS = 300000;
+/** 指定 tectonic 可执行文件的环境变量名（用户未安装到标准位置时的覆盖入口）。 */
+export declare const TECTONIC_ENV = "CONVFUSION_TECTONIC";
 /** 定位 tectonic 可执行文件；找不到返回 undefined。 */
 export declare function findTectonic(env?: NodeJS.ProcessEnv): string | undefined;
+/** 探测 tectonic 版本字符串（`Tectonic 0.16.9`）；失败返回 undefined。 */
+export declare function tectonicVersion(bin: string): string | undefined;
 /** 一条编译错误。 */
 export interface CompileError {
     /** 1-based 行号；无法确定时为 0。 */

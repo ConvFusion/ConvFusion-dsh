@@ -15,7 +15,7 @@
  * ```
  *
  * 除文件名外只有 `customizationDir`（默认 `$DSH_HOME/convfusion`），
- * 设置面板的"本地设置"用它与 {@link resolveCustomizationPath} 展示真实落盘位置。
+ * 设置面板的"本地研究方法"用它与 {@link resolveCustomizationPath} 展示真实落盘位置。
  *
  * ## 文献检索凭据（`openalexApiKey`）
  *
@@ -43,7 +43,7 @@ export interface Config {
     /**
      * 用户定制 Skill 的**文件名**（不含目录）。
      *
-     * 默认 `skill-customizations.json`。设置面板"本地设置"展示它，
+     * 默认 `skill-customizations.json`。设置面板"本地研究方法"展示它，
      * 用户可改名（例如按研究领域分文件）。
      */
     customizationFile: string;
