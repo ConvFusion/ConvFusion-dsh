@@ -133,6 +133,12 @@ interface HostDependency {
     envVar: string;
     purpose: string;
 }
+/** 能力下优先选已有定制的章节；都没有定制 → 第一个。 */
+export declare function preferredSection(sections: HostSection[] | undefined): string;
+/** 类别下优先选已有定制的能力；都没有定制 → 第一个。 */
+export declare function preferredSkill(skills: HostSkill[] | undefined): HostSkill | undefined;
+/** 类别列表里优先选已有定制的类别；都没有定制 → 第一个。 */
+export declare function preferredCategory(categories: HostCategory[] | undefined): HostCategory | undefined;
 export type SettingsLoad = {
     kind: 'ok';
     state: HostState;

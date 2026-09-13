@@ -26,6 +26,7 @@ import {
 
 /** 供离线测试直接调用（bundle 的 `apply`/`inject` 之外再导出这些）。 */
 export { loadSettingsState, applyNavIcon, installNavIcon, logoUrl }
+export { preferredCategory, preferredSection, preferredSkill } from './settings.js'
 export { ResearchProgressCard, ResearchProgressWarmer, selectResearchTurn, resetProgressCardState }
 
 /* ════════════════════════════════════════════════════════════════════════

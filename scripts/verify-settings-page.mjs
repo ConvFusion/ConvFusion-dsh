@@ -19,6 +19,7 @@
  *   5. 系统 Skill 库**只读**：设置页的任何操作都不改动包内资产
  *   6. 客户端 bundle：`window.__ModuleLoader__` 格式、id、external、注册点
  *   7. 静态边界：客户端不 value-import `@deepseek-ai/*`；不出现网络/凭据字段
+ *   8. 自动选中优先级：选了有定制的能力，界面必须落到那个章节（在 node 里求值 bundle 断言）
  *
  * 用法：
  *   node scripts/verify-settings-page.mjs packages/dsh-convfusion
@@ -27,6 +28,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
 import process from 'node:process'
 
 const PKG = resolve(process.argv[2] || 'packages/dsh-convfusion')
@@ -602,6 +604,65 @@ console.log('\n[7] 静态边界：客户端不引入禁用依赖、无凭据字�
   const retrieval = settingsSrc.slice(settingsSrc.indexOf('function SystemTab('))
   assert(/type="password"/.test(retrieval), 'Key 输入框 type=password')
   assert(/autoComplete="off"/.test(retrieval), 'Key 输入框关闭自动填充')
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 8. 设置页自动选中优先级
+ *
+ * 真实反馈：选了 C08P05 后界面默认停在第一个章节（无定制），输入框空着，
+ * 用户以为"我的定制没加载"。自动选中必须**优先落到已有定制的项**。
+ *
+ * 浏览器代码只存在于 bundle 里，所以这里**在 node 里求值 bundle**：顶层只有
+ * `window.__ModuleLoader__.load({...})`（只注册、不执行 factory），给一个 window 桩
+ * 即可拿到 factory，再用 createRequire 供上 react（bundle 里其余都是本地代码）。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[8] 自动选中优先级：优先落到已有定制的项')
+{
+  const sec = (name, overridden = false) => ({ section: name, base: 'x', overridden })
+  const skill = (id, overriddenCount, sections) => ({ skillId: id, skillName: id, code: id, sections, overriddenCount })
+  let mod = null
+  try {
+    const code = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
+    let captured = null
+    new Function('window', code)({ __ModuleLoader__: { load: (m) => { captured = m } } })
+    mod = captured.factory(createRequire(import.meta.url))
+  } catch (e) {
+    assert(false, `bundle 可在 node 求值：${e instanceof Error ? e.message : String(e)}`)
+  }
+
+  if (mod) {
+    // 能力 → 章节：定制的章节在中间（C08P05 的真实形状：第 4 个章节）
+    const sections = [
+      sec('Evidence Requirements'), sec('Expected Output'), sec('Purpose'),
+      sec('Reasoning Guidance', true), sec('Research Method'),
+    ]
+    assertEq(mod.preferredSection(sections), 'Reasoning Guidance', 'preferredSection 命中已有定制的章节（不是第一个）')
+    assertEq(mod.preferredSection([sec('Purpose'), sec('Research Method')]), 'Purpose', 'preferredSection 无定制 → 第一个')
+    assertEq(mod.preferredSection([]), '', 'preferredSection 空列表 → 空串')
+
+    const skills = [skill('a', 0, [sec('Purpose')]), skill('b', 1, [sec('Purpose')]), skill('c', 0, [sec('Purpose')])]
+    assertEq(mod.preferredSkill(skills)?.skillId, 'b', 'preferredSkill 命中已有定制的能力')
+    assertEq(mod.preferredSkill([skill('a', 0, [])])?.skillId, 'a', 'preferredSkill 无定制 → 第一个')
+    assertEq(mod.preferredSkill([]), undefined, 'preferredSkill 空列表 → undefined')
+
+    const cats = [
+      { categoryId: 'x', categoryName: 'x', skills: [], overriddenCount: 0, pointCount: 0 },
+      { categoryId: 'y', categoryName: 'y', skills: [], overriddenCount: 2, pointCount: 9 },
+    ]
+    assertEq(mod.preferredCategory(cats)?.categoryId, 'y', 'preferredCategory 命中已有定制的类别')
+    assertEq(
+      mod.preferredCategory([{ categoryId: 'x', categoryName: 'x', skills: [], overriddenCount: 0, pointCount: 0 }])?.categoryId,
+      'x',
+      'preferredCategory 无定制 → 第一个',
+    )
+
+    // 三个导航点（首次加载 / 换类别 / 换能力）都必须走 preferred*，
+    // 否则又回到"落在第一个章节、输入框是空的"。
+    const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+    assertEq(inlineCount(src, 'setSection(preferredSection('), 3, 'settings.tsx 三处选章节都走 preferredSection')
+    assert(!src.includes('s0?.sections[0]?.section'), 'settings.tsx 不再直接取第一个章节')
+  }
 }
 
 rmSync(HOME, { recursive: true, force: true })

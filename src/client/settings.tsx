@@ -151,6 +151,32 @@ interface HostDependency {
 type SettingsTab = 'local' | 'community' | 'retrieval'
 
 /* ════════════════════════════════════════════════════════════════════════
+ * 自动选中的优先级（纯函数，可离线验证）
+ *
+ * ⚠️ 真实反馈：选了 C08P05 后界面默认停在第一个章节（无定制），输入框空着，
+ * 用户误以为"我的定制没加载"。这个页的价值是让你**看到/编辑自己的定制**，
+ * 所以自动选中一律**优先落到已有定制的项**（没有才落第一个）。
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** 能力下优先选已有定制的章节；都没有定制 → 第一个。 */
+export function preferredSection(sections: HostSection[] | undefined): string {
+  if (!sections?.length) return ''
+  return (sections.find((s) => s.overridden) ?? sections[0])?.section ?? ''
+}
+
+/** 类别下优先选已有定制的能力；都没有定制 → 第一个。 */
+export function preferredSkill(skills: HostSkill[] | undefined): HostSkill | undefined {
+  if (!skills?.length) return undefined
+  return skills.find((s) => s.overriddenCount > 0) ?? skills[0]
+}
+
+/** 类别列表里优先选已有定制的类别；都没有定制 → 第一个。 */
+export function preferredCategory(categories: HostCategory[] | undefined): HostCategory | undefined {
+  if (!categories?.length) return undefined
+  return categories.find((c) => c.overriddenCount > 0) ?? categories[0]
+}
+
+/* ════════════════════════════════════════════════════════════════════════
  * 数据加载（**纯函数**，与 React 无关，因此可离线测试）
  *
  * ⚠️ 这里是踩过坑的地方：`connection.rpc.call()` 在传输失败时**是抛异常**，
@@ -561,12 +587,13 @@ export function ConvFusionProjectSettings({
     try {
       const next = await call('state', {})
       if (next?.categories?.length) {
-        const first = next.categories[0]
-        setCategoryId(first.categoryId)
-        const firstSkill = first.skills[0]
-        if (firstSkill) {
+        // 首次打开也落到"已有定制"的类别/能力/章节（preferred* 没有定制时 = 第一个）
+        const first = preferredCategory(next.categories)
+        const firstSkill = preferredSkill(first?.skills)
+        if (first && firstSkill) {
+          setCategoryId(first.categoryId)
           setSkillId(firstSkill.skillId)
-          setSection(firstSkill.sections[0]?.section ?? '')
+          setSection(preferredSection(firstSkill.sections))
         }
       }
     } finally {
@@ -616,15 +643,15 @@ export function ConvFusionProjectSettings({
     setCategoryId(id)
     setNotice(null)
     const cat = state?.categories.find((c) => c.categoryId === id)
-    const s0 = cat?.skills[0]
+    const s0 = preferredSkill(cat?.skills)
     setSkillId(s0?.skillId ?? '')
-    setSection(s0?.sections[0]?.section ?? '')
+    setSection(preferredSection(s0?.sections))
   }
   const onSkill = (id: string): void => {
     setSkillId(id)
     setNotice(null)
     const s0 = category?.skills.find((s) => s.skillId === id)
-    setSection(s0?.sections[0]?.section ?? '')
+    setSection(preferredSection(s0?.sections))
   }
   const onSection = (name: string): void => {
     setSection(name)
