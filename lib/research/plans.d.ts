@@ -94,6 +94,15 @@ export declare function parsePlanSections(body: string): {
         body: string;
     }>;
 };
+/**
+ * 正文状态行 fallback（2.0 研究工作流约定）。
+ *
+ * 研究产出的计划文档常没有 frontmatter `status:` 字段，而是在正文顶部写
+ * `- 状态：complete（…）` / `- 状态：in-progress（…）` 元数据行。
+ * frontmatter 缺省时，以正文**第一个**这样的行为准，取括号/空白前的首个词作为状态 token。
+ * （判定纪律同 `advance.ts`：只认磁盘上的显式标记，不做语义猜测。）
+ */
+export declare function parseBodyStatusLine(body: string): string | undefined;
 /** 解析一个 Plan Markdown 文件（不存在/损坏 → null）。 */
 export declare function parsePlanDocument(absPath: string, relPath: string): PlanDocument | null;
 /** 序列化 Plan（frontmatter + 正文）。 */

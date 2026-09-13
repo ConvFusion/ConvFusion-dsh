@@ -22,7 +22,9 @@
  *   - 阻塞项：研究问题里带**显式标记**的（`[blocking]` / `（阻塞项）`）。
  *     是标记驱动的 —— 插件没有能力判断"这个问题难不难"，只有作者/用户能标。
  *   - 停滞：连续 N 轮研究资产计数无变化（由调用方传入连续轮数）。
- *   - 歧义：存在 ≥2 个 **draft** 状态且互斥的候选计划（说明方向还没收敛）。
+ *   - 歧义：存在 ≥2 个 **draft** 状态且互斥的候选计划（说明方向还没收敛）；
+ *     但若 `research/decisions/` 已有 `status: decided` 的研究决策，方向视为已收敛，
+ *     残留 draft 计划按簿记残留处理（不触发歧义）。
  *   - 其余情况视为 clear，但 clear **只在"下一步确实是常规推进"时才成立**：
  *     当前科研过程阶段还缺产出，且没有停滞、没有歧义、没有阻塞。
  *
@@ -32,6 +34,7 @@
 
 import { loadProjectFile } from './project.js'
 import { listPlanDocuments } from './plans.js'
+import { listDecisions } from './claims.js'
 import { assessResearchProcess, type ProcessAssessment } from './research-process.js'
 
 /** 推进判定结果。 */
@@ -107,14 +110,21 @@ export function assessAdvance(input: AdvanceInput): AdvanceAssessment {
   }
 
   // ③ 方向未收敛 —— 多个草稿计划并存说明候选还没被排过序。
+  //    例外：磁盘上已存在 `status: decided` 的研究决策（`research/decisions/`）时，
+  //    方向已经收敛 —— 残留的 draft 计划是簿记残留（定稿/执行后没回写状态行），
+  //    不是方向歧义的证据。同样只认磁盘上的显式依据，不做语义猜测。
   const drafts = listPlanDocuments(input.workspace).filter((p) => p.status === 'draft')
   if (drafts.length >= 2) {
-    return {
-      clarity: 'ambiguous',
-      basis: `存在 ${drafts.length} 个仍是 draft 的计划（${drafts.map((p) => p.id).join(', ')}）`,
-      needsUserDecision:
-        '多个计划都还是草稿、没有排序。请确认以哪一个为准，或说明取舍标准。',
+    const decided = listDecisions(input.workspace).filter((d) => /^decided/i.test(d.status.trim()))
+    if (decided.length === 0) {
+      return {
+        clarity: 'ambiguous',
+        basis: `存在 ${drafts.length} 个仍是 draft 的计划（${drafts.map((p) => p.id).join(', ')}）`,
+        needsUserDecision:
+          '多个计划都还是草稿、没有排序。请确认以哪一个为准，或说明取舍标准。',
+      }
     }
+    // 已有 decided 决策：draft 计划不作为方向歧义证据，继续按过程阶段判定。
   }
 
   // ④ 过程已全部落地且无缺口 —— 没有"明确的下一步"，属于持续演化，交回用户。

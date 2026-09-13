@@ -156,7 +156,38 @@ export function parsePlanSections(body: string): {
 
 function normalizeStatus(raw: string | undefined): PlanStatus {
   const v = (raw ?? '').trim().toLowerCase()
-  return (PLAN_STATUSES as readonly string[]).includes(v) ? (v as PlanStatus) : 'draft'
+  if ((PLAN_STATUSES as readonly string[]).includes(v)) return v as PlanStatus
+  return STATUS_SYNONYMS[v] ?? 'draft'
+}
+
+/**
+ * 正文状态行 fallback（2.0 研究工作流约定）。
+ *
+ * 研究产出的计划文档常没有 frontmatter `status:` 字段，而是在正文顶部写
+ * `- 状态：complete（…）` / `- 状态：in-progress（…）` 元数据行。
+ * frontmatter 缺省时，以正文**第一个**这样的行为准，取括号/空白前的首个词作为状态 token。
+ * （判定纪律同 `advance.ts`：只认磁盘上的显式标记，不做语义猜测。）
+ */
+export function parseBodyStatusLine(body: string): string | undefined {
+  const m = body.match(/^\s*[-*]\s*状态\s*[:：]\s*([^\s（(]+)/m)
+  return m ? m[1] : undefined
+}
+
+/** 中英文常见状态写法 → 规范生命周期状态（保守映射；未知 token 仍按 draft 处理）。 */
+const STATUS_SYNONYMS: Record<string, PlanStatus> = {
+  complete: 'completed',
+  done: 'completed',
+  finalized: 'completed',
+  定稿: 'completed',
+  已执行: 'completed',
+  executed: 'completed',
+  'in-progress': 'executing',
+  inprogress: 'executing',
+  进行中: 'executing',
+  执行中: 'executing',
+  已评审: 'reviewed',
+  就绪: 'ready',
+  已归档: 'archived',
 }
 
 /** 解析一个 Plan Markdown 文件（不存在/损坏 → null）。 */
@@ -176,7 +207,8 @@ export function parsePlanDocument(absPath: string, relPath: string): PlanDocumen
     id,
     name: parsed.title || fm.name || id,
     type: fm.type || 'research-plan',
-    status: normalizeStatus(fm.status),
+    // 状态：frontmatter `status:` 优先；缺省时回退到正文 `- 状态：` 行（研究工作流约定）
+    status: normalizeStatus(fm.status ?? parseBodyStatusLine(body)),
     version: fm.version || '1.0',
     ...(fm.source_skill || fm.sourceSkill ? { sourceSkill: fm.source_skill || fm.sourceSkill } : {}),
     ...(fm.source_skill_version || fm.sourceSkillVersion
