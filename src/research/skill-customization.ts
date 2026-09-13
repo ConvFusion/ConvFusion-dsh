@@ -46,7 +46,7 @@ import { dirname } from 'node:path'
 import type { SkillDocument } from './skills.js'
 import { listSkillDocuments, skillMethod, skillPurpose, skillWhenToUse } from './skills.js'
 import { categoryName } from './taxonomy.js'
-import { categoryCodeInfo, skillSortKey } from './skill-codes.js'
+import { categoryCodeInfo, looksLikeSkillCode, skillIdByCode, skillSortKey } from './skill-codes.js'
 import { findSection } from './markdown.js'
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -119,6 +119,37 @@ export interface SkillCustomizationStore {
   readonly description: string
 }
 
+/**
+ * 把定制文件的键规范化成 skillId。
+ *
+ * 键允许两种写法（**输入宽容**）：
+ *   - `"submission-compile-and-format"` —— skillId，稳定主键，规范形式
+ *   - `"C08P07"` —— 技能编号，人手写时好记；这里反查成 skillId
+ *
+ * 查不到对应技能的编号**保留原键**（不静默丢数据）：它会在加载时匹配不到任何技能，
+ * 因而无害，而用户还能在文件里看到自己写了什么。
+ */
+export function normalizeCustomizationKey(rawKey: string): string | undefined {
+  const key = rawKey.trim()
+  if (!key) return undefined
+  if (looksLikeSkillCode(key)) return skillIdByCode(key) ?? key
+  return key
+}
+
+/**
+ * 按编号排序键（**输出严格**）。
+ *
+ * 定制的先后顺序没有意义；按 `CxxPyy` 排，文件读起来就是研究流程顺序。
+ * 未登记编号的键排在最后，并保持彼此原有相对顺序。
+ */
+export function sortCustomizations(c: SkillCustomizations): SkillCustomizations {
+  const out: SkillCustomizations = {}
+  for (const skillId of Object.keys(c).sort((a, b) => skillSortKey(a).localeCompare(skillSortKey(b)))) {
+    out[skillId] = c[skillId]
+  }
+  return out
+}
+
 /** 解析设置里的 JSON 字符串（损坏 → 空，绝不让坏数据让 Skill 不可用）。 */
 export function parseCustomizations(raw: string | undefined): SkillCustomizations {
   if (!raw || !raw.trim()) return {}
@@ -126,23 +157,28 @@ export function parseCustomizations(raw: string | undefined): SkillCustomization
     const v = JSON.parse(raw) as unknown
     if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
     const out: SkillCustomizations = {}
-    for (const [skillId, sections] of Object.entries(v as Record<string, unknown>)) {
+    for (const [rawKey, sections] of Object.entries(v as Record<string, unknown>)) {
       if (!sections || typeof sections !== 'object' || Array.isArray(sections)) continue
-      const clean: Record<string, string> = {}
+      const skillId = normalizeCustomizationKey(rawKey)
+      if (!skillId) continue
+      // 同一技能可能既用 id 又用编号写了 —— 合并到同一个 skillId 下（章节级）
+      const clean: Record<string, string> = { ...(out[skillId] ?? {}) }
       for (const [section, text] of Object.entries(sections as Record<string, unknown>)) {
         if (typeof text === 'string' && text.trim()) clean[section] = text
       }
       if (Object.keys(clean).length > 0) out[skillId] = clean
     }
-    return out
+    // 解析即规范化（键 → skillId + 编号排序）：内存表示与落盘形式一致，
+    // 于是「读 → 写 → 再读」严格幂等，diff 也不会因为定制的先后顺序而抖动。
+    return sortCustomizations(out)
   } catch {
     return {}
   }
 }
 
-/** 序列化覆盖集合。 */
+/** 序列化覆盖集合（键按编号排序，便于人读与 diff）。 */
 export function serializeCustomizations(c: SkillCustomizations): string {
-  return JSON.stringify(c)
+  return JSON.stringify(sortCustomizations(c))
 }
 
 /**
@@ -171,7 +207,8 @@ export function createFileCustomizationStore(resolvePath: () => string): SkillCu
       return
     }
     mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(file, JSON.stringify(c, null, 2) + '\n', 'utf8')
+    // 键按编号排序写回：文件顺序符合研究流程，且 diff 稳定（不受定制先后影响）
+    writeFileSync(file, JSON.stringify(sortCustomizations(c), null, 2) + '\n', 'utf8')
   }
   return {
     get description(): string {

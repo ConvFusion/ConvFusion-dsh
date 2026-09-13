@@ -28,6 +28,7 @@ const EXPORT = await import(lib('research/methods-export.js'))
 const RPC = await import(lib('settings-rpc.js'))
 const CUST = await import(lib('research/skill-customization.js'))
 const TAX = await import(lib('research/taxonomy.js'))
+const PROCESS = await import(lib('research/research-process.js'))
 
 let passed = 0
 let failed = 0
@@ -65,6 +66,15 @@ console.log('\n[1] 类别编号 C01–C09')
   assertEq(CODES.CATEGORY_CODES[1].categoryId, 'literature', 'C02 = 文献')
   assertEq(CODES.CATEGORY_CODES[7].categoryId, 'academic-writing', 'C08 = 写作')
   assertEq(CODES.CATEGORY_CODES[8].categoryId, 'research-management', 'C09 = 研究管理（横切，置末）')
+
+  // 类别名统一 4 个字（用户要求）：防止将来又混入 2 字/5 字名
+  for (const c of CODES.CATEGORY_CODES) {
+    assertEq([...c.label].length, 4, `类别名 4 字：${c.code} ${c.label}`)
+  }
+  // 研究阶段名与类别名同表同义，也须统一 4 字
+  for (const stage of PROCESS.DEFAULT_STAGES) {
+    assertEq([...stage.label].length, 4, `阶段名 4 字：${stage.id} ${stage.label}`)
+  }
 
   // taxonomy 里的大类都应被编号覆盖
   for (const g of TAX.systemGroups()) {
@@ -204,6 +214,42 @@ console.log('\n[5] /research 导出指令')
   const exportIdx = src.indexOf('isMethodsExportArg(arg)')
   const followupIdx = src.indexOf('followup(ctx, agent, buildContinueText')
   assert(exportIdx > -1 && exportIdx < followupIdx, '导出分支先于 followup（否则被当成研究任务丢给 Agent）')
+}
+
+/* ── 6. 定制层：接受编号别名 + 按编号排序 ───────────────────────────── */
+console.log('\n[6] 定制层：编号别名与排序')
+{
+  const CUSTS = await import(lib('research/skill-customization.js'))
+
+  // 键可以是编号（人手写时好记）—— 读取时反查成稳定的 skillId
+  const p = CUSTS.parseCustomizations(
+    JSON.stringify({ C08P07: { 'Research Method': 'x' }, C02P01: { Purpose: 'y' } }),
+  )
+  assert(p['submission-compile-and-format'] !== undefined, '编号 C08P07 解析为 skillId')
+  assert(p['literature-search'] !== undefined, '编号 C02P01 解析为 skillId')
+  assertEq(
+    Object.keys(p).join(','),
+    'literature-search,submission-compile-and-format',
+    '键按编号排序（C02P01 在 C08P07 前）',
+  )
+
+  // 读 → 写 → 再读 必须幂等（否则每次打开设置都会产生无谓 diff）
+  const s1 = CUSTS.serializeCustomizations(p)
+  assertEq(CUSTS.serializeCustomizations(CUSTS.parseCustomizations(s1)), s1, '读→写→读 幂等')
+
+  // 同一技能既用 id 又用编号写 → 合并（不能只留一个）
+  const mixed = CUSTS.parseCustomizations(
+    JSON.stringify({ 'literature-search': { Purpose: 'a' }, C02P01: { 'Research Method': 'b' } }),
+  )
+  assertEq(
+    Object.keys(mixed['literature-search']).sort().join(','),
+    'Purpose,Research Method',
+    'id 与编号混用合并到同一技能',
+  )
+
+  // 认不出的编号保留原键：不静默丢用户写下的东西
+  const bad = CUSTS.parseCustomizations(JSON.stringify({ C99P99: { Purpose: 'z' } }))
+  assert(bad['C99P99'] !== undefined, '未知编号保留原键（不静默丢数据）')
 }
 
 console.log(`\n${failed === 0 ? '✅' : '❌'} method-codes: ${passed} passed, ${failed} failed`)

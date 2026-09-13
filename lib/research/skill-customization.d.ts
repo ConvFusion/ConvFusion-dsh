@@ -90,9 +90,27 @@ export interface SkillCustomizationStore {
     /** 后端说明（设置面板展示用，让用户知道定制存在哪里）。 */
     readonly description: string;
 }
+/**
+ * 把定制文件的键规范化成 skillId。
+ *
+ * 键允许两种写法（**输入宽容**）：
+ *   - `"submission-compile-and-format"` —— skillId，稳定主键，规范形式
+ *   - `"C08P07"` —— 技能编号，人手写时好记；这里反查成 skillId
+ *
+ * 查不到对应技能的编号**保留原键**（不静默丢数据）：它会在加载时匹配不到任何技能，
+ * 因而无害，而用户还能在文件里看到自己写了什么。
+ */
+export declare function normalizeCustomizationKey(rawKey: string): string | undefined;
+/**
+ * 按编号排序键（**输出严格**）。
+ *
+ * 定制的先后顺序没有意义；按 `CxxPyy` 排，文件读起来就是研究流程顺序。
+ * 未登记编号的键排在最后，并保持彼此原有相对顺序。
+ */
+export declare function sortCustomizations(c: SkillCustomizations): SkillCustomizations;
 /** 解析设置里的 JSON 字符串（损坏 → 空，绝不让坏数据让 Skill 不可用）。 */
 export declare function parseCustomizations(raw: string | undefined): SkillCustomizations;
-/** 序列化覆盖集合。 */
+/** 序列化覆盖集合（键按编号排序，便于人读与 diff）。 */
 export declare function serializeCustomizations(c: SkillCustomizations): string;
 /**
  * 文件后端：定制内容存独立 JSON 文件，设置里只有文件名。
