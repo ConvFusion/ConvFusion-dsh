@@ -63,21 +63,23 @@ console.log('\n[A] 系统 Skill Library（包内资产）')
   // 因此没有来源 —— 这是真实情况，不是遗漏。
   //   · Stage 5.1 的成果转换能力（旧实现只有论文，没有专利/报告/演讲的提示词）
   //   · `research-process`：v2 的过程定义（旧实现是硬编码的模块流水线，没有"过程"提示词）
-  const NEW_IN_STAGE_51 = new Set([
+  const V2_NATIVE = new Set([
     'patent-drafting',
     'technical-report-writing',
     'presentation-design',
     'research-process',
+    // 论文全文下载：v2 原生能力（旧实现没有这条），手写正文、不伪造历史出处
+    'paper-fulltext-download',
   ])
   const withSources = docs.filter((d) => d.sections.some((x) => x.title.startsWith('Source Prompts')))
-  const migrated = docs.filter((d) => !NEW_IN_STAGE_51.has(d.id))
+  const migrated = docs.filter((d) => !V2_NATIVE.has(d.id))
   assertEq(
-    withSources.filter((d) => !NEW_IN_STAGE_51.has(d.id)).length,
+    withSources.filter((d) => !V2_NATIVE.has(d.id)).length,
     migrated.length,
     `由旧提示词迁移的 ${migrated.length} 个 Skill 都保留逐字来源`,
   )
   assertEq(
-    docs.filter((d) => NEW_IN_STAGE_51.has(d.id) && d.sections.some((x) => x.title.startsWith('Source Prompts'))).length,
+    docs.filter((d) => V2_NATIVE.has(d.id) && d.sections.some((x) => x.title.startsWith('Source Prompts'))).length,
     0,
     'v2 原生能力无逐字来源（不伪造出处）',
   )

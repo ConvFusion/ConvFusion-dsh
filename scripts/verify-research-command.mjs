@@ -30,6 +30,16 @@ const PKG = resolve(process.argv[2] || 'packages/dsh-convfusion')
 const lib = (f) => pathToFileURL(join(PKG, 'lib', f)).href
 
 const CMD = await import(lib('research/commands.js'))
+const WS = await import(lib('research/workspace.js'))
+
+/**
+ * 研究根目录。
+ *
+ * ⚠️ 不能直接拼 `join(rootOf(ws), 'project.md')`：v2 的研究数据收在会话工作区下的
+ * `workspace/` 子目录（`380c175` 引入的布局，`workspace.ts` 的 `researchWorkspaceOf`）。
+ * 这个脚本原先假设 project.md 就在工作区根，布局改了之后它一直在误报失败。
+ */
+const rootOf = (ws) => WS.researchWorkspaceOf(ws)
 
 let passed = 0
 let failed = 0
@@ -94,7 +104,7 @@ console.log('\n[1] 首次 `/research <主题>`：建项目 + 启动 Agent')
 
   assertEq(res.kind, 'success', '命令返回 success（界面能显示）')
   assert(typeof res.text === 'string' && res.text.length > 0, '返回文本非空（不是"没有反应"）')
-  assert(existsSync(join(ws, 'project.md')), 'project.md 已创建')
+  assert(existsSync(join(rootOf(ws), 'project.md')), 'project.md 已创建')
   assertEq(sent.length, 1, 'agent.followup 被调用**恰好一次**（这是"开始运行"的定义）')
 
   const msg = sent[0]
@@ -104,7 +114,7 @@ console.log('\n[1] 首次 `/research <主题>`：建项目 + 启动 Agent')
   assert(/不用按固定流程|没有固定流程|不规定步骤|不是固定流程/.test(text), '明确告诉 Agent 没有固定流程')
   assertEq(msg?.source?.kind, 'plugin', '消息来源标记为插件（走已知的 user/message 通道）')
 
-  const project = readFileSync(join(ws, 'project.md'), 'utf8')
+  const project = readFileSync(join(rootOf(ws), 'project.md'), 'utf8')
   assert(project.includes('基于视觉-LiDAR'), 'project.md 记录了主题')
   rmSync(ws, { recursive: true, force: true })
 }
