@@ -30,6 +30,7 @@
  */
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
 import { type PaperDownloadDeps } from './paper-download.js';
+import { type BibEntry, type ComposeInput } from './latex.js';
 import { openQuestions } from './research-state.js';
 /** 工具名（`research_` 命名空间，与 Skill/Plan 资产一致）。 */
 export declare const PROJECT_TOOL = "research_project";
@@ -42,6 +43,7 @@ export declare const PAPER_TOOL = "research_paper";
 export declare const OUTPUT_TOOL = "research_output";
 export declare const LITERATURE_TOOL = "research_literature_search";
 export declare const PAPER_DOWNLOAD_TOOL = "research_paper_download";
+export declare const PAPER_LATEX_TOOL = "research_paper_latex";
 /**
  * 构造研究资产工具集。
  *
@@ -61,6 +63,25 @@ export declare function defineResearchTools(resolveWorkspace: (agent?: {
     fetchImpl?: import('./literature.js').FetchLike;
     timeoutMs?: number;
 }, downloadDeps?: PaperDownloadDeps): ToolDefinition[];
+/**
+ * 从 Markdown 参考文献列表解析 `\bibitem` 条目。
+ *
+ * 支持 v2 论文里常见的写法：
+ *   - `- [smith2024] A. Smith, "Title," Venue, 2024.`
+ *   - `[1] A. Smith, ...`（数字引用 → 键 `ref1`，并建 numberToKey 映射）
+ *   - `- **[smith2024]** ...`
+ */
+export declare function parseBibEntries(text: string): {
+    entries: BibEntry[];
+    numberToKey: Record<string, string>;
+};
+/**
+ * 把 `paper.md` 组装成 {@link ComposeInput}。
+ *
+ * 取 `# 标题` 作 title，`## Abstract` 作 abstract，`## References` 作参考文献，
+ * 其余章节按原顺序进入正文（v2 论文含 Results / Discussion，模板按需生成 `\section`）。
+ */
+export declare function buildComposeInput(source: string, template: string): ComposeInput;
 /** 供测试/调试：Open Questions（不经过工具层）。 */
 export { openQuestions };
 //# sourceMappingURL=research-tools.d.ts.map
