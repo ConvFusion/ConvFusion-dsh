@@ -29,6 +29,7 @@
  * - **没有**任何执行类工具：真实执行仍走 Harness 原生工具（§42 Native Harness）。
  */
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
+import { type PaperDownloadDeps } from './paper-download.js';
 import { openQuestions } from './research-state.js';
 /** 工具名（`research_` 命名空间，与 Skill/Plan 资产一致）。 */
 export declare const PROJECT_TOOL = "research_project";
@@ -40,6 +41,7 @@ export declare const STATE_PROPOSE_TOOL = "research_state_propose";
 export declare const PAPER_TOOL = "research_paper";
 export declare const OUTPUT_TOOL = "research_output";
 export declare const LITERATURE_TOOL = "research_literature_search";
+export declare const PAPER_DOWNLOAD_TOOL = "research_paper_download";
 /**
  * 构造研究资产工具集。
  *
@@ -49,6 +51,7 @@ export declare const LITERATURE_TOOL = "research_literature_search";
  *        可能已被其它会话覆盖，会把研究数据写进别人的工作区（2026-09 事故：一条
  *        state proposal 被写进插件开发仓库根目录的 `research/`）。
  * @param literatureDeps 文献检索依赖（API Key 解析）；缺省时不注册检索工具
+ * @param downloadDeps 论文全文下载依赖（fetch 实现）；缺省时不注册下载工具
  */
 export declare function defineResearchTools(resolveWorkspace: (agent?: {
     id?: unknown;
@@ -57,7 +60,7 @@ export declare function defineResearchTools(resolveWorkspace: (agent?: {
     mailto?: () => string | undefined;
     fetchImpl?: import('./literature.js').FetchLike;
     timeoutMs?: number;
-}): ToolDefinition[];
+}, downloadDeps?: PaperDownloadDeps): ToolDefinition[];
 /** 供测试/调试：Open Questions（不经过工具层）。 */
 export { openQuestions };
 //# sourceMappingURL=research-tools.d.ts.map

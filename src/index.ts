@@ -267,11 +267,18 @@ export function apply(ctx: Context, rawConfig: Partial<ConfigShape> = {}): void 
   // 让 Agent 有**正确通道**记录科研事实：ID 与双向引用由我们保证，
   // 且 `research_state_propose` **只提案、不应用**（Stage 4 §20 / §21）。
   ctx.effect(() => {
-    const disposers = defineResearchTools(resolveWorkspaceForAgent, {
-      // OpenAlex Key 从设置（或 OPENALEX_API_KEY 环境变量）**每次调用时**读取：
-      // 用户在设置页改完立即生效，不需要重启。
-      apiKey: () => currentConfig().openalexApiKey || process.env[OPENALEX_API_KEY_ENV] || '',
-    }).map((tool) => ctx.tools.register(tool))
+    const disposers = defineResearchTools(
+      resolveWorkspaceForAgent,
+      {
+        // OpenAlex Key 从设置（或 OPENALEX_API_KEY 环境变量）**每次调用时**读取：
+        // 用户在设置页改完立即生效，不需要重启。
+        apiKey: () => currentConfig().openalexApiKey || process.env[OPENALEX_API_KEY_ENV] || '',
+      },
+      // 论文全文下载依赖：复用全局 fetch（与 OpenAlex 检索同一网络栈）。
+      // 不需要单独的 API Key —— 下载走论文的开放获取源（arXiv / ACL / OA）。
+      // mailto 复用检索同款（进 polite pool），这里暂不注入，留待需要时扩展。
+      { fetchImpl: globalThis.fetch as unknown as import('./research/paper-download.js').DownloadFetchLike },
+    ).map((tool) => ctx.tools.register(tool))
     return () => {
       for (const d of disposers) {
         try {

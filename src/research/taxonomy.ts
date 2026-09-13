@@ -65,6 +65,7 @@ const SYSTEM_TAXONOMY: ReadonlyArray<{ group: string; name: string; leaves: Read
       ['literature-screening', 'Literature Screening'],
       ['literature-review', 'Literature Review'],
       ['literature-comparison', 'Literature Comparison'],
+      ['paper-fulltext-download', 'Paper Full-Text Download'],
       ['research-gap', 'Research Gap'],
       ['research-landscape', 'Research Landscape'],
     ],

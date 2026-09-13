@@ -155,14 +155,33 @@ export interface LiteratureRecord {
   id: string
   title: string
   year?: number
+  /**
+   * DOI（OpenAlex 返回的是 `https://doi.org/10.xxx` 形式的 URL）。
+   * 它是下载全文的关键锚点之一（DOI resolver 多数指向出版商落地页）。
+   */
   doi?: string
   /** 发表处（期刊/会议名）。 */
   venue?: string
   /** 前若干位作者。 */
   authors: string[]
   citedByCount?: number
-  /** 开放获取全文地址（有则可直接读全文）。 */
+  /**
+   * 开放获取全文地址（`open_access.oa_url`，有则可直接读全文）。
+   * 这是下载论文的首选来源之一。
+   */
   openAccessUrl?: string
+  /** 开放获取状态（gold/green/hybrid/bronze/closed）—— 判断能否拿到全文。 */
+  openAccessStatus?: string
+  /**
+   * 出版商落地页（`primary_location.landing_page_url`）。
+   * 常含指向 PDF 的链接；arXiv / ACL Anthology 的落地页可推导出 PDF 直链。
+   */
+  landingPageUrl?: string
+  /**
+   * 直链 PDF 地址（`primary_location.pdf_url`，若 OpenAlex 已识别）。
+   * 下载论文时的第一选择。
+   */
+  pdfUrl?: string
   type?: string
   /** 倒排索引重建出的摘要（截断）。 */
   abstract?: string
@@ -202,10 +221,16 @@ export function mapWork(raw: unknown): LiteratureRecord | undefined {
   const id = typeof w.id === 'string' ? w.id : ''
   if (!id && !title) return undefined
 
-  const primary = w.primary_location as { source?: { display_name?: unknown } } | null | undefined
+  const primary = w.primary_location as
+    | { source?: { display_name?: unknown }; landing_page_url?: unknown; pdf_url?: unknown; is_oa?: unknown }
+    | null
+    | undefined
   const venue = primary?.source?.display_name
-  const oa = w.open_access as { oa_url?: unknown } | undefined
+  const oa = w.open_access as { oa_url?: unknown; oa_status?: unknown; is_oa?: unknown } | undefined
   const oaUrl = typeof oa?.oa_url === 'string' && oa.oa_url ? oa.oa_url : undefined
+  const oaStatus = typeof oa?.oa_status === 'string' && oa.oa_status ? oa.oa_status : undefined
+  const landing = typeof primary?.landing_page_url === 'string' && primary.landing_page_url ? primary.landing_page_url : undefined
+  const pdf = typeof primary?.pdf_url === 'string' && primary.pdf_url ? primary.pdf_url : undefined
 
   return {
     id,
@@ -216,6 +241,9 @@ export function mapWork(raw: unknown): LiteratureRecord | undefined {
     authors: authorNames(w.authorships),
     ...(typeof w.cited_by_count === 'number' ? { citedByCount: w.cited_by_count } : {}),
     ...(oaUrl ? { openAccessUrl: oaUrl } : {}),
+    ...(oaStatus ? { openAccessStatus: oaStatus } : {}),
+    ...(landing ? { landingPageUrl: landing } : {}),
+    ...(pdf ? { pdfUrl: pdf } : {}),
     ...(typeof w.type === 'string' ? { type: w.type } : {}),
     ...(reconstructAbstract(w.abstract_inverted_index) ? { abstract: reconstructAbstract(w.abstract_inverted_index) } : {}),
   }

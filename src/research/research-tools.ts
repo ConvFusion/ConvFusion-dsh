@@ -40,6 +40,12 @@ import {
   type LiteratureQuery,
 } from './literature.js'
 import {
+  downloadPaper,
+  readManifest,
+  resolveDownloadCandidates,
+  type PaperDownloadDeps,
+} from './paper-download.js'
+import {
   createEvidence,
   evidenceClaim,
   isEvidenceWriteError,
@@ -94,6 +100,7 @@ export const STATE_PROPOSE_TOOL = 'research_state_propose'
 export const PAPER_TOOL = 'research_paper'
 export const OUTPUT_TOOL = 'research_output'
 export const LITERATURE_TOOL = 'research_literature_search'
+export const PAPER_DOWNLOAD_TOOL = 'research_paper_download'
 
 /** 把错误对象转成工具返回值（不抛异常，让模型看到原因并纠正）。 */
 function fail(error: string, extra: Record<string, unknown> = {}): Record<string, JsonValue> {
@@ -109,6 +116,7 @@ function fail(error: string, extra: Record<string, unknown> = {}): Record<string
  *        可能已被其它会话覆盖，会把研究数据写进别人的工作区（2026-09 事故：一条
  *        state proposal 被写进插件开发仓库根目录的 `research/`）。
  * @param literatureDeps 文献检索依赖（API Key 解析）；缺省时不注册检索工具
+ * @param downloadDeps 论文全文下载依赖（fetch 实现）；缺省时不注册下载工具
  */
 export function defineResearchTools(
   resolveWorkspace: (agent?: { id?: unknown } | null) => string,
@@ -118,6 +126,7 @@ export function defineResearchTools(
     fetchImpl?: import('./literature.js').FetchLike
     timeoutMs?: number
   },
+  downloadDeps?: PaperDownloadDeps,
 ): ToolDefinition[] {
   /* ── Evidence ───────────────────────────────────────────────────────── */
   const evidenceTool = defineTool({
@@ -1064,6 +1073,10 @@ export function defineResearchTools(
       'snippet) plus a `provenance` block (query, source, retrieval time, de-identified request URL, ' +
       'total hits) — record that provenance when you log a literature finding as evidence, otherwise ' +
       'the finding is not traceable.\n' +
+      'Each record also carries full-text links for download: `pdfUrl` (direct PDF), `openAccessUrl` ' +
+      '(OA full text), `landingPageUrl` (publisher landing page), `doi` (DOI resolver URL), and ' +
+      '`openAccessStatus` (gold/green/hybrid/bronze/closed). To fetch the full text, pass these fields ' +
+      'to `research_paper_download` (the record\'s `id` maps to that tool\'s `openalexId`).\n' +
       'Notes: `total` is the number of matches, `returned` is how many came back — a coverage claim ' +
       'needs the query set, not one page of results. Increase `perPage` or narrow the query rather than ' +
       'paging blindly. If no API key is configured the request still works through OpenAlex\'s public ' +
@@ -1091,7 +1104,17 @@ export function defineResearchTools(
           error?: string
           query?: string
           provenance?: { source?: string; retrievedAt?: string; total?: number; returned?: number; usedApiKey?: boolean }
-          results?: Array<{ title?: string; year?: number; venue?: string; citedByCount?: number; doi?: string }>
+          results?: Array<{
+            title?: string
+            year?: number
+            venue?: string
+            citedByCount?: number
+            doi?: string
+            openAccessUrl?: string
+            openAccessStatus?: string
+            landingPageUrl?: string
+            pdfUrl?: string
+          }>
           coverageNote?: string
         }
         if (v.ok === false) {
@@ -1103,8 +1126,16 @@ export function defineResearchTools(
           `hits ${p.total ?? '?'} · returned ${p.returned ?? '?'} · key ${p.usedApiKey ? 'yes' : 'no'} · ${p.retrievedAt ?? ''}`,
         ]
         for (const [i, r] of (v.results ?? []).entries()) {
-          const bits = [r.year ? String(r.year) : undefined, r.venue, r.citedByCount !== undefined ? `${r.citedByCount} cites` : undefined]
-          lines.push(`${i + 1}. ${r.title ?? '(untitled)'} — ${bits.filter(Boolean).join(' · ')}`)
+          const bits = [
+            r.year ? String(r.year) : undefined,
+            r.venue,
+            r.citedByCount !== undefined ? `${r.citedByCount} cites` : undefined,
+            r.openAccessStatus ? `OA:${r.openAccessStatus}` : undefined,
+          ].filter(Boolean)
+          // 论文链接：优先 PDF 直链，其次 OA 全文，再落地页/DOI —— 给下载全文用
+          const link = r.pdfUrl ?? r.openAccessUrl ?? r.landingPageUrl ?? r.doi
+          const linkTag = link ? ` · ${link}` : ''
+          lines.push(`${i + 1}. ${r.title ?? '(untitled)'} — ${bits.join(' · ')}${linkTag}`)
         }
         if (v.coverageNote) lines.push(v.coverageNote)
         return [{ type: 'text' as const, text: lines.join('\n') }]
@@ -1162,6 +1193,185 @@ export function defineResearchTools(
     }),
   })
 
+  /**
+   * 论文全文下载工具。
+   *
+   * 做基准 / 基线对比时要从论文全文里抽取数据集、指标、实验设置，摘要不够用。
+   * 本工具把 `research_literature_search` 返回的一条记录（或手填的链接）
+   * 变成工作区里的全文文件：解析候选 URL → 下载 → 校验 PDF/HTML → 落盘带序号
+   * → 登记 manifest。拉不到全文则生成同名占位 `.txt`（含候选链接，用户自取替换）。
+   *
+   * 全文落在 `research/literature/fulltext/`，manifest 在 `.../manifest.json`。
+   */
+  const paperDownloadTool = defineTool({
+    name: PAPER_DOWNLOAD_TOOL,
+    description:
+      'Download the full text of a paper into the workspace, with a stable sequence number, ' +
+      'for later extraction of datasets, baselines and experimental elements that only appear ' +
+      'in the full text (not in the abstract).\n' +
+      'Give it the link fields from a `research_literature_search` record (`pdfUrl`, ' +
+      '`openAccessUrl`, `landingPageUrl`, `doi`, `id`) plus the paper `title`. It resolves ' +
+      'candidate download URLs (PDF direct → OA → arXiv → ACL Anthology → landing → DOI), ' +
+      'fetches the bytes, validates them as PDF (`%PDF-`) or HTML, and writes the file to ' +
+      '`research/literature/fulltext/<NNN>_<title>.pdf|.html` with a manifest entry.\n' +
+      'If no open full text can be fetched, it creates a same-named `<NNN>_<title>.txt` ' +
+      'placeholder listing the candidate links so the user can download manually and replace ' +
+      'the placeholder with the real PDF/HTML.\n' +
+      'Actions:\n' +
+      '- `download`: fetch the full text for one paper and write it to the workspace.\n' +
+      '- `list`: list all full-text files and their manifest entries (seq, title, kind, ' +
+      'placeholder, source).\n' +
+      '- `candidates`: show which download URLs would be tried for given links, without ' +
+      'fetching anything (useful to preview before downloading).',
+    parameters: {
+      action: {
+        type: 'string',
+        description: 'One of: download | list | candidates.',
+        enum: ['download', 'list', 'candidates'],
+      },
+      title: {
+        type: 'string',
+        description: 'Paper title (used for the filename and the manifest entry).',
+      },
+      pdfUrl: { type: 'string', description: 'Direct PDF URL (from OpenAlex `pdfUrl`).' },
+      openAccessUrl: { type: 'string', description: 'Open-access full-text URL (from OpenAlex `openAccessUrl`).' },
+      landingPageUrl: { type: 'string', description: 'Publisher landing-page URL (from OpenAlex `landingPageUrl`).' },
+      doi: { type: 'string', description: 'DOI URL or bare DOI (from OpenAlex `doi`).' },
+      openalexId: { type: 'string', description: 'OpenAlex work id (e.g. `https://openalex.org/W123`).' },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => {
+        const v = value as {
+          ok?: boolean
+          error?: string
+          action?: string
+          entry?: {
+            seq?: number
+            title?: string
+            filename?: string
+            path?: string
+            kind?: string
+            placeholder?: boolean
+            downloadedFrom?: string
+            reason?: string
+          }
+          entries?: Array<{ seq?: number; title?: string; filename?: string; kind?: string; placeholder?: boolean; source?: string }>
+          candidates?: Array<{ url?: string; source?: string }>
+          count?: number
+        }
+        if (v.ok === false) return [{ type: 'text' as const, text: `Paper download failed: ${v.error ?? ''}` }]
+        if (v.action === 'list') {
+          const lines = [`Full-text files: ${v.count ?? 0}`]
+          for (const e of v.entries ?? []) {
+            const tag = e.placeholder ? '占位' : e.kind ?? '?'
+            lines.push(`${e.seq ?? '?'}. [${tag}] ${e.title ?? '(untitled)'} → ${e.filename ?? ''}`)
+          }
+          return [{ type: 'text' as const, text: lines.join('\n') }]
+        }
+        if (v.action === 'candidates') {
+          const lines = ['Candidate download URLs:']
+          for (const c of v.candidates ?? []) lines.push(`- [${c.source ?? '?'}] ${c.url ?? ''}`)
+          return [{ type: 'text' as const, text: lines.join('\n') }]
+        }
+        const e = v.entry ?? {}
+        const status = e.placeholder
+          ? `占位文件已创建（未拿到全文）：${e.reason ?? ''}`
+          : `全文已下载（${e.kind ?? '?'}）`
+        return [
+          {
+            type: 'text' as const,
+            text: `${e.seq ?? '?'}. ${e.title ?? '(untitled)'}\n${status}\n${e.path ?? ''}${e.downloadedFrom ? `\n来源：${e.downloadedFrom}` : ''}`,
+          },
+        ]
+      },
+    },
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const ws = resolveWorkspace(exec?.agent)
+      const a = args as Record<string, unknown>
+      const action = String(a.action ?? 'list')
+
+      try {
+        if (action === 'list') {
+          const manifest = readManifest(ws)
+          return losslessJson({
+            ok: true,
+            action: 'list',
+            count: manifest.entries.length,
+            entries: manifest.entries.map((e) => ({
+              seq: e.seq,
+              title: e.title,
+              filename: e.filename,
+              path: e.path,
+              kind: e.kind,
+              placeholder: e.placeholder,
+              ...(e.source ? { source: e.source } : {}),
+              ...(e.bytes ? { bytes: e.bytes } : {}),
+            })),
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        if (action === 'candidates') {
+          const links = {
+            id: typeof a.openalexId === 'string' ? a.openalexId : undefined,
+            doi: typeof a.doi === 'string' ? a.doi : undefined,
+            openAccessUrl: typeof a.openAccessUrl === 'string' ? a.openAccessUrl : undefined,
+            landingPageUrl: typeof a.landingPageUrl === 'string' ? a.landingPageUrl : undefined,
+            pdfUrl: typeof a.pdfUrl === 'string' ? a.pdfUrl : undefined,
+          }
+          const candidates = resolveDownloadCandidates(links)
+          return losslessJson({
+            ok: true,
+            action: 'candidates',
+            candidates: candidates.map((c) => ({ url: c.url, source: c.source })),
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        if (action === 'download') {
+          if (!downloadDeps) {
+            return fail('论文全文下载未启用（插件装配时未注入下载依赖）。')
+          }
+          const links = {
+            id: typeof a.openalexId === 'string' ? a.openalexId : undefined,
+            doi: typeof a.doi === 'string' ? a.doi : undefined,
+            openAccessUrl: typeof a.openAccessUrl === 'string' ? a.openAccessUrl : undefined,
+            landingPageUrl: typeof a.landingPageUrl === 'string' ? a.landingPageUrl : undefined,
+            pdfUrl: typeof a.pdfUrl === 'string' ? a.pdfUrl : undefined,
+          }
+          // 至少要给一个链接锚点，否则无法解析候选
+          if (!links.id && !links.doi && !links.openAccessUrl && !links.landingPageUrl && !links.pdfUrl) {
+            return fail('缺少论文链接：至少提供 openalexId / doi / pdfUrl / openAccessUrl / landingPageUrl 之一。')
+          }
+          const title = typeof a.title === 'string' ? a.title : undefined
+          const result = await downloadPaper(ws, { title, links }, downloadDeps)
+          return losslessJson({
+            ok: true,
+            action: 'download',
+            entry: {
+              seq: result.seq,
+              title: title,
+              filename: result.filename,
+              path: result.path,
+              kind: result.kind,
+              placeholder: result.placeholder,
+              ...(result.downloadedFrom ? { downloadedFrom: result.downloadedFrom } : {}),
+              ...(result.reason ? { reason: result.reason } : {}),
+            },
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        return fail(`Unknown action "${action}".`, { allowed: ['download', 'list', 'candidates'] })
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e))
+      }
+    },
+    presentCall: (args) => {
+      const a = args as { action?: string; title?: string }
+      return { card: 'generic', title: `论文下载 · ${a.action ?? ''} ${a.title ?? ''}`.trim(), kind: 'execute' }
+    },
+  })
+
   return [
     projectTool as ToolDefinition,
     evidenceTool as ToolDefinition,
@@ -1172,6 +1382,7 @@ export function defineResearchTools(
     paperTool as ToolDefinition,
     outputTool as ToolDefinition,
     literatureTool as ToolDefinition,
+    paperDownloadTool as ToolDefinition,
   ]
 }
 
