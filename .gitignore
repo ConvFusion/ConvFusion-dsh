@@ -8,8 +8,7 @@ package-lock.json
 *.log
 .DS_Store
 
-# 本地开发脚本和文档，不提交到GitHub
-/scripts/
+# 本地开发文档（scripts/ 是构建与验证工具，需提交以保证仓库可构建、可复现验证）
 /docs/
 /dev-notes/
 # 研究运行数据（ConvFusion 研究根目录 + 其备份，当前工作区本地测试用，不提交）
