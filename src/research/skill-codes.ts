@@ -52,13 +52,13 @@ export interface CategoryCode {
  */
 export const CATEGORY_CODES: readonly CategoryCode[] = [
   { categoryId: 'research-understanding', code: 'C01', order: 1, label: '理解问题', labelEn: 'Research Understanding' },
-  { categoryId: 'literature', code: 'C02', order: 2, label: '文献', labelEn: 'Literature' },
-  { categoryId: 'innovation', code: 'C03', order: 3, label: '创新与假设', labelEn: 'Innovation' },
-  { categoryId: 'methodology', code: 'C04', order: 4, label: '方法', labelEn: 'Methodology' },
-  { categoryId: 'experiment', code: 'C05', order: 5, label: '实验', labelEn: 'Experiment' },
-  { categoryId: 'analysis', code: 'C06', order: 6, label: '分析', labelEn: 'Analysis' },
-  { categoryId: 'research-decision', code: 'C07', order: 7, label: '决策', labelEn: 'Research Decision' },
-  { categoryId: 'academic-writing', code: 'C08', order: 8, label: '写作', labelEn: 'Academic Writing' },
+  { categoryId: 'literature', code: 'C02', order: 2, label: '文献调研', labelEn: 'Literature' },
+  { categoryId: 'innovation', code: 'C03', order: 3, label: '创新假设', labelEn: 'Innovation' },
+  { categoryId: 'methodology', code: 'C04', order: 4, label: '方法设计', labelEn: 'Methodology' },
+  { categoryId: 'experiment', code: 'C05', order: 5, label: '实验验证', labelEn: 'Experiment' },
+  { categoryId: 'analysis', code: 'C06', order: 6, label: '分析论证', labelEn: 'Analysis' },
+  { categoryId: 'research-decision', code: 'C07', order: 7, label: '研究决策', labelEn: 'Research Decision' },
+  { categoryId: 'academic-writing', code: 'C08', order: 8, label: '论文写作', labelEn: 'Academic Writing' },
   { categoryId: 'research-management', code: 'C09', order: 9, label: '研究管理', labelEn: 'Research Management' },
 ]
 
@@ -163,6 +163,29 @@ export function skillCode(skillId: string): string | undefined {
 /** 取技能的中文名（未登记返回 `undefined`）。 */
 export function skillLabel(skillId: string): string | undefined {
   return SKILL_CODES[skillId]?.label
+}
+
+/**
+ * 反查：编号（`CxxPyy`）→ skillId。
+ *
+ * 用途：定制文件允许**用编号作键**（人好记），读取时在这里解析成稳定的 skillId。
+ *
+ * ⚠️ 方向只能是「编号 → id」。反过来的危险在于编号**位置相关**：类别内插入一个技能，
+ * 后面的 `P` 号会整体顺移，于是旧的编号键会指到**另一个技能**上 —— 定制内容悄悄错位。
+ * 因此编号只作为可读别名被接受，写入一律落 id（见 `parseCustomizations`）。
+ */
+export function skillIdByCode(code: string): string | undefined {
+  const key = code.trim().toUpperCase()
+  if (!key) return undefined
+  for (const [skillId, entry] of Object.entries(SKILL_CODES)) {
+    if (entry.code === key) return skillId
+  }
+  return undefined
+}
+
+/** 是否形如技能编号（`CxxPyy`）。 */
+export function looksLikeSkillCode(key: string): boolean {
+  return /^C\d{2}P\d{2}$/i.test(key.trim())
 }
 
 /** 取类别的编号信息（未登记返回 `undefined`）。 */

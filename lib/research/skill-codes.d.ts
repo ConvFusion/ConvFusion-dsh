@@ -72,6 +72,18 @@ export declare const SKILL_CODES: Readonly<Record<string, SkillCodeEntry>>;
 export declare function skillCode(skillId: string): string | undefined;
 /** 取技能的中文名（未登记返回 `undefined`）。 */
 export declare function skillLabel(skillId: string): string | undefined;
+/**
+ * 反查：编号（`CxxPyy`）→ skillId。
+ *
+ * 用途：定制文件允许**用编号作键**（人好记），读取时在这里解析成稳定的 skillId。
+ *
+ * ⚠️ 方向只能是「编号 → id」。反过来的危险在于编号**位置相关**：类别内插入一个技能，
+ * 后面的 `P` 号会整体顺移，于是旧的编号键会指到**另一个技能**上 —— 定制内容悄悄错位。
+ * 因此编号只作为可读别名被接受，写入一律落 id（见 `parseCustomizations`）。
+ */
+export declare function skillIdByCode(code: string): string | undefined;
+/** 是否形如技能编号（`CxxPyy`）。 */
+export declare function looksLikeSkillCode(key: string): boolean;
 /** 取类别的编号信息（未登记返回 `undefined`）。 */
 export declare function categoryCodeInfo(categoryId: string | undefined): CategoryCode | undefined;
 /** 取类别的短编号（`C02`）。 */

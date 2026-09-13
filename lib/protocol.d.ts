@@ -26,8 +26,11 @@
  *   类别与技能改为按编号排序。**这两批改动都动了 state 形状** ——
  *   当时没升版本号的后果是：旧宿主返回的 state 里没有 `code`，界面看不到编号，
  *   而设置页也**不会**提示"宿主需重启"，看起来就像"改了没用"。
+ * - `4`：类别名统一为 4 字（`文献` → `文献调研`、`写作` → `论文写作` 等），研究阶段名同步。
+ *   这是**取值语义**变化而非形状变化 —— 界面不会出错，但会安静地显示旧名字；
+ *   升号才能让"宿主需重启"提示生效（v3 的教训：别指望用户自己发现）。
  */
-export declare const HOST_PROTOCOL = 3;
+export declare const HOST_PROTOCOL = 4;
 /** 状态响应里的协议字段名（两边共用，避免拼错）。 */
 export declare const HOST_PROTOCOL_FIELD = "protocol";
 //# sourceMappingURL=protocol.d.ts.map
