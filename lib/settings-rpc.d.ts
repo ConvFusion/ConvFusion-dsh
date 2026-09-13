@@ -111,6 +111,10 @@ export interface SettingsSkill {
     skillId: string;
     /** 显示名。 */
     skillName: string;
+    /** 唯一编号（`CxxPyy`）—— 界面展示与排序用。 */
+    code?: string;
+    /** 中文名 —— 界面展示用。 */
+    label?: string;
     sections: SettingsSection[];
     /** 该 Skill 已覆盖的章节数。 */
     overriddenCount: number;
@@ -119,6 +123,10 @@ export interface SettingsSkill {
 export interface SettingsCategory {
     categoryId: string;
     categoryName: string;
+    /** 类别编号（`C01`–`C09`，按研究过程排序）。 */
+    code?: string;
+    /** 类别中文名（如「文献」）。 */
+    label?: string;
     skills: SettingsSkill[];
     /** 该类别下已覆盖的可定制项数量。 */
     overriddenCount: number;

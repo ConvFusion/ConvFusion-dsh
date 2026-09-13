@@ -46,6 +46,7 @@ import { dirname } from 'node:path'
 import type { SkillDocument } from './skills.js'
 import { listSkillDocuments, skillMethod, skillPurpose, skillWhenToUse } from './skills.js'
 import { categoryName } from './taxonomy.js'
+import { categoryCodeInfo, skillSortKey } from './skill-codes.js'
 import { findSection } from './markdown.js'
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -63,6 +64,10 @@ export interface CustomizationPoint {
   skillId: string
   /** Skill 显示名。 */
   skillName: string
+  /** Skill 唯一编号（`CxxPyy`）—— 设置页展示与排序的锚点。 */
+  skillCode?: string
+  /** Skill 中文名 —— 设置页展示。 */
+  skillLabel?: string
   /** 所属类别（顶层大类，设置面板的一级分组）。 */
   category: string
   /** 可定制章节标题（如 `Research Method`）。 */
@@ -285,6 +290,10 @@ export interface CategoryCustomization {
   categoryId: string
   /** 类别显示名（如 `Literature`）。 */
   categoryName: string
+  /** 类别编号（`C01`–`C09`，按研究过程排序）。 */
+  categoryCode?: string
+  /** 类别中文名（如「文献」）。 */
+  categoryLabel?: string
   points: CustomizationPoint[]
   /** 该类别下已覆盖的数量。 */
   overriddenCount: number
@@ -314,6 +323,8 @@ export function listCustomizationPoints(
       points.push({
         skillId: doc.id,
         skillName: doc.name,
+        ...(doc.code ? { skillCode: doc.code } : {}),
+        ...(doc.label ? { skillLabel: doc.label } : {}),
         category: categoryId,
         section,
         base,
@@ -325,13 +336,25 @@ export function listCustomizationPoints(
   }
 
   return [...byCategory.entries()]
-    .map(([categoryId, points]) => ({
-      categoryId,
-      categoryName: categoryName(categoryId),
-      points: points.sort((a, b) => a.skillName.localeCompare(b.skillName) || a.section.localeCompare(b.section)),
-      overriddenCount: points.filter((p) => p.overridden).length,
-    }))
-    .sort((a, b) => a.categoryName.localeCompare(b.categoryName))
+    .map(([categoryId, points]) => {
+      const info = categoryCodeInfo(categoryId)
+      return {
+        categoryId,
+        categoryName: categoryName(categoryId),
+        ...(info ? { categoryCode: info.code, categoryLabel: info.label } : {}),
+        // ⚠️ 技能按**编号**排序（CxxPyy），不是 skillName 字母序 ——
+        // 字母序会把消融（实验阶段）排到理解问题之前，与做研究的顺序无关。
+        points: points.sort(
+          (a, b) =>
+            skillSortKey(a.skillId).localeCompare(skillSortKey(b.skillId)) ||
+            a.section.localeCompare(b.section),
+        ),
+        overriddenCount: points.filter((p) => p.overridden).length,
+      }
+    })
+    // 类别按**研究过程顺序**（C01 → C09），不是类别名字母序 ——
+    // 字母序会让 Academic Writing 排最前，而它其实是倒数第二步。
+    .sort((a, b) => (a.categoryCode ?? 'C99').localeCompare(b.categoryCode ?? 'C99'))
 }
 
 /* ════════════════════════════════════════════════════════════════════════

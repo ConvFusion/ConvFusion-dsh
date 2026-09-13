@@ -249,7 +249,8 @@ export function apply(ctx: Context, rawConfig: Partial<ConfigShape> = {}): void 
   // 用户的"优化"发生在文件里，不由命令操作（见 commands.ts 顶部说明）。
   ctx.inject(['commands'], (cmdCtx) => {
     const disposers = [
-      ...(defineResearchCommand(cmdCtx, resolveCurrentWorkspace) ?? []),
+      // 传定制 store：`/research 导出研究方法` 要导**生效版本**（基线 + 用户定制）
+      ...(defineResearchCommand(cmdCtx, resolveCurrentWorkspace, customizationStore) ?? []),
     ]
     if (disposers.length === 0) return
     cmdCtx.effect(() => () => {

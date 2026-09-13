@@ -17,8 +17,17 @@
  *
  * **任何会改变 `/dsh-convfusion/state` 返回形状或语义的宿主改动**都必须 +1。
  * 纯界面改动不用改。
+ *
+ * ### 版本历史
+ *
+ * - `2`：初版（类别 → Skill → 章节 + retrieval）。
+ * - `3`：state 增加 `dependencies`（本地依赖 tectonic 检测）、
+ *   类别与技能增加 `code`/`label`（编号 `CxxPyy` 与中文名）、
+ *   类别与技能改为按编号排序。**这两批改动都动了 state 形状** ——
+ *   当时没升版本号的后果是：旧宿主返回的 state 里没有 `code`，界面看不到编号，
+ *   而设置页也**不会**提示"宿主需重启"，看起来就像"改了没用"。
  */
-export const HOST_PROTOCOL = 2
+export const HOST_PROTOCOL = 3
 
 /** 状态响应里的协议字段名（两边共用，避免拼错）。 */
 export const HOST_PROTOCOL_FIELD = 'protocol'

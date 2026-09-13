@@ -98,12 +98,20 @@ interface HostSection {
 interface HostSkill {
   skillId: string
   skillName: string
+  /** 唯一编号（`CxxPyy`）。 */
+  code?: string
+  /** 中文名。 */
+  label?: string
   sections: HostSection[]
   overriddenCount: number
 }
 interface HostCategory {
   categoryId: string
   categoryName: string
+  /** 类别编号（`C01`–`C09`，按研究过程排序）。 */
+  code?: string
+  /** 类别中文名。 */
+  label?: string
   skills: HostSkill[]
   overriddenCount: number
   pointCount: number
@@ -790,13 +798,14 @@ export function ConvFusionProjectSettings({
                   <select style={S.select} value={categoryId} onChange={(e) => onCategory(e.target.value)}>
                     {state.categories.map((c) => (
                       <option key={c.categoryId} value={c.categoryId}>
-                        {c.categoryName}（{c.skills.length}）
+                        {c.code ? `${c.code} ` : ''}
+                        {c.label ?? c.categoryName}（{c.skills.length}）
                         {c.overriddenCount > 0 ? ` · 已定制 ${c.overriddenCount}` : ''}
                       </option>
                     ))}
                   </select>
                   <div style={S.hint}>
-                    {category ? `${category.skills.length} 项能力` : '该类别下暂无可定制能力'}
+                    {category ? `${category.skills.length} 项能力 · 类别按研究过程排序` : '该类别下暂无可定制能力'}
                   </div>
                 </div>
                 <div style={S.field}>
@@ -804,7 +813,8 @@ export function ConvFusionProjectSettings({
                   <select style={S.select} value={skillId} onChange={(e) => onSkill(e.target.value)}>
                     {category?.skills.map((s) => (
                       <option key={s.skillId} value={s.skillId}>
-                        {s.skillName}
+                        {s.code ? `${s.code} · ` : ''}
+                        {s.label ?? s.skillName}
                         {s.overriddenCount > 0 ? ` · 已定制 ${s.overriddenCount}` : ''}
                       </option>
                     ))}
@@ -832,14 +842,16 @@ export function ConvFusionProjectSettings({
             <div style={S.card}>
               <div style={S.cardHead}>
                 <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {skill.skillName} · {point.section}
+                  {skill.code ? `${skill.code} · ` : ''}
+                  {skill.label ?? skill.skillName} · {point.section}
                 </span>
                 <span style={{ flex: '1 1 auto' }} />
                 {point.overridden ? <Badge tone="brand">已定制</Badge> : <Badge tone="neutral">系统原文</Badge>}
               </div>
               <div style={S.cardBody}>
                 <div style={S.hint}>
-                  {category?.categoryName} · {skill.skillName} · {point.section}
+                  {category?.code ? `${category.code} ` : ''}
+                  {category?.label ?? category?.categoryName} · {skill.label ?? skill.skillName} · {point.section}
                 </div>
                 <div style={S.label}>你的额外要求</div>
                 <textarea

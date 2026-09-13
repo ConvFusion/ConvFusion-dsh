@@ -50,6 +50,15 @@ export interface SkillDocument {
     name: string;
     /** 分类（规范 id，如 `literature/research-gap`）。 */
     category?: string;
+    /**
+     * 唯一编号（`CxxPyy`，如 `C02P01`）—— 排序与导出的锚点。
+     *
+     * 编号**不写在 frontmatter**（会被 `gen-skill-library.mjs` 重新生成时覆盖），
+     * 而是集中在 `skill-codes.ts`；未登记编号时缺省。
+     */
+    code?: string;
+    /** 中文名（与 `code` 同表维护）—— 界面与导出展示用。 */
+    label?: string;
     type: SkillType;
     status: SkillStatus;
     version: string;

@@ -56,6 +56,18 @@ import { loadSkillLibrary } from './library.js'
 import { listPlans, loadPlanLibrary, syncPlanHistoryDetailed } from './plan-library.js'
 import { createPlanMessage } from './plan.js'
 import { listEvidence } from './evidence.js'
+import { writeMethodsExport } from './methods-export.js'
+import type { SkillCustomizationStore } from './skill-customization.js'
+
+/**
+ * 是否是「导出研究方法」指令。
+ *
+ * 导出是**命令自身的动作**（按编号拼一个固定格式的文件），不是交给 Agent 的任务 ——
+ * 让 Agent 去猜格式只会得到每次都不一样的产物。因此这里做前缀识别，先于 followup 处理。
+ */
+function isMethodsExportArg(arg: string): boolean {
+  return /^(导出研究方法|导出方法|export-methods|export\s+methods)/i.test(arg.trim())
+}
 
 interface CommandRuntimeLike {
   register(definition: {
@@ -282,11 +294,13 @@ function buildContinueText(workspace: string, intent: string, root = ''): string
 /**
  * 注册 `/research`（ConvFusion 的唯一命令）。
  *
+ * @param customizationStore 用户定制来源：导出研究方法时要导**生效版本**（基线 + 定制）
  * @returns disposer 数组（命令运行时缺失时返回 `null`，不影响插件其余功能）。
  */
 export function defineResearchCommand(
   ctx: Context,
   resolveCurrentWorkspace: () => string,
+  customizationStore?: SkillCustomizationStore,
 ): (() => void)[] | null {
   const commands = ctx.get('commands') as CommandRuntimeLike | undefined
   if (!commands || typeof commands.register !== 'function') return null
@@ -317,6 +331,30 @@ export function defineResearchCommand(
                 ? ['', '', 'Plan versions recorded in this pass:', ...snapshots.map((s) => `- \`${s.snapshot}\``)].join('\n')
                 : ''
             return { kind: 'success', text: body + saved } as CommandResult
+          }
+
+          // ── 导出研究方法：`/research 导出研究方法 [--full]` ──────────────
+          //
+          // 必须**先于** followup 判定：否则这句会被当成研究任务丢给 Agent，
+          // 而 Agent 每次拼出的格式都不一样（编号顺序、章节取舍都会漂）。
+          if (isMethodsExportArg(arg)) {
+            const full = /--full\b/i.test(arg)
+            const res = writeMethodsExport(workspace, {
+              full,
+              ...(customizationStore ? { store: customizationStore } : {}),
+            })
+            const kb = Math.max(1, Math.round(res.bytes / 1024))
+            return {
+              kind: 'success',
+              text: [
+                `已导出 ${res.skillCount} 个研究方法 · ${res.categoryCount} 个类别 · ${kb} KB`,
+                `文件：\`${res.path}\``,
+                full
+                  ? '内容：完整正文（含 `Source Prompts` 逐字历史提示词）'
+                  : '内容：6 个可定制章节（生效版本）；需要完整正文加 `--full`',
+                '编号：`CxxPyy` —— 类别 `C01`–`C09` 按研究过程排序，可直接用于排序与将来的按编号合并。',
+              ].join('\n'),
+            } as CommandResult
           }
 
           const project = loadProjectFile(workspace)

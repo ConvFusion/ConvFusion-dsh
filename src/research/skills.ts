@@ -35,6 +35,7 @@ import { fileURLToPath } from 'node:url'
 import type { SkillOrigin } from './taxonomy.js'
 import { normalizeCategoryId } from './taxonomy.js'
 import { parseSections } from './markdown.js'
+import { skillCode, skillLabel, skillSortKey } from './skill-codes.js'
 
 /* ════════════════════════════════════════════════════════════════════════
  * 类型
@@ -63,6 +64,15 @@ export interface SkillDocument {
   name: string
   /** 分类（规范 id，如 `literature/research-gap`）。 */
   category?: string
+  /**
+   * 唯一编号（`CxxPyy`，如 `C02P01`）—— 排序与导出的锚点。
+   *
+   * 编号**不写在 frontmatter**（会被 `gen-skill-library.mjs` 重新生成时覆盖），
+   * 而是集中在 `skill-codes.ts`；未登记编号时缺省。
+   */
+  code?: string
+  /** 中文名（与 `code` 同表维护）—— 界面与导出展示用。 */
+  label?: string
   type: SkillType
   status: SkillStatus
   version: string
@@ -167,6 +177,8 @@ export function parseSkillDocument(
   const skillTitle = parsed.title?.replace(/^Skill:\s*/i, '') ?? null
   const id = (absPath.split('/').pop() ?? '').replace(/\.md$/, '')
   const category = normalizeCategoryId(fm.category)
+  const code = skillCode(id)
+  const label = skillLabel(id)
   const type: SkillType =
     fm.type === 'system' || fm.type === 'user' || fm.type === 'derived' ? (fm.type as SkillType) : typeDefault
 
@@ -174,6 +186,8 @@ export function parseSkillDocument(
     id,
     name: skillTitle || fm.name || id,
     ...(category ? { category } : {}),
+    ...(code ? { code } : {}),
+    ...(label ? { label } : {}),
     type,
     status: normalizeStatus(fm.status),
     version: fm.version || '1.0',
@@ -253,7 +267,9 @@ export function listSystemSkills(root?: string): SkillDocument[] {
     const doc = parseSkillDocument(abs, `${SKILLS_DIR}/${rel}`, 'system')
     if (doc) docs.push({ ...doc, type: 'system', editable: false })
   }
-  return docs.sort((a, b) => a.id.localeCompare(b.id))
+  // ⚠️ 按**编号排序**，不是 id 字母序：字母序会把消融（实验阶段）排到理解问题之前，
+  // 与研究进程无关。编号表（`skill-codes.ts`）是研究顺序的单一事实来源。
+  return docs.sort((a, b) => skillSortKey(a.id).localeCompare(skillSortKey(b.id)))
 }
 
 /**

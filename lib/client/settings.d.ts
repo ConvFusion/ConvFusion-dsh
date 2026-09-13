@@ -79,12 +79,20 @@ interface HostSection {
 interface HostSkill {
     skillId: string;
     skillName: string;
+    /** 唯一编号（`CxxPyy`）。 */
+    code?: string;
+    /** 中文名。 */
+    label?: string;
     sections: HostSection[];
     overriddenCount: number;
 }
 interface HostCategory {
     categoryId: string;
     categoryName: string;
+    /** 类别编号（`C01`–`C09`，按研究过程排序）。 */
+    code?: string;
+    /** 类别中文名。 */
+    label?: string;
     skills: HostSkill[];
     overriddenCount: number;
     pointCount: number;

@@ -50,6 +50,10 @@ export interface CustomizationPoint {
     skillId: string;
     /** Skill 显示名。 */
     skillName: string;
+    /** Skill 唯一编号（`CxxPyy`）—— 设置页展示与排序的锚点。 */
+    skillCode?: string;
+    /** Skill 中文名 —— 设置页展示。 */
+    skillLabel?: string;
     /** 所属类别（顶层大类，设置面板的一级分组）。 */
     category: string;
     /** 可定制章节标题（如 `Research Method`）。 */
@@ -143,6 +147,10 @@ export interface CategoryCustomization {
     categoryId: string;
     /** 类别显示名（如 `Literature`）。 */
     categoryName: string;
+    /** 类别编号（`C01`–`C09`，按研究过程排序）。 */
+    categoryCode?: string;
+    /** 类别中文名（如「文献」）。 */
+    categoryLabel?: string;
     points: CustomizationPoint[];
     /** 该类别下已覆盖的数量。 */
     overriddenCount: number;

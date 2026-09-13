@@ -1,1 +1,1 @@
-{"version":3,"file":"protocol.js","sourceRoot":"","sources":["../src/protocol.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;;;;GAmBG;AACH,MAAM,CAAC,MAAM,aAAa,GAAG,CAAC,CAAA;AAE9B,8BAA8B;AAC9B,MAAM,CAAC,MAAM,mBAAmB,GAAG,UAAU,CAAA"}
+{"version":3,"file":"protocol.js","sourceRoot":"","sources":["../src/protocol.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;;;;;;;;;;;;;GA4BG;AACH,MAAM,CAAC,MAAM,aAAa,GAAG,CAAC,CAAA;AAE9B,8BAA8B;AAC9B,MAAM,CAAC,MAAM,mBAAmB,GAAG,UAAU,CAAA"}

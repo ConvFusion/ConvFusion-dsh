@@ -44,12 +44,14 @@
  * ConvFusion 不选模块、不排步骤、不跑 Agent。
  */
 import type { Context } from '@deepseek-ai/cordis';
+import type { SkillCustomizationStore } from './skill-customization.js';
 /** 品牌展示。 */
 export declare const RESEARCH_LABEL = "/research";
 /**
  * 注册 `/research`（ConvFusion 的唯一命令）。
  *
+ * @param customizationStore 用户定制来源：导出研究方法时要导**生效版本**（基线 + 定制）
  * @returns disposer 数组（命令运行时缺失时返回 `null`，不影响插件其余功能）。
  */
-export declare function defineResearchCommand(ctx: Context, resolveCurrentWorkspace: () => string): (() => void)[] | null;
+export declare function defineResearchCommand(ctx: Context, resolveCurrentWorkspace: () => string, customizationStore?: SkillCustomizationStore): (() => void)[] | null;
 //# sourceMappingURL=commands.d.ts.map

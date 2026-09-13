@@ -131,6 +131,10 @@ export interface SettingsSkill {
   skillId: string
   /** 显示名。 */
   skillName: string
+  /** 唯一编号（`CxxPyy`）—— 界面展示与排序用。 */
+  code?: string
+  /** 中文名 —— 界面展示用。 */
+  label?: string
   sections: SettingsSection[]
   /** 该 Skill 已覆盖的章节数。 */
   overriddenCount: number
@@ -140,6 +144,10 @@ export interface SettingsSkill {
 export interface SettingsCategory {
   categoryId: string
   categoryName: string
+  /** 类别编号（`C01`–`C09`，按研究过程排序）。 */
+  code?: string
+  /** 类别中文名（如「文献」）。 */
+  label?: string
   skills: SettingsSkill[]
   /** 该类别下已覆盖的可定制项数量。 */
   overriddenCount: number
@@ -259,6 +267,8 @@ export function buildSettingsState(
       const skill = bySkill.get(point.skillId) ?? {
         skillId: point.skillId,
         skillName: point.skillName,
+        ...(point.skillCode ? { code: point.skillCode } : {}),
+        ...(point.skillLabel ? { label: point.skillLabel } : {}),
         sections: [],
         overriddenCount: 0,
       }
@@ -274,7 +284,11 @@ export function buildSettingsState(
     return {
       categoryId: cat.categoryId,
       categoryName: cat.categoryName,
-      skills: [...bySkill.values()].sort((a, b) => a.skillName.localeCompare(b.skillName)),
+      ...(cat.categoryCode ? { code: cat.categoryCode } : {}),
+      ...(cat.categoryLabel ? { label: cat.categoryLabel } : {}),
+      // ⚠️ 按**编号**排序（`CxxPyy`），不是 skillName 字母序 ——
+      // 这是设置页技能列表的实际顺序来源；字母序会让实验阶段的方法排到最前面。
+      skills: [...bySkill.values()].sort((a, b) => (a.code ?? 'Z').localeCompare(b.code ?? 'Z')),
       overriddenCount: cat.overriddenCount,
       pointCount: cat.points.length,
     }
