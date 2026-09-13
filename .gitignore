@@ -13,6 +13,13 @@ package-lock.json
 /dev-notes/
 # 研究运行数据（ConvFusion 研究根目录 + 其备份，当前工作区本地测试用，不提交）
 /workspace*/
+# 研究方法导出产物：把技能库拼接成一个文件，可能含研究者自有方法（商业秘密），不提交。
+#
+# ⚠️ 这两条规则**实际不会单独命中** —— 父目录 `/workspace*/` 已被忽略，而 Git 不会进入
+# 被忽略的目录，所以目录内的规则根本不会被评估（`git check-ignore` 也会报告 line 15）。
+# 它们的作用是**文档化意图**，以及万一有人把 `/workspace*/` 放宽时的兜底。
+/workspace/research/methods-export.md
+/workspace/research/methods-*.md
 # 下次研究的相关论文（用户放置的材料，不提交）
 /user_profile/
 # 忽略根目录开发文档，保留README和插件技能文档
