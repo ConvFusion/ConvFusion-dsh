@@ -45,7 +45,19 @@ export declare const INTERMEDIATE_TEX = "main_intermediate.tex";
 export type PaperTemplate = 'conference' | 'journal';
 /** 归一化模板名（未知值收敛到会议模板）。 */
 export declare function normalizeTemplate(raw?: string): PaperTemplate;
-/** 转义 LaTeX 中会引发编译问题的 Unicode 标点（旧版 `sanitize_unicode_chars`）。 */
+/**
+ * 转义 LaTeX 中会引发编译问题的 Unicode 标点与符号（旧版 `sanitize_unicode_chars`）。
+ *
+ * ⚠️ **为什么必须逐字符映射，而不是"过滤掉非 ASCII"**：
+ * LaTeX 对不认识的 Unicode 字符是**静默丢弃**的，而其中一些字符**承载语义**。
+ * 实测事故：消融表里的 `−0.207`（U+2212 减号）被丢弃后变成 `0.207`，
+ * 把"下降 0.207"渲染成"0.207"，直接反转结论方向；`≥2` 变成 `2`；
+ * `0→1e-3` 变成 `01e-3`；`Cohen's κ` 变成 `Cohen's `。
+ * 因此这里按"语义等价"映射，**绝不删除**既有信息的字符。
+ *
+ * 数学/希腊字母映射到数学模式命令（`amsmath`/`amssymb` 由模板提供）。
+ * emoji 无 LaTeX 字体支持，映射为文本标签以保留"是否达标"的判断。
+ */
 export declare function sanitizeUnicodeChars(text: string): string;
 /**
  * 纯文本安全化（旧版 `safe_text`，只用于 title / abstract）。

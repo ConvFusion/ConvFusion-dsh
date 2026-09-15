@@ -71,9 +71,35 @@ const PREAMBLE_PACKAGES = [
   '\\usepackage{float}',
 ].join('\n')
 
-/** 转义 LaTeX 中会引发编译问题的 Unicode 标点（旧版 `sanitize_unicode_chars`）。 */
+/**
+ * 转义 LaTeX 中会引发编译问题的 Unicode 标点与符号（旧版 `sanitize_unicode_chars`）。
+ *
+ * ⚠️ **为什么必须逐字符映射，而不是"过滤掉非 ASCII"**：
+ * LaTeX 对不认识的 Unicode 字符是**静默丢弃**的，而其中一些字符**承载语义**。
+ * 实测事故：消融表里的 `−0.207`（U+2212 减号）被丢弃后变成 `0.207`，
+ * 把"下降 0.207"渲染成"0.207"，直接反转结论方向；`≥2` 变成 `2`；
+ * `0→1e-3` 变成 `01e-3`；`Cohen's κ` 变成 `Cohen's `。
+ * 因此这里按"语义等价"映射，**绝不删除**既有信息的字符。
+ *
+ * 数学/希腊字母映射到数学模式命令（`amsmath`/`amssymb` 由模板提供）。
+ * emoji 无 LaTeX 字体支持，映射为文本标签以保留"是否达标"的判断。
+ */
 export function sanitizeUnicodeChars(text: string): string {
-  return text
+  // 先保护**已有**数学区域：替换会在文本里插入 `$...$`，若落在原有 `$...$` 内部
+  // 会产生嵌套定界符，改变数学模式边界。
+  const mathRegions: string[] = []
+  let out = text
+    .replace(/\$\$[\s\S]*?\$\$/g, (m) => {
+      mathRegions.push(m)
+      return `\u0000UMATH${mathRegions.length - 1}\u0000`
+    })
+    .replace(/\$[^$\n]*\$/g, (m) => {
+      mathRegions.push(m)
+      return `\u0000UMATH${mathRegions.length - 1}\u0000`
+    })
+
+  out = out
+    // ── 标点 ──
     .replace(/\u2014/g, '---') // em dash
     .replace(/\u2013/g, '--') // en dash
     .replace(/\u2019/g, "'") // ’
@@ -82,6 +108,98 @@ export function sanitizeUnicodeChars(text: string): string {
     .replace(/\u201d/g, "''") // ”
     .replace(/\u2022/g, '$\\bullet$') // •
     .replace(/\u00a0/g, ' ') // nbsp
+    .replace(/\u2026/g, '\\ldots{}') // …
+    .replace(/\u2032/g, "$'$") // ′
+    .replace(/\u2033/g, "$''$") // ″
+    // ── 数学关系与运算（缺失会导致语义反转）──
+    .replace(/\u2212/g, '-') // − minus sign（文本模式下即正确减号）
+    .replace(/\u2265/g, '$\\geq$') // ≥
+    .replace(/\u2264/g, '$\\leq$') // ≤
+    .replace(/\u2260/g, '$\\neq$') // ≠
+    .replace(/\u2248/g, '$\\approx$') // ≈
+    .replace(/\u2192/g, '$\\rightarrow$') // →
+    .replace(/\u2190/g, '$\\leftarrow$') // ←
+    .replace(/\u21d2/g, '$\\Rightarrow$') // ⇒
+    .replace(/\u00d7/g, '$\\times$') // ×
+    .replace(/\u00f7/g, '$\\div$') // ÷
+    .replace(/\u00b1/g, '$\\pm$') // ±
+    .replace(/\u2208/g, '$\\in$') // ∈
+    .replace(/\u2209/g, '$\\notin$') // ∉
+    .replace(/\u221e/g, '$\\infty$') // ∞
+    .replace(/\u221d/g, '$\\propto$') // ∝
+    .replace(/\u2211/g, '$\\sum$') // ∑
+    .replace(/\u220f/g, '$\\prod$') // ∏
+    .replace(/\u221a/g, '$\\surd$') // √
+    .replace(/\u222a/g, '$\\cup$') // ∪
+    .replace(/\u2229/g, '$\\cap$') // ∩
+    .replace(/\u2286/g, '$\\subseteq$') // ⊆
+    .replace(/\u2205/g, '$\\emptyset$') // ∅
+    .replace(/\u00b0/g, '$^\\circ$') // °
+    // ── 希腊字母（论文高频；amsmath/amssymb 提供）──
+    .replace(/\u03b1/g, '$\\alpha$')
+    .replace(/\u03b2/g, '$\\beta$')
+    .replace(/\u03b3/g, '$\\gamma$')
+    .replace(/\u03b4/g, '$\\delta$')
+    .replace(/\u03b5/g, '$\\epsilon$')
+    .replace(/\u03b6/g, '$\\zeta$')
+    .replace(/\u03b7/g, '$\\eta$')
+    .replace(/\u03b8/g, '$\\theta$')
+    .replace(/\u03b9/g, '$\\iota$')
+    .replace(/\u03ba/g, '$\\kappa$')
+    .replace(/\u03bb/g, '$\\lambda$')
+    .replace(/\u03bc/g, '$\\mu$')
+    .replace(/\u03bd/g, '$\\nu$')
+    .replace(/\u03be/g, '$\\xi$')
+    .replace(/\u03c0/g, '$\\pi$')
+    .replace(/\u03c1/g, '$\\rho$')
+    .replace(/\u03c2/g, '$\\varsigma$')
+    .replace(/\u03c3/g, '$\\sigma$')
+    .replace(/\u03c4/g, '$\\tau$')
+    .replace(/\u03c5/g, '$\\upsilon$')
+    .replace(/\u03c6/g, '$\\phi$')
+    .replace(/\u03c7/g, '$\\chi$')
+    .replace(/\u03c8/g, '$\\psi$')
+    .replace(/\u03c9/g, '$\\omega$')
+    .replace(/\u0393/g, '$\\Gamma$')
+    .replace(/\u0394/g, '$\\Delta$')
+    .replace(/\u0398/g, '$\\Theta$')
+    .replace(/\u039b/g, '$\\Lambda$')
+    .replace(/\u039e/g, '$\\Xi$')
+    .replace(/\u03a0/g, '$\\Pi$')
+    .replace(/\u03a3/g, '$\\Sigma$')
+    .replace(/\u03a6/g, '$\\Phi$')
+    .replace(/\u03a8/g, '$\\Psi$')
+    .replace(/\u03a9/g, '$\\Omega$')
+    // ── 排版/货币（用纯文本等价物，避免依赖额外宏包）──
+    .replace(/\u00a9/g, '(c)') // ©
+    .replace(/\u00ae/g, '(R)') // ®
+    .replace(/\u2122/g, '(TM)') // ™
+    .replace(/\u00a7/g, '\\S{}') // §
+    .replace(/\u00b6/g, '\\P{}') // ¶
+    .replace(/\u20ac/g, 'EUR') // €
+    .replace(/\u00a3/g, 'GBP') // £
+    .replace(/\u00a5/g, 'JPY') // ¥
+    // ── emoji / 状态标记 → 文本标签（保留语义，不静默丢弃）──
+    .replace(/\u26a0\ufe0f?/g, '[!]') // ⚠️
+    .replace(/\u2705/g, '[yes]') // ✅
+    .replace(/\u274c/g, '[no]') // ❌
+    .replace(/\u2b50/g, '[*]') // ⭐
+    .replace(/\u2714\ufe0f?/g, '[yes]') // ✔
+    .replace(/\u2717/g, '[no]') // ✗
+    .replace(/\ud83d\udd11/g, '[key]') // 🔑
+    .replace(/\ud83d\udcca/g, '[chart]') // 📊
+    .replace(/\ud83d\udcc4/g, '[file]') // 📄
+    .replace(/\ud83c\udfaf/g, '[target]') // 🎯
+    .replace(/\ud83d\udd0d/g, '[search]') // 🔍
+    // ── 零宽字符与变体选择符：无渲染意义，删除 ──
+    .replace(/[\u200b\u200c\u200d\u2060\ufeff]/g, '')
+    .replace(/\ufe0f/g, '')
+
+  // 还原被保护的数学区域
+  for (let i = 0; i < mathRegions.length; i++) {
+    out = out.split(`\u0000UMATH${i}\u0000`).join(mathRegions[i])
+  }
+  return out
 }
 
 /**
@@ -93,7 +211,9 @@ export function sanitizeUnicodeChars(text: string): string {
  * 旧版优先用 `pylatexenc`（可选依赖）；这里直接移植其 fallback 语义。
  */
 export function safeText(text: string | undefined): string {
-  const src = text ?? ''
+  // title / abstract / authors 与正文一样会带 Unicode（`≥`、`κ`、`⚠️` 等）。
+  // 不做这层映射，它们会在 PDF 里静默消失 —— 论文标题里少一个符号读者是看得见的。
+  const src = sanitizeUnicodeChars(text ?? '')
   const mathRegions: string[] = []
   const protect = (m: string): string => {
     mathRegions.push(m)
