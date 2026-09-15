@@ -96,6 +96,8 @@ export interface PaperMetadata {
    */
   researchStateVersion?: string
   authors?: string
+  /** 作者单位（多个单位用 `;` 分隔）。 */
+  affiliation?: string
   targetVenue?: string
   researchDomain?: string
   /** 研究方向标签（如 d1/d2/d3，对应研究线路） */

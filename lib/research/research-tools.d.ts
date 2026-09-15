@@ -81,7 +81,23 @@ export declare function parseBibEntries(text: string): {
  * 取 `# 标题` 作 title，`## Abstract` 作 abstract，`## References` 作参考文献，
  * 其余章节按原顺序进入正文（v2 论文含 Results / Discussion，模板按需生成 `\section`）。
  */
-export declare function buildComposeInput(source: string, template: string): ComposeInput;
+/**
+ * 从 `metadata.md` 读论文的作者块信息（authors / affiliation / keywords）。
+ *
+ * 为什么需要它：论文正文（`paper.md`）里**没有**作者声明的位置，作者属于元数据。
+ * 不读 metadata，模板就永远渲染默认的 "Authors / Affiliation" —— 论文能编译、
+ * 能读，署名却是空的，属于典型的事后才发现型缺陷。
+ */
+export declare function readPaperMeta(paperDir: string): {
+    authors?: string;
+    affiliation?: string;
+    keywords?: string[];
+};
+export declare function buildComposeInput(source: string, template: string, meta?: {
+    authors?: string;
+    affiliation?: string;
+    keywords?: string[];
+}): ComposeInput;
 /** 供测试/调试：Open Questions（不经过工具层）。 */
 export { openQuestions };
 //# sourceMappingURL=research-tools.d.ts.map

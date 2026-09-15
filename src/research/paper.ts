@@ -96,6 +96,7 @@ function parseMetadata(source: string | null, fallbackId: string): PaperMetadata
     ...(fm.research_project ? { researchProject: fm.research_project } : {}),
     ...(fm.research_state_version ? { researchStateVersion: fm.research_state_version } : {}),
     ...(fm.authors ? { authors: fm.authors } : {}),
+    ...(fm.affiliation ? { affiliation: fm.affiliation } : {}),
     ...(fm.target_venue ? { targetVenue: fm.target_venue } : {}),
     ...(fm.research_domain ? { researchDomain: fm.research_domain } : {}),
     ...(fm.research_track ? { researchTrack: String(fm.research_track).toLowerCase().trim() } : {}),
@@ -116,6 +117,7 @@ export function serializeMetadata(meta: PaperMetadata): string {
     research_project: meta.researchProject,
     research_state_version: meta.researchStateVersion,
     authors: meta.authors,
+    affiliation: meta.affiliation,
     target_venue: meta.targetVenue,
     research_domain: meta.researchDomain,
     research_track: meta.researchTrack,
@@ -132,6 +134,7 @@ export function serializeMetadata(meta: PaperMetadata): string {
   if (meta.researchStateVersion) lines.push(`- **Based on research state**: v${meta.researchStateVersion}`)
   if (meta.targetVenue) lines.push(`- **Target venue**: ${meta.targetVenue}`)
   if (meta.authors) lines.push(`- **Authors**: ${meta.authors}`)
+  if (meta.affiliation) lines.push(`- **Affiliation**: ${meta.affiliation}`)
   return `${front}\n\n${lines.join('\n')}\n`
 }
 

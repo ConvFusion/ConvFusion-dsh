@@ -289,7 +289,18 @@ export function stripMarkdownHeaders(text: string | undefined): string {
   out = out.replace(/^__(.+?)__/gm, '$1')
   // 转义后的版本 \*\*
   out = out.replace(/^\\\*\\\*(.+?)\\\*\\\*/gm, '$1')
-  // 行首 Markdown 标题（# / \#，含 "## 3. Method" 形态）
+  // 行首 Markdown 标题。分两类处理，因为它们的归宿不同：
+  //   `### X` / `#### X` 是**子小节**，在论文里承载真实结构（如 "3.1 Overview"）
+  //     → 转成 \subsection* / \subsubsection* 保留层次。
+  //     用**带星号**的形式：论文里的子小节标题自带编号（"3.1"、"4.2"），
+  //     若用自动编号的 \subsection，IEEEtran 会再加一层 "A."，渲染成 "A. 3.1 …"（实测冗余）。
+  //     作者自带编号也让正文里的 "Section 5.3" 一类引用与标题始终对得上。
+  //     此前这些行被无差别删除，导致子小节标题**全部消失**：正文段落还在，
+  //     读者却看不出方法被分成了哪几块。
+  //   `## X` / `# X` 是章节标题，已由模板的 \section 承载；正文里再出现即为标记泄漏，删除。
+  // 顺序要紧：先 4 个 #、再 3 个 #，最后才删除剩余的 1–2 个 #。
+  out = out.replace(/^####\s+(.+?)\s*$/gm, '\\subsubsection*{$1}')
+  out = out.replace(/^###\s+(.+?)\s*$/gm, '\\subsection*{$1}')
   out = out.replace(/^(?:\\#|#)+\s+.*$/gm, '')
   // 统计摘要行（旧版遗留）
   out = out.replace(/^.*?(Reference Count|Total Word Count|Number of Paragraphs).*$/gm, '')
@@ -330,6 +341,15 @@ export function sanitizeLatexMath(text: string): string {
   }
 
   let out = text
+  // 0) 命令参数里的**字面名字**（图片文件名 / 引用键 / 标签）：这些参数中的 `_`、`%`、`&`
+  //    是名字本身的一部分，不是排版符号。转义它们会让 LaTeX 找不到目标。
+  //    实测事故：`\includegraphics{figures/fig1_method.pdf}` 被转成
+  //    `figures/fig1\_method.pdf` —— **图片静默不渲染**：PDF 里只剩图注和空白，
+  //    而 `\includegraphics` 失败不报 error，编译仍然 0 错误。这类缺陷肉眼极难发现。
+  out = out.replace(
+    /(\\(?:includegraphics|label|ref|eqref|cite|citep|citet|input|include|bibliography)\s*(?:\[[^\]]*\])?\s*\{)([^}]*)(\})/g,
+    (_m: string, pre: string, arg: string, post: string) => `${pre}${protect(arg)}${post}`,
+  )
   // 1) 数学环境
   out = out.replace(new RegExp(`\\\\begin\\{${MATH_ENVS}\\}[\\s\\S]*?\\\\end\\{${MATH_ENVS}\\}`, 'g'), protect)
   // 2) display math

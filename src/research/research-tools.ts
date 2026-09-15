@@ -62,7 +62,7 @@ import {
   scanUnsafeTokens,
   type CompileError,
 } from './latex-compile.js'
-import { parseSections, stripFrontmatter, findSection } from './markdown.js'
+import { parseSections, stripFrontmatter, findSection, parseFrontmatter } from './markdown.js'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -91,7 +91,7 @@ import {
   type EvidenceSource,
   type EvidenceStatus,
 } from './research-data.js'
-import { DEFAULT_PAPER_ID, PAPER_MATURITY_DIMENSIONS, PAPER_TYPES } from './paper-data.js'
+import { DEFAULT_PAPER_ID, PAPER_FILES, PAPER_MATURITY_DIMENSIONS, PAPER_TYPES } from './paper-data.js'
 import { createPaper, getActivePaperId, listPapers, readPaper, resolvePaperParameter, setActivePaperId } from './paper.js'
 import { detectAndRecordGaps, prioritizeGaps, recommendCapabilities, listPaperGaps } from './paper-gaps.js'
 import { paperStatusSummary, proposeRevision, readPaperMaturity, suggestPaperMaturity, writePaperMaturity } from './paper-evolution.js'
@@ -1628,7 +1628,7 @@ export function defineResearchTools(
           if (!existsSync(mdPath)) return fail(`论文正文不存在：papers/${paperId}/paper.md`)
           const source = readFileSync(mdPath, 'utf8')
           const template = normalizeTemplate(typeof a.template === 'string' ? a.template : undefined)
-          const input = buildComposeInput(source, template)
+          const input = buildComposeInput(source, template, readPaperMeta(paperDir))
           const result = composeDocument(input)
 
           if (!existsSync(latexDir)) mkdirSync(latexDir, { recursive: true })
@@ -1797,7 +1797,35 @@ export function parseBibEntries(text: string): { entries: BibEntry[]; numberToKe
  * 取 `# 标题` 作 title，`## Abstract` 作 abstract，`## References` 作参考文献，
  * 其余章节按原顺序进入正文（v2 论文含 Results / Discussion，模板按需生成 `\section`）。
  */
-export function buildComposeInput(source: string, template: string): ComposeInput {
+/**
+ * 从 `metadata.md` 读论文的作者块信息（authors / affiliation / keywords）。
+ *
+ * 为什么需要它：论文正文（`paper.md`）里**没有**作者声明的位置，作者属于元数据。
+ * 不读 metadata，模板就永远渲染默认的 "Authors / Affiliation" —— 论文能编译、
+ * 能读，署名却是空的，属于典型的事后才发现型缺陷。
+ */
+export function readPaperMeta(
+  paperDir: string,
+): { authors?: string; affiliation?: string; keywords?: string[] } {
+  const p = join(paperDir, PAPER_FILES.metadata)
+  if (!existsSync(p)) return {}
+  const fm = parseFrontmatter(readFileSync(p, 'utf8'))
+  const keywords = (fm.keywords ?? '')
+    .split(/[;,]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return {
+    ...(fm.authors ? { authors: fm.authors } : {}),
+    ...(fm.affiliation ? { affiliation: fm.affiliation } : {}),
+    ...(keywords.length > 0 ? { keywords } : {}),
+  }
+}
+
+export function buildComposeInput(
+  source: string,
+  template: string,
+  meta: { authors?: string; affiliation?: string; keywords?: string[] } = {},
+): ComposeInput {
   const body = stripFrontmatter(source)
   const parsed = parseSections(body)
   /**
@@ -1815,6 +1843,12 @@ export function buildComposeInput(source: string, template: string): ComposeInpu
   return {
     template: normalizeTemplate(template),
     title: parsed.title ?? 'Untitled',
+    // 作者信息来自 `metadata.md` —— 论文正文里没有作者块的位置。
+    // 此前这里不读任何来源，模板于是永远渲染默认的 "Authors / Affiliation"：
+    // 论文能编译、能读，署名却是空的，属于典型的"事后才发现"缺陷。
+    ...(meta.authors ? { authors: meta.authors } : {}),
+    ...(meta.affiliation ? { affiliation: meta.affiliation } : {}),
+    ...(meta.keywords && meta.keywords.length > 0 ? { keywords: meta.keywords } : {}),
     abstract,
     sections,
     bibliography: bib.entries,
