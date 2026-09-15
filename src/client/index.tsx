@@ -1,8 +1,12 @@
 /**
- * ConvFusion 2.0 — browser half（挂载【设置】-【ConvFusion】）
+ * ConvFusion 2.0 — browser half（设置页 + 会话头部的研究进展按钮）
  *
- * 只做三件事：拿服务、注册一个 `settings.section`、把设置页本体交给它渲染。
- * 设置页自身的逻辑在 `./settings.js`。
+ * 这个文件只做装配：
+ *
+ * ```text
+ * settings.section                       ← 【设置】-【ConvFusion】（本体在 ./settings.js）
+ * conversation.session.header.utilities  ← 顶部「研究进展」按钮（本体在 ./progress-panel.js）
+ * ```
  *
  * ## 两个容易踩的坑（重建时必看，来自 v0.1.5 的实测记录）
  *
@@ -18,16 +22,15 @@ import logoUrl from '../../assets/favicon.svg'
 import { ConvFusionProjectSettings, loadSettingsState } from './settings.js'
 import { applyNavIcon, installNavIcon } from './nav-icon.js'
 import {
-  ResearchProgressCard,
-  ResearchProgressWarmer,
-  selectResearchTurn,
-  resetProgressCardState,
-} from './progress-card.js'
+  ResearchProgressButton,
+  readProgressValue,
+  shortenPath,
+} from './progress-panel.js'
 
 /** 供离线测试直接调用（bundle 的 `apply`/`inject` 之外再导出这些）。 */
 export { loadSettingsState, applyNavIcon, installNavIcon, logoUrl }
 export { preferredCategory, preferredSection, preferredSkill } from './settings.js'
-export { ResearchProgressCard, ResearchProgressWarmer, selectResearchTurn, resetProgressCardState }
+export { ResearchProgressButton, readProgressValue, shortenPath }
 
 /* ════════════════════════════════════════════════════════════════════════
  * 服务的结构化契约（镜像，不 import：见文件头第 2 条）
@@ -56,6 +59,11 @@ interface SlotRegisterOptions {
   /**
    * chain 型槽位（如 `conversation.chat.turnTail`）的选择器：
    * 按升序尝试，**首个返回非 null** 的条目渲染，全为 null 则回落到拥有者的默认。
+   *
+   * ⚠️ **不要用它做"按会话判定"**：selector 只拿得到 owner props（例如 turnTail 的
+   * `{turn, seq, openFile}`），**不含会话身份**；用它路由就得引入进程级全局变量，
+   * 结果会命中所有会话（2026-09 实测故障，见 `progress-panel.tsx` 文件头）。
+   * 按会话的显隐请用 **session 作用域的 list 槽位**（组件能拿到 `sessionId`）。
    */
   select?: (owner: unknown) => unknown | null
 }
@@ -109,24 +117,18 @@ export function apply(ctx: ClientContext): void {
     ),
   )
 
-  // ── 研究进展卡（`v2-Progress.md`：对话结束后、在对话流里显示）──────────
-  // 宿主把回合报告算好（只来自磁盘真实资产），这里只负责在**研究会话**的回合尾部
-  // 渲染成卡片。为什么不用会话消息：DSH 必然把 plugin 来源的消息显示成"上下文注入"。
-  //
-  // 两个槽位分工：
-  //   · `conversation.input.dock`（list = 追加式）→ 预热"本会话是否研究项目"，渲染 null；
-  //   · `conversation.chat.turnTail`（chain = 首个命中者）→ 进度卡本体。
-  //     selector 只在研究会话命中，其它回合让位给官方 `deliverables`。
-  ctx.slots.inject('conversation.input.dock', () =>
+  // ── 研究进展（`v2-Progress.md`：顶部按钮 → 展开面板）──────────────────
+  // 为什么不再注入对话流：回合尾部的 `conversation.chat.turnTail` 是**链式**槽位，
+  // 它的 selector 只拿得到 `{turn, seq, openFile}` —— **没有会话身份**，于是"这个会话
+  // 是不是研究项目"只能靠进程级全局变量猜，结果会命中所有会话（旧实现的实际故障）。
+  // `conversation.session.header.utilities` 是 **session 作用域的 list 槽位**：
+  // 追加式（不动官方条目），组件拿得到自己会话的 `sessionId`，判定天然按会话正确。
+  // 非研究工作区连按钮都不渲染；点击后才由宿主（`/dsh-convfusion/progress/workspace`）
+  // 按磁盘真实资产算一份当前进展。
+  ctx.slots.inject('conversation.session.header.utilities', () =>
     ctx.slots.register(
-      { name: 'conversation.input.dock', id: 'convfusion-progress-warm', order: 900 },
-      ResearchProgressWarmer as unknown as React.ComponentType<unknown>,
-    ),
-  )
-  ctx.slots.inject('conversation.chat.turnTail', () =>
-    ctx.slots.register(
-      { name: 'conversation.chat.turnTail', id: 'convfusion-progress-card', order: -100, select: selectResearchTurn },
-      ResearchProgressCard as unknown as React.ComponentType<unknown>,
+      { name: 'conversation.session.header.utilities', id: 'convfusion-progress', order: 20 },
+      ResearchProgressButton as unknown as React.ComponentType<unknown>,
     ),
   )
 

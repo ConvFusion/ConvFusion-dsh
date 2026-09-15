@@ -44,4 +44,19 @@ export declare function sessionStoreOf(ctx: ServiceLookupLike): SessionStoreLike
  *          调用方负责决定兜底策略，避免又把"服务进程启动目录"当研究会话）
  */
 export declare function resolveSessionWorkspace(ctx: ServiceLookupLike, sessionId: string | undefined): string | undefined;
+/**
+ * 会话 id → { 会话工作区, **研究根目录** }（新布局下研究根 = `<会话工作区>/workspace`）。
+ *
+ * 为什么单独有这个函数：`systemPrompt` 的 `section`/`context` 贡献者**每次组装**求值，
+ * 而它们过去用的是入口注入的**全局**解析（依赖 `agent/pre-step` 同步的全局 cwd）。
+ * 多个会话并行时那个全局值可能已被别的会话覆盖 —— 于是研究会话的上下文会注入到
+ * 普通对话里（与"进度卡显示在所有对话里"同一类故障）。
+ *
+ * @returns 拿不到会话身份 / 会话没有 cwd 时返回 `undefined`：**不**退化成
+ *          `process.cwd()`，由调用方决定兜底（通常退化为旧的全局解析）。
+ */
+export declare function researchTargetsForSession(ctx: ServiceLookupLike, sessionId: string | undefined): {
+    session: string;
+    root: string;
+} | undefined;
 //# sourceMappingURL=session-workspace.d.ts.map

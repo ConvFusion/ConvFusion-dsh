@@ -7,7 +7,7 @@
  * agent/pre-step（新一轮开始）→ 记下"本轮开始前"的快照
  * agent/turn-stopping（本轮结束）→ 采新快照 → 求差 → 存成回合报告（内存）
  *                                          ↓
- *                        界面 RPC 读走 → 客户端在对话流尾部渲染进度卡
+ *                        顶部「研究进展」按钮的面板读走 → 渲染"最近一轮变化"
  * ```
  *
  * ## 为什么报告不再进会话日志（2026-09 用户拍板）
@@ -18,9 +18,18 @@
  * 而能进入对话表面的事件类型只有 4 种（`system/message` / `user/message` /
  * `assistant/message` / `tool/result`），**无法自定义**事件类型来另开一种渲染。
  *
- * 所以按 `v2-Progress.md` 的要求（对话结束后、在**对话流**里显示研究进展），
- * 展示完全交给客户端：`conversation.chat.turnTail`（回合尾部、按 selector 命中渲染）。
- * 宿主只负责**算准**并把结构化报告交给界面 RPC —— 计算仍然只来自磁盘上的真实资产。
+ * ## 展示面（2026-09 二次改版，别再走回头路）
+ *
+ * ```text
+ * ❌ conversation.chat.turnTail（链式槽位）—— selector 只拿得到 {turn, seq, openFile}，
+ *    没有会话身份，只能靠进程级全局变量猜"当前是不是研究会话"，于是命中**所有**会话
+ * ✅ conversation.session.header.utilities（session 作用域的 list 槽位）——
+ *    组件拿得到自己会话的 sessionId，判定按会话正确（见 client/progress-panel.tsx）
+ * ```
+ *
+ * 因此本文件只剩两件事：**算准**（只来自磁盘真实资产）并按会话 id 记下回合报告，
+ * 供 `progress/workspace` 端点取"最近一轮变化"。面板的 A/C 段不依赖回合报告
+ * （每次点开都由 `progress.ts` 从磁盘重算），所以没有任何"必须跑完一轮才看得到"的限制。
  *
  * ## 两条产品约束
  *

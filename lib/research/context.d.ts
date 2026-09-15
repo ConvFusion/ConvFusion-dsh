@@ -120,6 +120,19 @@ export declare class ResearchContextService extends Service {
     /** 最近一次解析出的 workspace 路径。 */
     get workspace(): string;
     /**
+     * 本次**组装所属会话**的研究根目录 + 会话工作区。
+     *
+     * ⚠️ 这里必须按会话解析，而不是用入口注入的全局解析（`resolveWorkspace`）：
+     * provider 是每次组装求值的，而全局解析依赖 `agent/pre-step` 同步的一个全局 cwd ——
+     * 多个会话并行时它可能已被别的会话覆盖，于是研究会话的上下文会注入到**普通对话**里
+     * （与进度卡"显示在所有对话里"同一类故障，2026-09 实测）。
+     *
+     * 权威来源是 `context.agent.id`（= SessionId）→ 会话存储里的 `header.cwd`
+     * （见 `session-workspace.ts`）。拿不到会话身份（诊断组装、子 Agent 尚未注册）时
+     * **退化**为旧的全局解析，保持可用性 —— 但绝不把"插件进程启动目录"当研究会话。
+     */
+    private targetsFor;
+    /**
      * 注册到 Harness 的 system prompt 组装管线。
      *
      * 返回 disposer 数组，由调用方（插件入口）按 Cordis effect 语义管理。

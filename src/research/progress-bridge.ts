@@ -7,7 +7,7 @@
  * agent/pre-step（新一轮开始）→ 记下"本轮开始前"的快照
  * agent/turn-stopping（本轮结束）→ 采新快照 → 求差 → 存成回合报告（内存）
  *                                          ↓
- *                        界面 RPC 读走 → 客户端在对话流尾部渲染进度卡
+ *                        顶部「研究进展」按钮的面板读走 → 渲染"最近一轮变化"
  * ```
  *
  * ## 为什么报告不再进会话日志（2026-09 用户拍板）
@@ -18,9 +18,18 @@
  * 而能进入对话表面的事件类型只有 4 种（`system/message` / `user/message` /
  * `assistant/message` / `tool/result`），**无法自定义**事件类型来另开一种渲染。
  *
- * 所以按 `v2-Progress.md` 的要求（对话结束后、在**对话流**里显示研究进展），
- * 展示完全交给客户端：`conversation.chat.turnTail`（回合尾部、按 selector 命中渲染）。
- * 宿主只负责**算准**并把结构化报告交给界面 RPC —— 计算仍然只来自磁盘上的真实资产。
+ * ## 展示面（2026-09 二次改版，别再走回头路）
+ *
+ * ```text
+ * ❌ conversation.chat.turnTail（链式槽位）—— selector 只拿得到 {turn, seq, openFile}，
+ *    没有会话身份，只能靠进程级全局变量猜"当前是不是研究会话"，于是命中**所有**会话
+ * ✅ conversation.session.header.utilities（session 作用域的 list 槽位）——
+ *    组件拿得到自己会话的 sessionId，判定按会话正确（见 client/progress-panel.tsx）
+ * ```
+ *
+ * 因此本文件只剩两件事：**算准**（只来自磁盘真实资产）并按会话 id 记下回合报告，
+ * 供 `progress/workspace` 端点取"最近一轮变化"。面板的 A/C 段不依赖回合报告
+ * （每次点开都由 `progress.ts` 从磁盘重算），所以没有任何"必须跑完一轮才看得到"的限制。
  *
  * ## 两条产品约束
  *
@@ -62,8 +71,8 @@ function sessionIdOf(p: TurnPayload): string | undefined {
  * DSH 把**所有** `plugin` 来源的会话消息渲染成"上下文注入"折叠行
  * （`ContextMessageNodeView`，按 `kind: 'context'` 路由），form 取什么值都改变不了；
  * 而进入对话表面的事件类型只有 4 种（`system/message` / `user/message` /
- * `assistant/message` / `tool/result`），无法自定义。所以"在对话流里显示研究进展"
- * 只能由**客户端**在回合尾部渲染（`conversation.chat.turnTail`），宿主只提供数据。
+ * `assistant/message` / `tool/result`），无法自定义。所以展示落在客户端：
+ * 顶部按钮（`conversation.session.header.utilities`）后面挂面板，宿主只提供数据。
  */
 const latestReports = new Map<string, TurnProgressReport>()
 /** 最多缓存多少个会话的最近报告（防止长驻进程无界增长）。 */
@@ -178,7 +187,7 @@ export function mountProgressBridge(
       if (grew) autoRounds = 0
 
       const diff = diffProgress(before, after)
-      // 报告交给客户端在回合尾部渲染（`conversation.chat.turnTail`）。
+      // 报告按会话记下来，供顶部「研究进展」按钮的面板取"最近一轮变化"。
       // 刻意**不**追加会话消息：plugin 来源的消息必然被 DSH 显示成"上下文注入"。
       rememberTurnReport(sessionIdOf(p), buildTurnReport(diff, turn, after.advance))
 

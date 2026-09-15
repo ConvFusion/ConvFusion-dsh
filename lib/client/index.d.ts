@@ -1,8 +1,12 @@
 /**
- * ConvFusion 2.0 — browser half（挂载【设置】-【ConvFusion】）
+ * ConvFusion 2.0 — browser half（设置页 + 会话头部的研究进展按钮）
  *
- * 只做三件事：拿服务、注册一个 `settings.section`、把设置页本体交给它渲染。
- * 设置页自身的逻辑在 `./settings.js`。
+ * 这个文件只做装配：
+ *
+ * ```text
+ * settings.section                       ← 【设置】-【ConvFusion】（本体在 ./settings.js）
+ * conversation.session.header.utilities  ← 顶部「研究进展」按钮（本体在 ./progress-panel.js）
+ * ```
  *
  * ## 两个容易踩的坑（重建时必看，来自 v0.1.5 的实测记录）
  *
@@ -15,11 +19,11 @@
 import logoUrl from '../../assets/favicon.svg';
 import { loadSettingsState } from './settings.js';
 import { applyNavIcon, installNavIcon } from './nav-icon.js';
-import { ResearchProgressCard, ResearchProgressWarmer, selectResearchTurn, resetProgressCardState } from './progress-card.js';
+import { ResearchProgressButton, readProgressValue, shortenPath } from './progress-panel.js';
 /** 供离线测试直接调用（bundle 的 `apply`/`inject` 之外再导出这些）。 */
 export { loadSettingsState, applyNavIcon, installNavIcon, logoUrl };
 export { preferredCategory, preferredSection, preferredSkill } from './settings.js';
-export { ResearchProgressCard, ResearchProgressWarmer, selectResearchTurn, resetProgressCardState };
+export { ResearchProgressButton, readProgressValue, shortenPath };
 interface ScopeSnapshot {
     status: 'loading' | 'ready' | 'unavailable';
     value: {
@@ -44,6 +48,11 @@ interface SlotRegisterOptions {
     /**
      * chain 型槽位（如 `conversation.chat.turnTail`）的选择器：
      * 按升序尝试，**首个返回非 null** 的条目渲染，全为 null 则回落到拥有者的默认。
+     *
+     * ⚠️ **不要用它做"按会话判定"**：selector 只拿得到 owner props（例如 turnTail 的
+     * `{turn, seq, openFile}`），**不含会话身份**；用它路由就得引入进程级全局变量，
+     * 结果会命中所有会话（2026-09 实测故障，见 `progress-panel.tsx` 文件头）。
+     * 按会话的显隐请用 **session 作用域的 list 槽位**（组件能拿到 `sessionId`）。
      */
     select?: (owner: unknown) => unknown | null;
 }

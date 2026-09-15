@@ -32,9 +32,10 @@
 
 import { isAbsolute, relative, resolve } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
-import type { PromptContext, PromptSection } from '@deepseek-ai/dsh-system-prompt'
+import type { AssembleContext, PromptContext, PromptSection } from '@deepseek-ai/dsh-system-prompt'
 import type { ResearchContext } from './data.js'
 import { isResearchWorkspace, loadPaper, loadProject } from './workspace.js'
+import { researchTargetsForSession, type ServiceLookupLike } from './session-workspace.js'
 import { recommendSkills, skillSummaries } from './library.js'
 import type { SkillSummary } from './library.js'
 import { assessResearchProcess } from './research-process.js'
@@ -501,6 +502,19 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
 export type WorkspaceResolver = () => string
 
 /**
+ * 从组装上下文里取**本次组装所属会话**的 id。
+ *
+ * `AssembleContext.agent` 由 `@deepseek-ai/dsh-agent` 追加声明，而本插件只依赖
+ * `dsh-system-prompt` —— 因此这里**结构化读取**（`agent.id` 就是 SessionId），
+ * 不 import 那个包。拿不到时返回 `undefined`（调用方退化到全局解析）。
+ */
+function agentIdOf(context: AssembleContext | undefined): string | undefined {
+  const agent = (context as unknown as { agent?: { id?: unknown } } | undefined)?.agent
+  const id = agent?.id
+  return typeof id === 'string' && id.trim() ? id : undefined
+}
+
+/**
  * Research Context 服务：把研究状态注册为 Harness 的**动态上下文贡献者**。
  *
  * 生命周期：`apply()` 时调用 {@link mount}，注册两个贡献：
@@ -547,6 +561,25 @@ export class ResearchContextService extends Service {
   }
 
   /**
+   * 本次**组装所属会话**的研究根目录 + 会话工作区。
+   *
+   * ⚠️ 这里必须按会话解析，而不是用入口注入的全局解析（`resolveWorkspace`）：
+   * provider 是每次组装求值的，而全局解析依赖 `agent/pre-step` 同步的一个全局 cwd ——
+   * 多个会话并行时它可能已被别的会话覆盖，于是研究会话的上下文会注入到**普通对话**里
+   * （与进度卡"显示在所有对话里"同一类故障，2026-09 实测）。
+   *
+   * 权威来源是 `context.agent.id`（= SessionId）→ 会话存储里的 `header.cwd`
+   * （见 `session-workspace.ts`）。拿不到会话身份（诊断组装、子 Agent 尚未注册）时
+   * **退化**为旧的全局解析，保持可用性 —— 但绝不把"插件进程启动目录"当研究会话。
+   */
+  private targetsFor(context?: AssembleContext): { root: string; session: string } {
+    const agentId = agentIdOf(context)
+    const viaSession = researchTargetsForSession(this.ctx as unknown as ServiceLookupLike, agentId)
+    if (viaSession) return viaSession
+    return { root: this.resolveWorkspace(), session: this.resolveSessionWorkspace?.() ?? '' }
+  }
+
+  /**
    * 注册到 Harness 的 system prompt 组装管线。
    *
    * 返回 disposer 数组，由调用方（插件入口）按 Cordis effect 语义管理。
@@ -558,8 +591,8 @@ export class ResearchContextService extends Service {
     const guide: PromptSection = {
       name: RESEARCH_GUIDE_NAME,
       order: RESEARCH_GUIDE_ORDER,
-      // 只有当前会话确实属于研究项目时才注入，避免污染普通对话。
-      text: () => (isResearchWorkspace(this.resolveWorkspace()) ? RESEARCH_GUIDE_TEXT : ''),
+      // 只有**本次组装所属会话**确实属于研究项目时才注入，避免污染普通对话。
+      text: (context: AssembleContext) => (isResearchWorkspace(this.targetsFor(context).root) ? RESEARCH_GUIDE_TEXT : ''),
     }
     disposers.push(this.ctx.systemPrompt.section(guide))
 
@@ -567,8 +600,9 @@ export class ResearchContextService extends Service {
     const snapshot: PromptContext = {
       name: RESEARCH_CONTEXT_NAME,
       order: RESEARCH_CONTEXT_ORDER,
-      text: () => {
-        const ws = this.resolveWorkspace()
+      text: (context: AssembleContext) => {
+        const targets = this.targetsFor(context)
+        const ws = targets.root
         this.lastWorkspace = ws
         if (!isResearchWorkspace(ws)) {
           this.lastRendered = ''
@@ -577,7 +611,7 @@ export class ResearchContextService extends Service {
         const collected = collectResearchContext({
           workspace: ws,
           ...(this.skillContent ? { skillContent: this.skillContent } : {}),
-          ...(this.resolveSessionWorkspace ? { sessionWorkspace: this.resolveSessionWorkspace() } : {}),
+          ...(targets.session ? { sessionWorkspace: targets.session } : {}),
         })
         const rendered = renderResearchContext(collected)
         this.lastRendered = rendered

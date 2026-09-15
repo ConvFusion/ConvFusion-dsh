@@ -23,6 +23,17 @@
  *   - 进度条的位置由等级折算得到，**同时显示等级名**，并标注"折算"；
  *   - 可数的东西（证据/主张/决策/计划）**给真实计数**，不给百分比；
  *   - 未评估的维度显示 `Unknown`，绝不假装它是 0% 或某个中间值。
+ *
+ * ## 两个展示面（同一套数据，2026-09 改版）
+ *
+ * ```text
+ * 顶部「研究进展」按钮的面板（主）  ← `WorkspaceProgress`：任何时刻点开都看"现在到哪了"
+ * 回合尾部曾经注入的进度卡（已删）  ← `TurnProgressReport`：链式槽位的 selector 拿不到会话身份，
+ *                                    只能靠一个进程级全局变量猜，于是会命中所有会话
+ * ```
+ *
+ * `TurnProgressReport` 仍然保留：面板的"本轮变化"一节用它（哪个会话的哪一轮，
+ * 由 `progress-bridge.ts` 按会话 id 记录）。
  */
 import { type AdvanceAssessment } from './advance.js';
 import { type MaturityDimension, type MaturityLevel } from './research-data.js';
@@ -121,9 +132,9 @@ export declare function researchGaps(snapshot: ProgressSnapshot): string[];
 /**
  * 一轮对话结束后的研究进展报告（`v2-Progress.md` 的三段式）。
  *
- * 为什么返回**结构化数据**而不是 Markdown：报告现在由**客户端**在对话流尾部
- * 渲染成卡片（`conversation.chat.turnTail`），结构化的字段才能排版成图表，
- * 而不是把 Markdown 字符串塞进界面。
+ * 为什么返回**结构化数据**而不是 Markdown：报告由**客户端**渲染成面板里的一节
+ * （顶部「研究进展」按钮，见 `client/progress-panel.tsx`），结构化的字段才能排版成
+ * 图表，而不是把 Markdown 字符串塞进界面。
  */
 export interface TurnProgressReport {
     /** 生成时刻（ISO）。 */
@@ -174,6 +185,56 @@ export interface TurnProgressReport {
 }
 /** 由差异 + 快照构造界面用的回合报告。 */
 export declare function buildTurnReport(diff: ProgressDiff, turn: number, advance?: AdvanceAssessment, at?: Date): TurnProgressReport;
+/** 面板里的一行可数资产（数字全部是事实，不是估算）。 */
+export interface ProgressCountRow {
+    /** 计数键（`ProgressSnapshot['counts']` 的子集）。 */
+    key: string;
+    /** 显示名。 */
+    label: string;
+    /** 计数。 */
+    value: number;
+    /** 附带说明（如"5 已确认"）。 */
+    note?: string;
+}
+/**
+ * 当前工作区的研究进展（**不是**"本轮变化"）。
+ *
+ * 刻意**不给整体百分比之外的伪精度**：成熟度是等级折算（`scale`），同时带上等级名；
+ * 可数资产给真实计数；未评估的维度是 `Unknown`（折算 0，界面必须显示名字）。
+ */
+export interface WorkspaceProgress {
+    /** 生成时刻（ISO）。 */
+    at: string;
+    /** Research State 版本。 */
+    stateVersion: string;
+    /** 各成熟度维度等级折算的均值（0..1；全 Unknown 时为 0）。 */
+    overall: number;
+    /** A. 研究现在到了哪里。 */
+    progress: {
+        dimensions: Array<{
+            dimension: string;
+            level: MaturityLevel;
+            scale: number;
+        }>;
+        stage: string | null;
+    };
+    /** 可数资产（真实计数）。 */
+    counts: ProgressCountRow[];
+    /** 是否已有论文正文（`papers/<id>/paper.md`）。 */
+    paper: boolean;
+    /** C. 当前缺口与推进判定。 */
+    need: {
+        gaps: string[];
+        clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown';
+        basis: string;
+        nextStep?: string;
+        needsUserDecision?: string;
+    };
+}
+/** 可数资产 → 面板行（顺序固定，便于两次点开之间对照）。 */
+export declare function progressCountRows(snapshot: ProgressSnapshot): ProgressCountRow[];
+/** 由当前快照构造工作区报告（纯函数：同一份磁盘状态必得同一结果）。 */
+export declare function buildWorkspaceProgress(snapshot: ProgressSnapshot, at?: Date): WorkspaceProgress;
 /** 供 `/research` 状态展示用：紧凑的一行。 */
 export declare function renderProgressLine(snapshot: ProgressSnapshot): string;
 //# sourceMappingURL=progress.d.ts.map

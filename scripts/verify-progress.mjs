@@ -6,18 +6,20 @@
  *
  *   A. **基本科研过程要体现在能力选择里**，而且**过程本身是一个可定制 Skill**
  *      （用户在设置里能规定自己的研究进展过程）；
- *   B. **每轮结束展示研究进展**（`v2-Progress.md`），且必须来自真实资产 —— 不猜。
+ *   B. **顶部「研究进展」按钮**（`v2-Progress.md`）：只在研究会话显示、点击看当前
+ *      工作区的研究进展，且必须来自真实资产 —— 不猜。
  *
  * 用法：
- *   node scripts/verify-progress.mjs packages/dsh-convfusion
+ *   node scripts/verify-progress.mjs .
  */
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import process from 'node:process'
 
-const PKG = resolve(process.argv[2] || 'packages/dsh-convfusion')
+const PKG = resolve(process.argv[2] || '.')
 const lib = (f) => pathToFileURL(join(PKG, 'lib', f)).href
 
 const PROC = await import(lib('research/research-process.js'))
@@ -25,6 +27,7 @@ const PROG = await import(lib('research/progress.js'))
 const BRIDGE = await import(lib('research/progress-bridge.js'))
 const ADV = await import(lib('research/advance.js'))
 const LIB = await import(lib('research/library.js'))
+const RPC = await import(lib('settings-rpc.js'))
 const PROGRESS_PLUGIN_NAME = 'convfusion'
 const CUST = await import(lib('research/skill-customization.js'))
 const CTX = await import(lib('research/context.js'))
@@ -46,6 +49,16 @@ function assertEq(a, b, label) {
   const ok = JSON.stringify(a) === JSON.stringify(b)
   if (!ok) console.log(`    actual: ${JSON.stringify(a)}\n    expect: ${JSON.stringify(b)}`)
   assert(ok, label)
+}
+
+/**
+ * 去掉注释（回归守卫只看**代码**）。
+ *
+ * 为什么需要：被删掉的旧机制必须在注释里留下"别再这么做"的说明
+ * （`activeSessionId` 这类名字会出现在说明文字里），但**代码里**绝不许再出现。
+ */
+function stripComments(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
 }
 
 const noStore = CUST.createMemoryCustomizationStore()
@@ -178,6 +191,54 @@ console.log('\n[4] 能力选择跟着过程走')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+ * 4b. 研究上下文按**会话自己的工作区**解析
+ *
+ * 与进度卡同一类故障：过去的 provider 用入口注入的**全局**解析（`agent/pre-step`
+ * 同步的一个全局 cwd），多会话并行时会被别的会话覆盖 → 研究上下文注入到普通对话里。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[4b] 研究上下文按会话自己的工作区解析（不靠全局 cwd）')
+{
+  const SW = await import(lib('research/session-workspace.js'))
+  const WS = await import(lib('research/workspace.js'))
+
+  // 新布局：会话工作区下再有 workspace/（研究根）
+  const sessionResearch = mkdtempSync(join(tmpdir(), 'cf-sw-research-'))
+  mkdirSync(join(sessionResearch, 'workspace'), { recursive: true })
+  writeFileSync(
+    join(sessionResearch, 'workspace', 'project.md'),
+    ['---', 'type: research-project', 'topic: T', 'domain: Robotics', '---', '', '## Research Statement', '', 'T', ''].join('\n'),
+  )
+  const sessionPlain = mkdtempSync(join(tmpdir(), 'cf-sw-plain-'))
+  writeFileSync(join(sessionPlain, 'notes.txt'), 'ordinary\n')
+
+  const sessions = {
+    's-research': { header: { cwd: sessionResearch } },
+    's-plain': { header: { cwd: sessionPlain } },
+  }
+  const fakeCtx = { get: (name) => (name === 'sessions' ? { get: (id) => sessions[id] } : undefined) }
+
+  const research = SW.researchTargetsForSession(fakeCtx, 's-research')
+  assertEq(research.session, sessionResearch, '会话工作区来自会话自己的 header.cwd')
+  assertEq(research.root, join(sessionResearch, 'workspace'), '新布局：研究根 = <会话工作区>/workspace')
+  assertEq(WS.isResearchWorkspace(research.root), true, '该会话确实是研究项目（→ 注入研究上下文）')
+
+  const plain = SW.researchTargetsForSession(fakeCtx, 's-plain')
+  assertEq(plain.session, sessionPlain, '普通会话：工作区解析到它自己')
+  assertEq(WS.isResearchWorkspace(plain.root), false, '普通会话不构成研究项目（→ 不注入任何上下文）')
+  assertEq(SW.researchTargetsForSession(fakeCtx, 's-missing'), undefined, '拿不到会话 → undefined（不退化成插件进程目录）')
+
+  // 源码守卫：两个 provider 都必须按**本次组装所属会话**解析
+  const ctxCode = stripComments(readFileSync(join(PKG, 'src', 'research', 'context.ts'), 'utf8'))
+  const uses = ctxCode.split('this.targetsFor(context)').length - 1
+  assertEq(uses, 2, 'section 与 context 两个 provider 都走 targetsFor(context)（按会话解析）')
+  assert(!/text: \(\) =>/.test(ctxCode), 'provider 不再是无参回调（那意味着只会用全局状态）')
+  assert(/researchTargetsForSession\(/.test(ctxCode), '会话解析走 researchTargetsForSession（权威来源 = 会话存储）')
+
+  rmSync(sessionResearch, { recursive: true, force: true })
+  rmSync(sessionPlain, { recursive: true, force: true })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
  * 5. 研究进展快照：不猜、不伪造成熟度
  * ════════════════════════════════════════════════════════════════════════ */
 console.log('\n[5] Research Progress Snapshot 的诚实性')
@@ -209,6 +270,40 @@ console.log('\n[5] Research Progress Snapshot 的诚实性')
   })
   assertEq(matured.maturityChanges.length, 1, '成熟度等级变化被检出')
   assertEq(matured.maturityChanges[0].dimension, 'Problem', '指出是哪个维度')
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 5b. 工作区进度（顶部按钮面板的数据）：
+ *     "现在到哪了"必须能**任何时刻**从磁盘重算，且不伪造精度
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[5b] 工作区进度：任何时刻可重算、且不伪造精度')
+{
+  const snap = PROG.captureProgress('.', baseContent)
+  const ws = PROG.buildWorkspaceProgress(snap)
+  assertEq(ws.progress.dimensions.length, 6, '面板带 6 个成熟度维度（画条用）')
+  for (const d of ws.progress.dimensions) {
+    assert(typeof d.level === 'string' && d.level.length > 0, `维度 ${d.dimension} 带等级名（不是只有百分比）`)
+    assert(d.scale >= 0 && d.scale <= 1, `维度 ${d.dimension} 的折算位置在 0..1`)
+  }
+  const mean = ws.progress.dimensions.reduce((a, d) => a + d.scale, 0) / ws.progress.dimensions.length
+  assert(Math.abs(ws.overall - mean) < 1e-9, '整体进度 = 各维度折算的均值（可复算，不是另算一个数）')
+  assert(ws.counts.length >= 5, `面板列出 ${ws.counts.length} 项可数资产`)
+  assert(ws.counts.every((r) => Number.isInteger(r.value) && r.value >= 0), '资产计数是真实整数，不是估算')
+  assert(typeof ws.paper === 'boolean', '论文正文以"有/无"陈述，不给百分比')
+  assert(Array.isArray(ws.need.gaps), '面板带当前缺口')
+  assert(['clear', 'ambiguous', 'blocked', 'unknown'].includes(ws.need.clarity), '面板带推进判定三态')
+
+  // 只有研究问题、没有任何成熟度评估的工作区：维度必须是 Unknown 且折算为 0
+  const bare = mkdtempSync(join(tmpdir(), 'cf-wsprog-'))
+  writeFileSync(
+    join(bare, 'project.md'),
+    ['---', 'type: research-project', 'topic: T', 'domain: Robotics', '---', '', '## Research Statement', '', 'T', ''].join('\n'),
+  )
+  const bareReport = PROG.buildWorkspaceProgress(PROG.captureProgress(bare, baseContent))
+  assert(bareReport.progress.dimensions.every((d) => d.level === 'Unknown'), '未评估 → 全部显示 Unknown（不假装中间值）')
+  assertEq(bareReport.overall, 0, '未评估 → 折算为 0')
+  assertEq(bareReport.counts.find((r) => r.key === 'evidence')?.value, 0, '没有证据文件 → 证据计数是 0（真实读数）')
+  rmSync(bare, { recursive: true, force: true })
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -260,7 +355,7 @@ console.log('\n[7] 进展桥（回合报告 → 界面卡片 + waterfall 必须�
   // ⚠️ 两层边界（2026-09 用户拍板）：
   //   1. 只有**研究工作区**（有 `project.md` / `research-state.md`）才算进展；
   //   2. 报告**不进会话日志** —— DSH 必然把 plugin 来源的消息显示成"上下文注入"，
-  //      所以展示改由客户端在 `conversation.chat.turnTail` 渲染。
+  //      所以展示改由客户端在会话头部的「研究进展」按钮后面渲染（见 [9]）。
   const ws = mkdtempSync(join(tmpdir(), 'cf-bridge-'))
   writeFileSync(
     join(ws, 'project.md'),
@@ -300,8 +395,74 @@ console.log('\n[7] 进展桥（回合报告 → 界面卡片 + waterfall 必须�
     agent: { id: 's-plain', session: { append: (t, d, o) => sentPlain.push({ t, d, o }) } },
   })
   assertEq(sentPlain.length, 0, '非研究工作区：不追加消息（普通对话不受打扰）')
-  assertEq(BRIDGE.latestTurnReport('s-plain'), undefined, '非研究工作区：不产生报告（界面不显示进度卡）')
+  assertEq(BRIDGE.latestTurnReport('s-plain'), undefined, '非研究工作区：不产生回合报告（面板不显示"本轮变化"）')
   disposePlain()
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 7b. `progress/workspace` 端点：判定必须按**会话自己的工作区**
+ *
+ * 这是 2026-09 故障的回归测试：旧客户端靠进程级全局变量猜"当前是不是研究会话"，
+ * 结果进度出现在所有会话里。现在判定只在宿主做，且输入是会话自己的 cwd。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[7b] progress/workspace：按会话自己的工作区判定')
+{
+  const wsResearch = mkdtempSync(join(tmpdir(), 'cf-rpc-research-'))
+  writeFileSync(
+    join(wsResearch, 'project.md'),
+    ['---', 'type: research-project', 'topic: T', 'domain: Robotics', '---', '', '## Research Statement', '', 'T', ''].join('\n'),
+  )
+  const wsPlain = mkdtempSync(join(tmpdir(), 'cf-rpc-plain-'))
+  writeFileSync(join(wsPlain, 'notes.txt'), 'ordinary working directory\n')
+
+  const handler = RPC.createSettingsRpcHandler({
+    getConfig: () => ({}),
+    store: CUST.createMemoryCustomizationStore(),
+    resolveSessionWorkspace: (id) =>
+      ({ 's-rpc-research': wsResearch, 's-plain': wsPlain })[id],
+  })
+
+  const research = await handler('progress/workspace', { sessionId: 's-rpc-research' })
+  assertEq(research.ok, true, '研究工作区：端点返回 ok')
+  assertEq(research.value.research, true, '研究工作区：research=true（按钮显示）')
+  assertEq(research.value.workspace, wsResearch, '研究工作区：返回的是研究根目录')
+  assertEq(research.value.report?.progress.dimensions.length, 6, '面板数据含 6 个成熟度维度')
+  assert(Array.isArray(research.value.report?.counts), '面板数据含可数资产')
+  // 端点算出来的必须与"纯函数 + 同一份磁盘状态"完全一致（否则就是两套判定）
+  const expected = PROG.buildWorkspaceProgress(PROG.captureProgress(wsResearch, baseContent))
+  assertEq(
+    { ...research.value.report, at: null },
+    { ...expected, at: null },
+    '端点结果 == 纯函数在同一工作区上的结果（不另算一套）',
+  )
+  assertEq(research.value.lastTurn, null, '本会话还没有回合报告 → lastTurn=null（界面自己说明，不编造）')
+  // 有回合报告的会话：端点带回来（面板的"最近一轮变化"一节）
+  const snapHere = PROG.captureProgress(wsResearch, baseContent)
+  const turnReport = PROG.buildTurnReport(PROG.diffProgress(snapHere, snapHere), 2)
+  BRIDGE.rememberTurnReport('s-rpc-research', turnReport)
+  const withTurn = await handler('progress/workspace', { sessionId: 's-rpc-research' })
+  assertEq(withTurn.value.lastTurn?.turn, 2, '有回合报告 → lastTurn 带回来（且只来自**这个**会话）')
+  assertEq(
+    (await handler('progress/workspace', { sessionId: 's-plain' })).value.lastTurn,
+    null,
+    '另一个会话读不到别人的回合报告（报告按会话 id 存）',
+  )
+
+  const plain = await handler('progress/workspace', { sessionId: 's-plain' })
+  assertEq(plain.value.research, false, '普通目录：research=false')
+  assertEq(plain.value.report, null, '普通目录：不返回任何进度数据（按钮不显示）')
+  const unknown = await handler('progress/workspace', { sessionId: 's-missing' })
+  assertEq(unknown.value.research, false, '拿不到会话工作区 → 不显示（不猜、不退化到插件进程目录）')
+  assertEq(unknown.value.workspace, null, '拿不到会话工作区 → workspace=null（不编一个路径）')
+
+  // 旧的两个端点必须**删掉**：留着就会有两套判定并存，故障会从另一边回来
+  const legacySession = await handler('progress/session', { sessionId: 's-research' })
+  const legacyLatest = await handler('progress/latest', { sessionId: 's-research' })
+  assertEq(legacySession.ok, false, '旧的 progress/session 端点已删除')
+  assertEq(legacyLatest.ok, false, '旧的 progress/latest 端点已删除')
+
+  rmSync(wsResearch, { recursive: true, force: true })
+  rmSync(wsPlain, { recursive: true, force: true })
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -414,6 +575,84 @@ console.log('\n[8] 推进判定与自动继续闸门')
   assertEq(followed.length, followedBefore, '（前提）插件自身消息不改变计数')
   dispose2()
   rmSync(wsAuto, { recursive: true, force: true })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 9. 客户端：顶部按钮（session 作用域的 list 槽位），且**没有**跨会话全局状态
+ *
+ * 旧故障的根因是一个进程级全局变量（`activeSessionId` + `researchSessions` 缓存）：
+ * 链式槽位的 selector 拿不到会话身份，只能靠它猜，于是命中所有会话。这里既做
+ * **源码/产物层面的回归守卫**（不许再出现这类状态、不许再占用对话流尾部槽位），
+ * 也在 node 里求值 bundle，测真正的判定函数。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会话全局状态）')
+{
+  const src = readFileSync(join(PKG, 'src', 'client', 'progress-panel.tsx'), 'utf8')
+  const bundle = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
+  const srcCode = stripComments(src)
+
+  assert(
+    !/activeSessionId|researchSessions/.test(srcCode),
+    'progress-panel.tsx 的**代码**里不再有进程级"当前会话"状态',
+  )
+  assert(!/activeSessionId|researchSessions/.test(bundle), 'bundle 里没有任何跨会话缓存（旧故障根因已消失）')
+  assert(bundle.includes('conversation.session.header.utilities'), 'bundle 注册在**会话头部工具槽位**（session 作用域）')
+  assert(!bundle.includes('conversation.chat.turnTail'), 'bundle 不再占用对话流尾部的链式槽位（不再抢 deliverables）')
+  assert(!bundle.includes('conversation.input.dock'), 'bundle 不再用预热组件（判定不再依赖"先挂载过"）')
+  assert(bundle.includes('progress/workspace'), 'bundle 调的是新端点 progress/workspace')
+
+  /* ── 图标旁的百分比（用户要求）+ 面板必须是**浅色**底 ──────────────────
+   *
+   * ⚠️ 面板曾经是深色的：`--dsw-alias-bg-elevated` 这个 token **不存在**，
+   * 于是静默落到兜底值 `#1b1d22`（深色）。CSS 变量写错名字不会报错，只会用兜底 ——
+   * 所以这里既检查"用的是真实 token"，也检查"兜底值是浅色"。
+   */
+  assert(bundle.includes('data-convfusion-progress-percent'), '按钮在图标旁显示百分比')
+  assert(!/dsw-alias-bg-elevated|#1b1d22/.test(bundle), '不再使用不存在的 --dsw-alias-bg-elevated / 深色兜底')
+
+  // token 名单抄自 DSH 的 `@deepseek-ai/dsh-client-ui-theme`（alias 层）；写错名字会静默失效
+  const KNOWN_DSW_TOKENS = new Set([
+    '--dsw-alias-bg-base', '--dsw-alias-bg-layer-1', '--dsw-alias-bg-layer-2', '--dsw-alias-bg-layer-3',
+    '--dsw-alias-bg-mask-1', '--dsw-alias-bg-overlay', '--dsw-alias-bg-module-platform',
+    '--dsw-alias-border-l1', '--dsw-alias-border-l2', '--dsw-alias-border-l3', '--dsw-alias-border-l4',
+    '--dsw-alias-brand-primary', '--dsw-alias-button-tool-bar-fill', '--dsw-alias-button-tool-bar-hover',
+    '--dsw-alias-interactive-bg-hover', '--dsw-alias-interactive-bg-active',
+    '--dsw-alias-label-primary', '--dsw-alias-label-secondary', '--dsw-alias-label-tertiary',
+    '--dsw-alias-label-dimmed', '--dsw-alias-label-caption',
+    '--dsw-alias-state-business-primary', '--dsw-alias-state-error-primary', '--dsw-alias-tooltip-bg',
+  ])
+  const usedTokens = [...new Set([...src.matchAll(/var\((--dsw-[a-z0-9-]+)/g)].map((m) => m[1]))]
+  assert(usedTokens.length > 0, '面板确实使用 DSH 主题 token')
+  for (const token of usedTokens) {
+    assert(KNOWN_DSW_TOKENS.has(token), `token ${token} 是 DSH 真实存在的 alias token`)
+  }
+  assert(/--dsw-alias-bg-layer-2[^)]*,\s*#fff/i.test(src), '面板底色用 bg-layer-2，兜底值是**浅色**')
+
+  // 在 node 里求值 bundle：顶层只注册 factory，给一个 window 桩即可拿到导出
+  let mod = null
+  try {
+    let captured = null
+    new Function('window', bundle)({ __ModuleLoader__: { load: (m) => { captured = m } } })
+    mod = captured.factory(createRequire(import.meta.url))
+  } catch (e) {
+    assert(false, `bundle 可在 node 求值：${e instanceof Error ? e.message : String(e)}`)
+  }
+
+  if (mod) {
+    assertEq(typeof mod.ResearchProgressButton, 'function', 'bundle 导出 ResearchProgressButton')
+    // 判定：只有宿主明确回答 research=true 才显示按钮
+    assertEq(mod.readProgressValue({ ok: true, value: { research: true } }).kind, 'shown', '研究工作区 → 显示按钮')
+    assertEq(mod.readProgressValue({ ok: true, value: { research: false } }).kind, 'hidden', '非研究工作区 → 不显示')
+    assertEq(mod.readProgressValue({ ok: false }).kind, 'hidden', '宿主出错 → 不显示（不猜）')
+    assertEq(mod.readProgressValue(undefined).kind, 'hidden', '宿主没回答 → 不显示（不猜）')
+    const shown = mod.readProgressValue({
+      ok: true,
+      value: { research: true, workspace: '/a/b/workspace', report: { progress: { dimensions: [] } }, lastTurn: null },
+    })
+    assertEq(shown.workspace, '/a/b/workspace', '面板带工作区路径（用户能确认看的是哪个项目）')
+    assertEq(mod.shortenPath('/a/b/c/workspace'), 'c/workspace', '路径只保留末两段')
+    assertEq(mod.shortenPath(null), '', '没有路径 → 空串（不编一个）')
+  }
 }
 
 rmSync(join(tmpdir(), 'nonexistent-cf-progress-'), { recursive: true, force: true })

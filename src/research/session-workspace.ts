@@ -20,6 +20,7 @@
  */
 
 import { isAbsolute, resolve } from 'node:path'
+import { researchWorkspaceOf } from './workspace.js'
 
 /** 会话存储的最小视图（只用到按 id 查询）。 */
 export interface SessionStoreLike {
@@ -63,4 +64,24 @@ export function resolveSessionWorkspace(ctx: ServiceLookupLike, sessionId: strin
     /* 解析失败不阻断任何主流程 */
   }
   return undefined
+}
+
+/**
+ * 会话 id → { 会话工作区, **研究根目录** }（新布局下研究根 = `<会话工作区>/workspace`）。
+ *
+ * 为什么单独有这个函数：`systemPrompt` 的 `section`/`context` 贡献者**每次组装**求值，
+ * 而它们过去用的是入口注入的**全局**解析（依赖 `agent/pre-step` 同步的全局 cwd）。
+ * 多个会话并行时那个全局值可能已被别的会话覆盖 —— 于是研究会话的上下文会注入到
+ * 普通对话里（与"进度卡显示在所有对话里"同一类故障）。
+ *
+ * @returns 拿不到会话身份 / 会话没有 cwd 时返回 `undefined`：**不**退化成
+ *          `process.cwd()`，由调用方决定兜底（通常退化为旧的全局解析）。
+ */
+export function researchTargetsForSession(
+  ctx: ServiceLookupLike,
+  sessionId: string | undefined,
+): { session: string; root: string } | undefined {
+  const session = resolveSessionWorkspace(ctx, sessionId)
+  if (!session) return undefined
+  return { session, root: researchWorkspaceOf(session) }
 }
