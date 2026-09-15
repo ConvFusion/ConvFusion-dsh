@@ -115,6 +115,18 @@ console.log('\n[5] 引用三层转换与 bibliography')
   )
   assertEq(L.injectCitations('$[a1]$'), '$[a1]$', '数学区不注入 \\cite')
 
+  // 引用写法容错（D 修复：论文正文用分号分隔 + arXiv/doi 后缀注解）
+  assertEq(L.injectCitations('[a1; b2; c3]'), '\\cite{a1,b2,c3}', '分号分隔多引用 → \\cite')
+  assertEq(L.injectCitations('[a1, arXiv:2609.02265]'), '\\cite{a1}', 'arXiv 后缀剥离 → \\cite{key}')
+  assertEq(L.injectCitations('[a1; b2, doi:10.1/x; c3]'), '\\cite{a1,b2,c3}', '混合分隔 + doi 后缀')
+  // 已知键过滤：单引用兜底不误转 [TBD] / [t] / [width=...]
+  assertEq(L.injectCitations('[TBD]', { knownKeys: ['a1'] }), '[TBD]', '已知键过滤：未知单键保留')
+  assertEq(L.injectCitations('[t] and [a1]', { knownKeys: ['a1'] }), '[t] and \\cite{a1}', '[t] 不误转')
+  assertEq(L.injectCitations('[width=\\textwidth]', { knownKeys: ['a1'] }), '[width=\\textwidth]', 'LaTeX 参数不误转')
+  assertEq(L.injectCitations('[a1; b2]', { knownKeys: ['a1'] }), '\\cite{a1}', '分号多引用按已知键过滤')
+  // 无 knownKeys 时保持宽松兜底
+  assertEq(L.injectCitations('[zzz]'), '\\cite{zzz}', '无 knownKeys 时未知单键仍转换')
+
   const bib = L.buildThebibliography([{ key: 'k1', text: 'A. Author, "T," V, 2024.' }])
   assert(bib.includes('\\begin{thebibliography}') && bib.includes('\\bibitem{k1}'), 'bibitem 构造')
   assertEq(L.buildThebibliography([]), '', '空 bibliography 返回空串')
@@ -168,6 +180,56 @@ console.log('\n[7] composeDocument')
   assertEq(L.composeDocument(input).warnings.length, 0, '无告警')
   const warn = L.composeDocument({ ...input, sections: [{ title: 'A', body: '<<EQ:missing>>' }] })
   assert(warn.warnings.length > 0, '未匹配公式占位符产生告警')
+}
+
+/* ── 7.5 Markdown 表格 → LaTeX（D 修复：正文管道表格转换）──────────── */
+console.log('\n[7.5] convertMarkdownTables')
+{
+  const md = [
+    'Table: Probe tracks and their counts.',
+    '',
+    '| Track | Instances | What is injected |',
+    '|:------|----------:|:----:|',
+    '| T1 fact_update | 6 (2 abrupt, 2 gradual, 1 correction, 1 multi_step) | a fact value changes across sessions |',
+    '| T2 pref_drift | 4 (gradual, step, oscillating, contextual) | a preference dimension shifts over time |',
+  ].join('\n')
+  const tables = []
+  const sentinel = L.convertMarkdownTables(md, tables)
+  assertEq(tables.length, 1, '识别一个表格块')
+  assert(sentinel.includes('\u0000MDTABLE0\u0000'), '正文换成哨兵')
+  assert(!sentinel.includes('fact_update'), '哨兵化正文不含表格内容')
+  const tex = L.restoreMarkdownTables(sentinel, tables)
+  assert(tex.includes('\\begin{table*}[t]'), '宽表用 table*（跨栏）')
+  assert(tex.includes('\\caption{Probe tracks and their counts.}'), 'Table: 题注行被消费')
+  assert(tex.includes('\\label{tab:md-0}'), '自动 label')
+  assert(tex.includes('\\toprule') && tex.includes('\\bottomrule'), 'booktabs 规则')
+  assert(tex.includes('fact\\_update'), 'snake_case 单元格转义')
+  assert(tex.includes('fact\\_update & 6 (2 abrupt'), '& 分隔符保留（未被净化转义）')
+
+  // 窄表（2 列短内容）→ 单栏 table + l/r 对齐
+  const narrowTables = []
+  const narrowSentinel = L.convertMarkdownTables('| a | b |\n|---|---|\n| 1 | 2 |', narrowTables)
+  const narrow = L.restoreMarkdownTables(narrowSentinel, narrowTables)
+  assert(narrow.includes('\\begin{table}[t]'), '窄表用单栏 table')
+  assert(narrow.includes('{l l}') || narrow.includes('{l r}'), '窄列用 l/r 而非 p{...}')
+
+  // composeDocument 集成：管道里 markdown 表格自动转换且不破坏引用
+  const composed = L.composeDocument({
+    template: 'conference',
+    title: 'T',
+    abstract: '',
+    sections: [
+      {
+        title: '1. Intro',
+        body: 'Before.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nAfter [k1].',
+      },
+    ],
+    bibliography: [{ key: 'k1', text: 'A. Author, "T," 2024.' }],
+    knownKeys: ['k1'],
+  })
+  assert(composed.latex.includes('\\begin{tabular}'), '集成：表格被转换')
+  assert(composed.latex.includes('\\cite{k1}'), '集成：引用仍注入')
+  assert(!/^\|/.test(composed.latex.split('\n').find((l) => l.startsWith('|')) ?? ''), '集成：无管道残留')
 }
 
 /* ── 8. 日志解析（含 D3 回归）────────────────────────────────────── */
@@ -292,10 +354,17 @@ if (process.argv.includes('--live')) {
     const input = T.buildComposeInput(readFileSync(mdPath, 'utf8'), 'conference')
     const out = L.composeDocument(input)
     const latexDir = join(ws, 'latex')
-    const { mkdirSync } = await import('node:fs')
+    const { mkdirSync, cpSync } = await import('node:fs')
     mkdirSync(latexDir, { recursive: true })
+    // 复刻 compose-paper.mjs 的最小后处理：xcolor（正文 \textcolor 红字）+ figures/
+    let live = out.latex
+    if (/\\textcolor/.test(live) && !/\\usepackage\{xcolor\}/.test(live)) {
+      live = live.replace('\\documentclass{IEEEtran}', '\\documentclass{IEEEtran}\n\\usepackage{xcolor}')
+    }
+    const figSrc = join(ROOT, 'workspace', 'papers', 'paper-main', 'latex', 'figures')
+    if (existsSync(figSrc)) cpSync(figSrc, join(latexDir, 'figures'), { recursive: true })
     const texPath = join(latexDir, 'main.tex')
-    writeFileSync(texPath, out.latex, 'utf8')
+    writeFileSync(texPath, live, 'utf8')
     const res = C.compileLatex(texPath, { timeoutMs: 240000 })
     assertEq(res.success, true, '真实论文编译成功')
     if (res.pdfPath && existsSync(res.pdfPath)) {

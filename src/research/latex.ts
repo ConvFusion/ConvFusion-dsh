@@ -263,8 +263,11 @@ export function buildThebibliography(entries: readonly BibEntry[]): string {
 /**
  * 把引用占位符转成 `\cite{}`（旧版 `inject_citations` 的三层转换）。
  *
- *   1. `[key1, key2]` → `\cite{key1,key2}`
- *   2. `[alphaKey]` → `\cite{alphaKey}`（兜底，捕获 Agent 自由生成的引用）
+ *   1. `[key1, key2]` → `\cite{key1,key2}`；分隔符支持逗号或分号
+ *      （`[key1; key2; key3]`），并容忍 `arXiv:` / `doi:` 后缀注解
+ *      （`[key, arXiv:2609.02265]` → `\cite{key}`，编号已写在参考文献条目里）
+ *   2. `[alphaKey]` → `\cite{alphaKey}`（兜底；提供 knownKeys 时只转已知键，
+ *      避免 `[TBD]` / `[t]` 之类被误转）
  *   3. `[12]` / `[3-5]` → 按 numberToKey 映射 → `\cite{...}`
  *
  * 数学区（`$...$` / `$$...$$`）内不替换 —— `\cite` 不能在数学模式里用。
@@ -282,6 +285,20 @@ export function injectCitations(
 
   let out = text.replace(/\$\$[^$]*\$\$/g, protect).replace(/\$[^$]*\$/g, protect)
 
+  // 0) 引用组归一化：`[a; b]` → `[a, b]`；剥离 `, arXiv:xxxx` / `, doi:xxxx` 注解。
+  //    只在组内容「全是引用键（可带 arXiv:/doi: 注解）」时处理；其余（[TBD]、[t]、
+  //    [width=\textwidth]、含空格/标点的 prose 括号）原样保留。
+  out = out.replace(
+    /\[([a-zA-Z][a-zA-Z0-9]*(?:\s*[,;]\s*(?:[a-zA-Z][a-zA-Z0-9]*|(?:arXiv|doi):[^\s,;]+))+\s*)\]/g,
+    (m, group: string) => {
+      const keys = group
+        .split(/\s*[,;]\s*/)
+        .map((s) => s.replace(/^(?:arXiv|doi):.*$/i, '').trim())
+        .filter(Boolean)
+      return keys.length > 0 ? `[${keys.join(', ')}]` : m
+    },
+  )
+
   // 1) 多引用
   out = out.replace(/\[([a-zA-Z][a-zA-Z0-9]+(?:\s*,\s*[a-zA-Z][a-zA-Z0-9]+)+)\]/g, (m, group: string) => {
     const keys = group.split(/\s*,\s*/)
@@ -289,8 +306,11 @@ export function injectCitations(
     return valid.length > 0 ? `\\cite{${valid.join(',')}}` : m
   })
 
-  // 2) 单引用兜底
-  out = out.replace(/\[([a-zA-Z][a-zA-Z0-9]+)\]/g, '\\cite{$1}')
+  // 2) 单引用兜底（提供 knownKeys 时只转已知键）
+  out = out.replace(/\[([a-zA-Z][a-zA-Z0-9]+)\]/g, (m, key: string) => {
+    if (known && !known.has(key)) return m
+    return `\\cite{${key}}`
+  })
 
   // 3) 数字引用 → key
   if (opts.numberToKey && Object.keys(opts.numberToKey).length > 0) {
@@ -331,6 +351,172 @@ export function injectCitations(
 export interface FigureSpec {
   name: string
   caption: string
+}
+
+/**
+ * 把 Markdown 表格块转成 LaTeX `table` 环境（booktabs），并用哨兵保护正文，
+ * 避免后续 `sanitizeLatexMath` 把 `&` 分隔符转义、把 `fact_update` 包进数学区。
+ *
+ * 支持 GitHub 风格管道表格：`| a | b |` 表头行 + `|---|---|` 分隔行（可带 `:`
+ * 对齐标记）+ 数据行。表格上方紧邻的 `Table: <caption>` 行（或 `**Table N:**`）
+ * 作为题注消费掉。
+ *
+ * 列宽策略（对齐 visual-evidence-selection 的宽表规则）：
+ * - 估算各列最大视觉宽度（ASCII 1、CJK 2），总宽超过单栏阈值（约 62 字符）
+ *   或列数 ≥ 6 → `table*`（跨栏），长文本列用 `p{...}` 换行；否则单栏 `table`，
+ *   窄列用 `l` / `c` / `r`。
+ *
+ * 单元格内容按 LaTeX 转义（`& % # _ ^ $` 等），数学区（`$...$`）受保护。
+ * 返回带 `\u0000MDTABLE<i>\u0000` 哨兵的正文；用 {@link restoreMarkdownTables}
+ * 在净化/引用注入完成后还原。
+ */
+export function convertMarkdownTables(text: string, tables: string[] = []): string {
+  const lines = text.split('\n')
+  const out: string[] = []
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i]
+    const isTableLine = /^\s*\|.*\|\s*$/.test(line)
+    const isSep = i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])
+    if (isTableLine && isSep) {
+      // 收集表块（表头 + 分隔 + 数据行）
+      const block: string[] = [line]
+      let j = i + 1
+      while (j < lines.length && /^\s*\|.*\|\s*$/.test(lines[j])) {
+        block.push(lines[j])
+        j++
+      }
+      // 题注：表格上方的 `Table: ...` / `**Table N:** ...` 行
+      let caption = ''
+      let k = i - 1
+      while (k >= 0 && lines[k].trim() === '') k--
+      if (k >= 0) {
+        const m = lines[k].match(/^\s*(?:\*\*)?Table\s*\d*\.?:?\s*(.+?)\s*\*{0,2}$/i)
+        if (m) {
+          caption = m[1].trim()
+          lines[k] = '' // 消费题注行
+        }
+      }
+      const idx = tables.length
+      tables.push(buildTableLatex(block, caption, idx))
+      out.push(`\u0000MDTABLE${idx}\u0000`)
+      i = j
+    } else {
+      out.push(line)
+      i++
+    }
+  }
+  return out.join('\n')
+}
+
+/** 把 `convertMarkdownTables` 留下的哨兵还原为 LaTeX 表格。 */
+export function restoreMarkdownTables(text: string, tables: readonly string[]): string {
+  let out = text
+  for (let i = 0; i < tables.length; i++) {
+    out = out.split(`\u0000MDTABLE${i}\u0000`).join(tables[i])
+  }
+  return out
+}
+
+/** 单元格内联 Markdown 残留清理 + LaTeX 转义（保护数学区）。 */
+function escapeTableCell(raw: string): string {
+  const regions: string[] = []
+  let out = raw
+    .replace(/\$\$[\s\S]*?\$\$/g, (m) => {
+      regions.push(m)
+      return `\u0000CELLMATH${regions.length - 1}\u0000`
+    })
+    .replace(/\$[^$]*\$/g, (m) => {
+      regions.push(m)
+      return `\u0000CELLMATH${regions.length - 1}\u0000`
+    })
+  out = out.replace(/\*\*([^*\n]+)\*\*/g, '\\textbf{$1}')
+  out = out.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '\\textit{$1}')
+  out = out.replace(/&/g, '\\&').replace(/%/g, '\\%').replace(/#/g, '\\#').replace(/_/g, '\\_').replace(/\^/g, '\\^{}')
+  out = out.replace(/\$/g, '\\$') // 落单 $ 转义（数学区已保护）
+  for (let r = 0; r < regions.length; r++) out = out.split(`\u0000CELLMATH${r}\u0000`).join(regions[r])
+  return out
+}
+
+/** 估算字符串在 8pt IEEEtron 下的近似宽度（ASCII=1，CJK/宽字符=2）。 */
+function visualWidth(s: string): number {
+  let w = 0
+  for (const ch of s) {
+    const code = ch.codePointAt(0) ?? 0
+    // LaTeX 命令按字面长度算（\textbf{..} 等），已转义字符按剩余文本算
+    w += code > 0x2e7f || code === 0x2014 ? 2 : 1
+  }
+  return w
+}
+
+/** 解析一行管道表格 → 单元格数组（去掉首尾 `|`）。 */
+function parsePipeRow(line: string): string[] {
+  const trimmed = line.trim()
+  const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '')
+  return inner.split('|').map((c) => c.trim())
+}
+
+/** 由分隔行推断对齐（`:---` 左、`---:` 右、`:---:` 中、默认左）。 */
+function alignFromSep(sep: string): 'l' | 'c' | 'r' {
+  const s = sep.replace(/-/g, '').trim()
+  const left = s.startsWith(':')
+  const right = s.endsWith(':')
+  if (left && right) return 'c'
+  if (right) return 'r'
+  return 'l'
+}
+
+/** 把表块（含题注行判断之外的 `|` 行）渲染成 LaTeX `table`/`table*`。 */
+function buildTableLatex(block: string[], caption: string, idx: number): string {
+  const header = parsePipeRow(block[0])
+  const sepRow = parsePipeRow(block[1] ?? '')
+  const dataRows = block.slice(2).map(parsePipeRow)
+  const nCols = Math.max(header.length, ...dataRows.map((r) => r.length))
+
+  // 各列最大视觉宽度
+  const colWidths: number[] = Array(nCols).fill(0)
+  for (const row of [header, ...dataRows]) {
+    for (let c = 0; c < nCols; c++) {
+      colWidths[c] = Math.max(colWidths[c], visualWidth(row[c] ?? ''))
+    }
+  }
+  const totalWidth = colWidths.reduce((a, b) => a + b, 0)
+  const wide = totalWidth > 62 || nCols >= 6
+
+  const aligns = Array.from({ length: nCols }, (_, c) => (sepRow[c] ? alignFromSep(sepRow[c]) : 'l'))
+  // 列规格：宽表的长列（>18 视觉宽）用 p{...}，其余用 l/c/r
+  const colSpec = Array.from({ length: nCols }, (_, c) => {
+    const w = colWidths[c]
+    if (wide && w > 18) {
+      const frac = Math.max(0.1, Math.min(0.8, (w / Math.max(totalWidth, 1)) * (wide ? 0.92 : 1)))
+      return `p{${frac.toFixed(2)}\\textwidth}`
+    }
+    return aligns[c]
+  }).join(' ')
+
+  const fmtRow = (row: string[]): string =>
+    Array.from({ length: nCols }, (_, c) => escapeTableCell(row[c] ?? '')).join(' & ') + ' \\\\'
+
+  const env = wide ? 'table*' : 'table'
+  const lines: string[] = [
+    `\\begin{${env}}[t]`,
+    '\\centering',
+  ]
+  if (caption) {
+    lines.push(`\\caption{${escapeTableCell(caption)}}`)
+    lines.push(`\\label{tab:md-${idx}}`)
+  }
+  lines.push(
+    `\\begin{tabular}{${colSpec}}`,
+    '\\toprule',
+    fmtRow(header),
+    '\\midrule',
+    ...dataRows.map(fmtRow),
+    '\\bottomrule',
+    '\\end{tabular}',
+    `\\end{${env}}`,
+  )
+  return lines.join('\n')
 }
 
 /** 从图名派生 label（旧版规则：去 .png、下划线转连字符）。 */
@@ -599,6 +785,9 @@ export function composeDocument(input: ComposeInput): ComposeResult {
   for (const section of input.sections) {
     // 1) Markdown 残留
     let body = stripMarkdownHeaders(section.body)
+    // 1.5) Markdown 表格 → 哨兵（必须赶在数学净化之前：& 分隔符、snake_case 单元格）
+    const tables: string[] = []
+    body = convertMarkdownTables(body, tables)
     // 2) 图占位（保护 \ref 不被后续净化污染）
     body = embedFiguresInText(body, figures)
     // 3) 公式注入
@@ -608,11 +797,14 @@ export function composeDocument(input: ComposeInput): ComposeResult {
     // 5) 图还原
     body = injectFigureCode(body, figures)
 
-    const intermediate = body
-    const final = injectCitations(body, {
-      ...(input.knownKeys ? { knownKeys: input.knownKeys } : {}),
-      ...(input.numberToKey ? { numberToKey: input.numberToKey } : {}),
-    })
+    const intermediate = restoreMarkdownTables(body, tables)
+    const final = restoreMarkdownTables(
+      injectCitations(body, {
+        ...(input.knownKeys ? { knownKeys: input.knownKeys } : {}),
+        ...(input.numberToKey ? { numberToKey: input.numberToKey } : {}),
+      }),
+      tables,
+    )
     chapters.push({ title: section.title, intermediate, final })
   }
 

@@ -104,8 +104,11 @@ export declare function buildThebibliography(entries: readonly BibEntry[]): stri
 /**
  * 把引用占位符转成 `\cite{}`（旧版 `inject_citations` 的三层转换）。
  *
- *   1. `[key1, key2]` → `\cite{key1,key2}`
- *   2. `[alphaKey]` → `\cite{alphaKey}`（兜底，捕获 Agent 自由生成的引用）
+ *   1. `[key1, key2]` → `\cite{key1,key2}`；分隔符支持逗号或分号
+ *      （`[key1; key2; key3]`），并容忍 `arXiv:` / `doi:` 后缀注解
+ *      （`[key, arXiv:2609.02265]` → `\cite{key}`，编号已写在参考文献条目里）
+ *   2. `[alphaKey]` → `\cite{alphaKey}`（兜底；提供 knownKeys 时只转已知键，
+ *      避免 `[TBD]` / `[t]` 之类被误转）
  *   3. `[12]` / `[3-5]` → 按 numberToKey 映射 → `\cite{...}`
  *
  * 数学区（`$...$` / `$$...$$`）内不替换 —— `\cite` 不能在数学模式里用。
@@ -119,6 +122,26 @@ export interface FigureSpec {
     name: string;
     caption: string;
 }
+/**
+ * 把 Markdown 表格块转成 LaTeX `table` 环境（booktabs），并用哨兵保护正文，
+ * 避免后续 `sanitizeLatexMath` 把 `&` 分隔符转义、把 `fact_update` 包进数学区。
+ *
+ * 支持 GitHub 风格管道表格：`| a | b |` 表头行 + `|---|---|` 分隔行（可带 `:`
+ * 对齐标记）+ 数据行。表格上方紧邻的 `Table: <caption>` 行（或 `**Table N:**`）
+ * 作为题注消费掉。
+ *
+ * 列宽策略（对齐 visual-evidence-selection 的宽表规则）：
+ * - 估算各列最大视觉宽度（ASCII 1、CJK 2），总宽超过单栏阈值（约 62 字符）
+ *   或列数 ≥ 6 → `table*`（跨栏），长文本列用 `p{...}` 换行；否则单栏 `table`，
+ *   窄列用 `l` / `c` / `r`。
+ *
+ * 单元格内容按 LaTeX 转义（`& % # _ ^ $` 等），数学区（`$...$`）受保护。
+ * 返回带 `\u0000MDTABLE<i>\u0000` 哨兵的正文；用 {@link restoreMarkdownTables}
+ * 在净化/引用注入完成后还原。
+ */
+export declare function convertMarkdownTables(text: string, tables?: string[]): string;
+/** 把 `convertMarkdownTables` 留下的哨兵还原为 LaTeX 表格。 */
+export declare function restoreMarkdownTables(text: string, tables: readonly string[]): string;
 /** 从图名派生 label（旧版规则：去 .png、下划线转连字符）。 */
 export declare function figureLabel(name: string): string;
 /**

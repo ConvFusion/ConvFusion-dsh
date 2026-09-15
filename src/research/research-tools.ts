@@ -91,8 +91,8 @@ import {
   type EvidenceSource,
   type EvidenceStatus,
 } from './research-data.js'
-import { DEFAULT_PAPER_ID, PAPER_MATURITY_DIMENSIONS } from './paper-data.js'
-import { createPaper, readPaper } from './paper.js'
+import { DEFAULT_PAPER_ID, PAPER_MATURITY_DIMENSIONS, PAPER_TYPES } from './paper-data.js'
+import { createPaper, getActivePaperId, listPapers, readPaper, resolvePaperParameter, setActivePaperId } from './paper.js'
 import { detectAndRecordGaps, prioritizeGaps, recommendCapabilities, listPaperGaps } from './paper-gaps.js'
 import { paperStatusSummary, proposeRevision, readPaperMaturity, suggestPaperMaturity, writePaperMaturity } from './paper-evolution.js'
 import { listSystemSkills } from './skills.js'
@@ -983,9 +983,36 @@ export function defineResearchTools(
           return [
             {
               type: 'text' as const,
-              text: `Revision proposal ${p.id} recorded. The manuscript is unchanged — the user accepts, edits or rejects it.`,
+              text: `Revision proposal ${p.id} recorded (paper: ${String(v.paper ?? '')}). The manuscript is unchanged — the user accepts, edits or rejects it.`,
             },
           ]
+        }
+        if (v.papers) {
+          const papers = v.papers as Array<{id: string; title?: string; status: string; version: string; track?: string; type?: string; active: boolean}>
+          const lines = [`Papers in workspace (active: ${String(v.active_paper)}):`, '']
+          for (const p of papers) {
+            const flags = [p.active ? '✅ active' : '', p.track ? `track: ${p.track}` : '', p.type ? `type: ${p.type}` : ''].filter(Boolean).join(' | ')
+            lines.push(`- ${p.active ? '*' : ' '} ${p.id} v${p.version} [${p.status}] — ${p.title ?? '(untitled)'}`)
+            if (flags) lines.push(`    ${flags}`)
+          }
+          return [{ type: 'text' as const, text: lines.join('\n') }]
+        }
+        if (v.active_paper && v.action === 'switch') {
+          const lines = [`Switched active paper to: ${String(v.active_paper)}`, '']
+          if (v.summary) {
+            const s = v.summary as Record<string, unknown>
+            lines.push(`  ${String(s.title)} v${String(s.version)} [${String(s.status)}]`)
+          }
+          return [{ type: 'text' as const, text: lines.join('\n') }]
+        }
+        if (v.id && v.action === 'create') {
+          const lines = [`Created new paper: ${String(v.id)}`, '']
+          if (v.summary) {
+            const s = v.summary as Record<string, unknown>
+            lines.push(`  Title: ${String(s.title ?? '(untitled)')}`)
+            lines.push(`  Status: ${String(s.status)} v${String(s.version)}`)
+          }
+          return [{ type: 'text' as const, text: lines.join('\n') }]
         }
         return [{ type: 'text' as const, text: JSON.stringify(v).slice(0, 500) }]
       },
@@ -994,25 +1021,65 @@ export function defineResearchTools(
     async execute(args, exec) {
       const ws = resolveWorkspace(exec?.agent)
       const a = args as Record<string, unknown>
-      const paperId = typeof a.paper === 'string' && a.paper.trim() ? a.paper.trim() : DEFAULT_PAPER_ID
       const action = String(a.action ?? 'status')
 
       try {
+        // list action 不需要paper参数
+        if (action === 'list') {
+          const papers = listPapers(ws)
+          const activeId = getActivePaperId(ws)
+          return losslessJson({
+            ok: true,
+            active_paper: activeId,
+            papers: papers.map((p) => ({
+              id: p.id,
+              title: p.metadata.title,
+              status: p.metadata.status,
+              version: p.metadata.version,
+              track: p.metadata.researchTrack,
+              type: p.metadata.paperType,
+              active: p.id === activeId,
+            })),
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        // switch action 切换激活论文
+        if (action === 'switch') {
+          const targetParam = typeof a.paper === 'string' ? a.paper.trim() : ''
+          if (!targetParam) return fail('请指定要切换到的论文ID或别名。')
+          const resolvedId = resolvePaperParameter(ws, targetParam)
+          if (!readPaper(ws, resolvedId)) return fail(`找不到论文 \`${targetParam}\`。`)
+          setActivePaperId(ws, resolvedId)
+          return losslessJson({
+            ok: true,
+            active_paper: resolvedId,
+            summary: paperStatusSummary(ws, resolvedId),
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        // 其他action解析paper参数
+        const paperId = resolvePaperParameter(ws, typeof a.paper === 'string' ? a.paper : undefined)
+
         if (action === 'status') {
           if (!readPaper(ws, paperId)) {
             return losslessJson({ ok: false, error: `No paper \`${paperId}\` in this workspace. Create one with action "create".` }) as unknown as Record<string, JsonValue>
           }
           const summary = paperStatusSummary(ws, paperId)
-          return losslessJson({ ok: true, summary }) as unknown as Record<string, JsonValue>
+          return losslessJson({ ok: true, summary, active: paperId === getActivePaperId(ws) }) as unknown as Record<string, JsonValue>
         }
 
         if (action === 'create') {
           const created = createPaper(ws, {
-            id: paperId,
+            ...(a.id ? { id: String(a.id) } : {}),
             ...(a.title ? { title: String(a.title) } : {}),
+            ...(a.research_track ? { researchTrack: String(a.research_track) } : {}),
+            ...(a.paper_type ? { paperType: String(a.paper_type) } : {}),
+            ...(a.target_venue ? { targetVenue: String(a.target_venue) } : {}),
+            ...(a.authors ? { authors: String(a.authors) } : {}),
+            ...(a.set_active === false ? { setActive: false } : {}),
           })
           if ('error' in created) return fail(created.error)
-          return losslessJson({ ok: true, summary: paperStatusSummary(ws, paperId) }) as unknown as Record<string, JsonValue>
+          return losslessJson({ ok: true, id: created.id, summary: paperStatusSummary(ws, created.id) }) as unknown as Record<string, JsonValue>
         }
 
         if (action === 'gaps') {
@@ -1020,6 +1087,7 @@ export function defineResearchTools(
           const result = detectAndRecordGaps(ws, paperId)
           return losslessJson({
             ok: true,
+            paper: paperId,
             gaps: prioritizeGaps(result.gaps.filter((g) => !g.resolved)),
             added: result.added.length,
             note: 'Recorded in the paper\'s gaps.md. Gaps only recommend capabilities — nothing is executed.',
@@ -1034,6 +1102,7 @@ export function defineResearchTools(
           const recommendations = recommendCapabilities(ws, paperId, known)
           return losslessJson({
             ok: true,
+            paper: paperId,
             recommendations,
             note: 'Suggestions only. Create a plan for one if you agree (plans/), then the user reviews it.',
           }) as unknown as Record<string, JsonValue>
@@ -1044,7 +1113,7 @@ export function defineResearchTools(
           const suggested = suggestPaperMaturity(ws, paperId)
           const applied = a.write === true
           if (applied) writePaperMaturity(ws, paperId, suggested)
-          return losslessJson({ ok: true, maturity: applied ? readPaperMaturity(ws, paperId) : suggested, applied }) as unknown as Record<string, JsonValue>
+          return losslessJson({ ok: true, paper: paperId, maturity: applied ? readPaperMaturity(ws, paperId) : suggested, applied }) as unknown as Record<string, JsonValue>
         }
 
         if (action === 'propose_revision') {
@@ -1060,13 +1129,14 @@ export function defineResearchTools(
           if ('error' in proposal) return fail(proposal.error)
           return losslessJson({
             ok: true,
+            paper: paperId,
             proposal: { id: proposal.id, status: proposal.status },
             note: 'Recorded as a proposal only. The manuscript is unchanged until the user accepts it.',
           }) as unknown as Record<string, JsonValue>
         }
 
         return fail(`Unknown action "${action}".`, {
-          allowed: ['status', 'create', 'gaps', 'recommend', 'maturity', 'propose_revision'],
+          allowed: ['status', 'create', 'list', 'switch', 'gaps', 'recommend', 'maturity', 'propose_revision'],
         })
       } catch (e) {
         return fail(e instanceof Error ? e.message : String(e))
@@ -1505,7 +1575,7 @@ export function defineResearchTools(
       const ws = resolveWorkspace(exec?.agent)
       const a = args as Record<string, unknown>
       const action = String(a.action ?? 'status')
-      const paperId = typeof a.paperId === 'string' && a.paperId.trim() ? a.paperId.trim() : DEFAULT_PAPER_ID
+      const paperId = resolvePaperParameter(ws, typeof a.paperId === 'string' ? a.paperId : undefined)
 
       const paperDir = join(ws, 'papers', paperId)
       const latexDir = join(paperDir, LATEX_SUBDIR)
@@ -1686,7 +1756,14 @@ export function parseBibEntries(text: string): { entries: BibEntry[]; numberToKe
     }
     if (seen.has(key)) continue
     seen.add(key)
-    entries.push({ key, text: body.replace(/\s+/g, ' ') })
+    // thebibliography 非表格环境：作者列表里的 & / % / # 必须转义，否则
+    // "Misplaced alignment tab character &" 之类的编译错误。
+    const safeText = body
+      .replace(/\s+/g, ' ')
+      .replace(/(?<!\\)&/g, '\\&')
+      .replace(/(?<!\\)%/g, '\\%')
+      .replace(/(?<!\\)#/g, '\\#')
+    entries.push({ key, text: safeText })
   }
   return { entries, numberToKey }
 }
