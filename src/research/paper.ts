@@ -22,10 +22,12 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  ACTIVE_PAPER_FILE,
   DEFAULT_PAPER_ID,
   PAPERS_DIR,
   PAPER_FILES,
   PAPER_STATUSES,
+  PAPER_TYPES,
   normalizeSectionName,
   type EvolutionEvent,
   type PaperClaimEntry,
@@ -96,6 +98,8 @@ function parseMetadata(source: string | null, fallbackId: string): PaperMetadata
     ...(fm.authors ? { authors: fm.authors } : {}),
     ...(fm.target_venue ? { targetVenue: fm.target_venue } : {}),
     ...(fm.research_domain ? { researchDomain: fm.research_domain } : {}),
+    ...(fm.research_track ? { researchTrack: String(fm.research_track).toLowerCase().trim() } : {}),
+    ...(fm.paper_type ? { paperType: String(fm.paper_type).toLowerCase().trim() } : {}),
     ...(fm.created_at ? { createdAt: fm.created_at } : {}),
     ...(fm.updated_at ? { updatedAt: fm.updated_at } : {}),
   }
@@ -114,6 +118,8 @@ export function serializeMetadata(meta: PaperMetadata): string {
     authors: meta.authors,
     target_venue: meta.targetVenue,
     research_domain: meta.researchDomain,
+    research_track: meta.researchTrack,
+    paper_type: meta.paperType,
     created_at: meta.createdAt,
     updated_at: meta.updatedAt ?? new Date().toISOString(),
   })
@@ -121,6 +127,8 @@ export function serializeMetadata(meta: PaperMetadata): string {
   lines.push(`- **Status**: ${meta.status}`)
   lines.push(`- **Version**: ${meta.version}`)
   if (meta.researchDomain) lines.push(`- **Domain**: ${meta.researchDomain}`)
+  if (meta.researchTrack) lines.push(`- **Research Track**: ${meta.researchTrack}`)
+  if (meta.paperType) lines.push(`- **Paper Type**: ${meta.paperType}`)
   if (meta.researchStateVersion) lines.push(`- **Based on research state**: v${meta.researchStateVersion}`)
   if (meta.targetVenue) lines.push(`- **Target venue**: ${meta.targetVenue}`)
   if (meta.authors) lines.push(`- **Authors**: ${meta.authors}`)
@@ -141,6 +149,119 @@ export function listPaperIds(workspace: string): string[] {
   } catch {
     return []
   }
+}
+
+/** 列出全部 Paper 文档（含元数据）。 */
+export function listPapers(workspace: string): PaperDocument[] {
+  return listPaperIds(workspace)
+    .map((id) => readPaper(workspace, id))
+    .filter((p): p is PaperDocument => p !== null)
+}
+
+/**
+ * 自动生成论文ID
+ * 规则：paper-<track>-<type>，同类型多篇时加-<序号>
+ */
+export function generatePaperId(
+  workspace: string,
+  track?: string,
+  type?: string,
+): string {
+  const normalizedTrack = track?.toLowerCase().trim().replace(/[^a-z0-9]/g, '-') || 'main'
+  const normalizedType = type?.toLowerCase().trim().replace(/[^a-z0-9]/g, '-') || 'paper'
+  
+  const existingIds = new Set(listPaperIds(workspace))
+  const baseId = `paper-${normalizedTrack}-${normalizedType}`
+  
+  if (!existingIds.has(baseId)) return baseId
+  
+  // 同ID已存在，加序号
+  let seq = 2
+  while (existingIds.has(`${baseId}-${seq}`)) seq++
+  return `${baseId}-${seq}`
+}
+
+/**
+ * 模糊解析 paperId 别名
+ * 支持：
+ * - 完整ID直接匹配
+ * - 短名匹配（如 d1-benchmark → paper-d1-benchmark）
+ * - track/type 组合匹配（如 d1 + benchmark → paper-d1-benchmark）
+ * - 标题关键词匹配（如 "lifecycle" 匹配对应标题的论文）
+ * 返回匹配到的paperId，歧义或找不到返回undefined
+ */
+export function resolvePaperId(
+  workspace: string,
+  input: string,
+): string | undefined {
+  const normalizedInput = input.toLowerCase().trim()
+  if (!normalizedInput) return undefined
+
+  const papers = listPapers(workspace)
+  if (papers.length === 0) return undefined
+
+  // 1. 精确匹配ID
+  const exact = papers.find((p) => p.id.toLowerCase() === normalizedInput)
+  if (exact) return exact.id
+
+  // 2. 前缀匹配（paper-前缀可省略）
+  const prefix = normalizedInput.startsWith('paper-') ? normalizedInput : `paper-${normalizedInput}`
+  const prefixMatch = papers.find((p) => p.id.toLowerCase() === prefix)
+  if (prefixMatch) return prefixMatch.id
+
+  // 3. track/type 组合匹配
+  const parts = normalizedInput.split(/[-_\s]+/).filter(Boolean)
+  const trackMatches = papers.filter((p) => p.metadata.researchTrack && parts.includes(p.metadata.researchTrack))
+  const typeMatches = papers.filter((p) => p.metadata.paperType && parts.includes(p.metadata.paperType))
+  
+  if (trackMatches.length === 1 && typeMatches.length === 1 && trackMatches[0].id === typeMatches[0].id) {
+    return trackMatches[0].id
+  }
+  if (trackMatches.length === 1 && parts.length === 1) return trackMatches[0].id
+  if (typeMatches.length === 1 && parts.length === 1) return typeMatches[0].id
+
+  // 4. 标题关键词匹配
+  const titleMatches = papers.filter((p) => 
+    p.metadata.title?.toLowerCase().includes(normalizedInput)
+  )
+  if (titleMatches.length === 1) return titleMatches[0].id
+
+  // 5. 单篇论文时直接返回
+  if (papers.length === 1) return papers[0].id
+
+  return undefined
+}
+
+/** 获取当前激活的论文ID，缺省返回 DEFAULT_PAPER_ID */
+export function getActivePaperId(workspace: string): string {
+  const activeFile = join(workspace, ACTIVE_PAPER_FILE)
+  try {
+    const id = readFileSync(activeFile, 'utf8').trim()
+    // 确认paper存在
+    if (readPaper(workspace, id)) return id
+  } catch {}
+  // 不存在时如果有paper-main就返回paper-main，否则返回第一个paper
+  const papers = listPaperIds(workspace)
+  if (papers.includes(DEFAULT_PAPER_ID)) return DEFAULT_PAPER_ID
+  return papers[0] ?? DEFAULT_PAPER_ID
+}
+
+/** 设置当前激活的论文ID */
+export function setActivePaperId(workspace: string, paperId: string): boolean {
+  const paper = readPaper(workspace, paperId)
+  if (!paper) return false
+  writeFileSync(join(workspace, ACTIVE_PAPER_FILE), paperId, 'utf8')
+  return true
+}
+
+/**
+ * 解析用户传入的paper参数，自动处理别名、缺省情况，返回最终paperId
+ * 所有paper相关工具函数都应该调用这个函数来解析入参
+ */
+export function resolvePaperParameter(workspace: string, paperParam?: string): string {
+  if (!paperParam?.trim()) return getActivePaperId(workspace)
+  const resolved = resolvePaperId(workspace, paperParam.trim())
+  return resolved ?? paperParam.trim()
 }
 
 /**
@@ -215,21 +336,32 @@ export function createPaper(
     id?: string
     title?: string
     researchDomain?: string
+    researchTrack?: string
+    paperType?: string
     targetVenue?: string
     authors?: string
     researchProject?: string
     researchStateVersion?: string
     /** 自定义正文；缺省用 {@link manuscriptTemplate}。 */
     manuscript?: string
+    /** 是否创建后设为当前激活论文，默认true */
+    setActive?: boolean
   } = {},
 ): PaperDocument | PaperWriteError {
-  const paperId = (input.id ?? DEFAULT_PAPER_ID).trim()
+  // 自动生成ID（如果未指定）
+  const paperId = input.id?.trim() ?? generatePaperId(workspace, input.researchTrack, input.paperType)
+  
   if (!/^[a-z0-9][a-z0-9-]*$/.test(paperId)) {
-    return { error: `非法 Paper id：${paperId}（kebab-case，如 paper-main）` }
+    return { error: `非法 Paper id：${paperId}（kebab-case，如 paper-d1-benchmark）` }
   }
   const dir = paperDir(workspace, paperId)
   if (existsSync(filePath(workspace, paperId, PAPER_FILES.manuscript))) {
     return { error: `Paper \`${paperId}\` 已存在。` }
+  }
+
+  // 验证paperType合法
+  if (input.paperType && !PAPER_TYPES.includes(input.paperType.toLowerCase())) {
+    return { error: `非法 paper_type：${input.paperType}，可选值：${PAPER_TYPES.join(', ')}` }
   }
 
   mkdirSync(dir, { recursive: true })
@@ -251,6 +383,8 @@ export function createPaper(
       ...(input.researchProject ? { researchProject: input.researchProject } : { researchProject: 'current' }),
       ...(input.researchStateVersion ? { researchStateVersion: input.researchStateVersion } : {}),
       ...(input.researchDomain ? { researchDomain: input.researchDomain } : {}),
+      ...(input.researchTrack ? { researchTrack: input.researchTrack.toLowerCase().trim() } : {}),
+      ...(input.paperType ? { paperType: input.paperType.toLowerCase().trim() } : {}),
       ...(input.targetVenue ? { targetVenue: input.targetVenue } : {}),
       ...(input.authors ? { authors: input.authors } : {}),
       createdAt: now,
@@ -258,6 +392,11 @@ export function createPaper(
     }),
     'utf8',
   )
+
+  // 默认设为激活论文
+  if (input.setActive !== false) {
+    setActivePaperId(workspace, paperId)
+  }
 
   return mustRead(workspace, paperId, '创建 Paper')
 }

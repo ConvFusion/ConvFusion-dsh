@@ -160,8 +160,8 @@ export function researchWorkspaceOf(sessionWorkspace: string): string {
  */
 export function loadPaper(
   workspace: string,
-  excerptChars = 4000,
   paperId: string = DEFAULT_PAPER_ID,
+  excerptChars = 4000,
 ): { title: string | null; excerpt: string | null } {
   const source = readText(join(workspace, 'papers', paperId, 'paper.md'))
   if (source === null) return { title: null, excerpt: null }

@@ -41,6 +41,7 @@ import { assessResearchProcess } from './research-process.js'
 import type { ProcessAssessment } from './research-process.js'
 import { buildResearchIndex, loadResearchState, openQuestions } from './research-state.js'
 import { DEFAULT_PAPER_ID } from './paper-data.js'
+import { getActivePaperId, listPapers, readPaper } from './paper.js'
 import { paperStatusSummary } from './paper-evolution.js'
 import { prioritizeGaps, listPaperGaps } from './paper-gaps.js'
 import { listAllOutputs } from './output.js'
@@ -127,7 +128,17 @@ export interface ResearchContextSource {
 /** 收集当前研究状态（纯读盘；每次组装都重新求值以确保动态性）。 */
 export function collectResearchContext(source: ResearchContextSource): ResearchContext {
   const ws = source.workspace
-  const paper = loadPaper(ws)
+  const activePaperId = getActivePaperId(ws)
+  const allPapers = listPapers(ws).map((p) => ({
+    id: p.id,
+    title: p.metadata.title,
+    status: p.metadata.status,
+    version: p.metadata.version,
+    track: p.metadata.researchTrack,
+    type: p.metadata.paperType,
+    active: p.id === activePaperId,
+  }))
+  const paper = loadPaper(ws, activePaperId)
   // 研究根目录相对会话工作区的展示前缀：新布局 → 'workspace'；旧布局（研究根 = 会话
   // 工作区）→ 不设置（路径按原样渲染，行为与旧版一致）。非常规位置（自定义配置在
   // 会话工作区之外）时同样不设置，避免渲染出 `../..` 之类的误导前缀。
@@ -139,6 +150,8 @@ export function collectResearchContext(source: ResearchContextSource): ResearchC
   return {
     ...(rootPrefix ? { rootPrefix } : {}),
     project: loadProject(ws),
+    activePaperId,
+    allPapers,
     paperTitle: paper.title,
     paperExcerpt: paper.excerpt,
     plans: listPlans(ws),
@@ -148,8 +161,8 @@ export function collectResearchContext(source: ResearchContextSource): ResearchC
     state: loadResearchState(ws),
     index: buildResearchIndex(ws),
     openQuestions: openQuestions(ws),
-    paper: paperStatusSummary(ws, DEFAULT_PAPER_ID) ?? null,
-    paperGaps: prioritizeGaps(listPaperGaps(ws, DEFAULT_PAPER_ID)).filter((g) => !g.resolved),
+    paper: paperStatusSummary(ws, activePaperId) ?? null,
+    paperGaps: prioritizeGaps(listPaperGaps(ws, activePaperId)).filter((g) => !g.resolved),
     outputs: listAllOutputs(ws).map((o) => ({
       id: o.id,
       type: o.type,
@@ -280,8 +293,27 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
   }
   lines.push('')
 
+  // 论文列表
+  if (ctx.allPapers.length > 0) {
+    lines.push('## Papers in workspace')
+    lines.push('')
+    lines.push(`Current active paper: **${ctx.activePaperId}**`)
+    lines.push('')
+    for (const p of ctx.allPapers) {
+      const flags = [
+        p.active ? '✅ active' : '',
+        p.track ? `track: ${p.track}` : '',
+        p.type ? `type: ${p.type}` : ''
+      ].filter(Boolean).join(' | ')
+      lines.push(`- ${p.active ? '*' : ' '} \`${p.id}\` v${p.version} [${p.status}] — ${p.title ?? '(untitled)'}`)
+      if (flags) lines.push(`    ${flags}`)
+    }
+    lines.push(`- Use \`research_paper action=switch paper=<id/alias>\` to switch active paper.`)
+    lines.push('')
+  }
+
   if (ctx.paperTitle || ctx.paperExcerpt) {
-    lines.push('## Current paper')
+    lines.push(`## Current active paper (${ctx.activePaperId})`)
     lines.push('')
     if (ctx.paperTitle) lines.push(`- Title: ${ctx.paperTitle}`)
     // 相关性：提到 paper/论文/写作，或本轮没有明确任务时才给正文节选
@@ -294,7 +326,7 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
         lines.push(ctx.paperExcerpt)
       }
     } else {
-      lines.push(`- (Full manuscript available at \`${root}paper/\`; read it when the task needs it.)`)
+      lines.push(`- (Full manuscript available at \`${root}papers/${ctx.activePaperId}/\`; read it when the task needs it.)`)
     }
     lines.push('')
   }

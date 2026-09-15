@@ -27,6 +27,32 @@ export declare function paperRelDir(paperId?: string): string;
 export declare function serializeMetadata(meta: PaperMetadata): string;
 /** 列出全部 Paper id。 */
 export declare function listPaperIds(workspace: string): string[];
+/** 列出全部 Paper 文档（含元数据）。 */
+export declare function listPapers(workspace: string): PaperDocument[];
+/**
+ * 自动生成论文ID
+ * 规则：paper-<track>-<type>，同类型多篇时加-<序号>
+ */
+export declare function generatePaperId(workspace: string, track?: string, type?: string): string;
+/**
+ * 模糊解析 paperId 别名
+ * 支持：
+ * - 完整ID直接匹配
+ * - 短名匹配（如 d1-benchmark → paper-d1-benchmark）
+ * - track/type 组合匹配（如 d1 + benchmark → paper-d1-benchmark）
+ * - 标题关键词匹配（如 "lifecycle" 匹配对应标题的论文）
+ * 返回匹配到的paperId，歧义或找不到返回undefined
+ */
+export declare function resolvePaperId(workspace: string, input: string): string | undefined;
+/** 获取当前激活的论文ID，缺省返回 DEFAULT_PAPER_ID */
+export declare function getActivePaperId(workspace: string): string;
+/** 设置当前激活的论文ID */
+export declare function setActivePaperId(workspace: string, paperId: string): boolean;
+/**
+ * 解析用户传入的paper参数，自动处理别名、缺省情况，返回最终paperId
+ * 所有paper相关工具函数都应该调用这个函数来解析入参
+ */
+export declare function resolvePaperParameter(workspace: string, paperParam?: string): string;
 /**
  * 读一个 Paper（缺文件 → 空值，**不抛错**）。
  *
@@ -48,12 +74,16 @@ export declare function createPaper(workspace: string, input?: {
     id?: string;
     title?: string;
     researchDomain?: string;
+    researchTrack?: string;
+    paperType?: string;
     targetVenue?: string;
     authors?: string;
     researchProject?: string;
     researchStateVersion?: string;
     /** 自定义正文；缺省用 {@link manuscriptTemplate}。 */
     manuscript?: string;
+    /** 是否创建后设为当前激活论文，默认true */
+    setActive?: boolean;
 }): PaperDocument | PaperWriteError;
 /** 更新 metadata（不改正文）。 */
 export declare function updatePaperMetadata(workspace: string, paperId: string, patch: Partial<Omit<PaperMetadata, 'id'>>): PaperDocument | PaperWriteError;

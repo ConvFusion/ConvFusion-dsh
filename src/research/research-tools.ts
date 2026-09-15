@@ -898,7 +898,12 @@ export function defineResearchTools(
       '- `status`: what the paper currently is — version, sections, claim coverage, evidence usage, ' +
       'open gaps, pending revision proposals, maturity. Use this to answer "what is this paper\'s ' +
       'biggest problem right now?".\n' +
-      '- `create`: create the paper (only `paper.md` is required; other files appear as needed).\n' +
+      '- `create`: create the paper (only `paper.md` is required; other files appear as needed). ' +
+      'If `paper` is omitted, the id is auto-generated from `research_track` and `paper_type` ' +
+      '(e.g. paper-d2-method). The new paper is set as active by default.\n' +
+      '- `list`: list all papers in the workspace with their track, type, status and active flag.\n' +
+      '- `switch`: switch the active paper (the one subsequent paper operations default to). ' +
+      'Accepts an id or alias.\n' +
       '- `gaps`: run the rule-based gap check and record what is missing. Gaps only *recommend* a ' +
       'capability — nothing is executed.\n' +
       '- `recommend`: turn open gaps into skill recommendations (never executes).\n' +
@@ -908,11 +913,29 @@ export function defineResearchTools(
     parameters: {
       action: {
         type: 'string',
-        description: 'One of: status | create | gaps | recommend | maturity | propose_revision.',
-        enum: ['status', 'create', 'gaps', 'recommend', 'maturity', 'propose_revision'],
+        description: 'One of: status | create | list | switch | gaps | recommend | maturity | propose_revision.',
+        enum: ['status', 'create', 'list', 'switch', 'gaps', 'recommend', 'maturity', 'propose_revision'],
       },
-      paper: { type: 'string', description: 'Paper id (default: paper-main).' },
+      paper: {
+        type: 'string',
+        description: 'Paper id or alias (e.g. d1-benchmark, d2-method). Defaults to the current active paper. Use action "switch" to change active paper.',
+      },
       title: { type: 'string', description: 'For `create`: paper title.' },
+      research_track: {
+        type: 'string',
+        description: 'For `create`: research track label (e.g. d1, d2, d3). Used to auto-generate paper id.',
+      },
+      paper_type: {
+        type: 'string',
+        description: 'For `create`: paper type (benchmark | method | survey | demo | position | technical-report | system | other). Used to auto-generate paper id.',
+        enum: ['benchmark', 'method', 'survey', 'demo', 'position', 'technical-report', 'system', 'other'],
+      },
+      target_venue: { type: 'string', description: 'For `create`: target venue.' },
+      authors: { type: 'string', description: 'For `create`: authors.' },
+      set_active: {
+        type: 'boolean',
+        description: 'For `create`: whether to set the new paper as the active paper (default true).',
+      },
       reason: { type: 'string', description: 'For `propose_revision`: why the paper should change.' },
       proposed_changes: {
         type: 'string',

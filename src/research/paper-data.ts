@@ -98,9 +98,28 @@ export interface PaperMetadata {
   authors?: string
   targetVenue?: string
   researchDomain?: string
+  /** 研究方向标签（如 d1/d2/d3，对应研究线路） */
+  researchTrack?: string
+  /** 论文类型标签（如 benchmark/method/survey/demo/position） */
+  paperType?: string
   createdAt?: string
   updatedAt?: string
 }
+
+/** 预定义论文类型，可扩展 */
+export const PAPER_TYPES: readonly string[] = [
+  'benchmark',
+  'method',
+  'survey',
+  'demo',
+  'position',
+  'technical-report',
+  'system',
+  'other'
+] as const
+
+/** 当前激活论文持久化文件（存放在 workspace 根目录） */
+export const ACTIVE_PAPER_FILE = '.active-paper'
 
 /* ════════════════════════════════════════════════════════════════════════
  * Paper 文档

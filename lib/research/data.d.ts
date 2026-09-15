@@ -81,9 +81,21 @@ export interface ResearchContext {
     rootPrefix?: string;
     /** 研究项目（缺失代表还没有 `project.md` —— 走通用助手模式）。 */
     project: ResearchProject | null;
-    /** 当前 Paper 的标题（来自 paper/ 下的一级标题；Stage 5 会扩展）。 */
+    /** 当前激活的论文ID */
+    activePaperId: string;
+    /** workspace下所有论文的精简列表 */
+    allPapers: Array<{
+        id: string;
+        title?: string;
+        status: string;
+        version: string;
+        track?: string;
+        type?: string;
+        active: boolean;
+    }>;
+    /** 当前激活 Paper 的标题（来自 paper/ 下的一级标题；Stage 5 会扩展）。 */
     paperTitle: string | null;
-    /** 当前 Paper 的正文（Stage 1 直接读 paper 文件；Stage 5 改为分段/状态驱动）。 */
+    /** 当前激活 Paper 的正文节选（Stage 1 直接读 paper 文件；Stage 5 改为分段/状态驱动）。 */
     paperExcerpt: string | null;
     /** 当前已就绪的 Plan（plans/*.md 的元数据，见 PlanHandoff）。 */
     plans: PlanSummary[];
@@ -109,9 +121,9 @@ export interface ResearchContext {
      * 用于能力选择与进展展示，不驱动执行。
      */
     process: ProcessAssessment;
-    /** Paper 状态摘要（Stage 5；null = 尚未建立 Paper）。 */
+    /** 当前激活 Paper 状态摘要（Stage 5；null = 尚未建立 Paper）。 */
     paper: PaperStatusSummary | null;
-    /** 当前未解决的 Paper 缺口（Stage 5 §14；只作提示，不触发执行）。 */
+    /** 当前激活 Paper 未解决的缺口（Stage 5 §14；只作提示，不触发执行）。 */
     paperGaps: PaperGap[];
     /** 研究产出（Stage 5.1；同一研究的其他表达形式）。 */
     outputs: Array<{

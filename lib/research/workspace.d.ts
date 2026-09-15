@@ -78,7 +78,7 @@ export declare function researchWorkspaceOf(sessionWorkspace: string): string;
  *
  * 只读的**轻量**读取：完整 Paper 语义由 Stage 5 的 `paper.ts` 负责。
  */
-export declare function loadPaper(workspace: string, excerptChars?: number, paperId?: string): {
+export declare function loadPaper(workspace: string, paperId?: string, excerptChars?: number): {
     title: string | null;
     excerpt: string | null;
 };
