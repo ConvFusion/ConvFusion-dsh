@@ -18,10 +18,10 @@ ConvFusion 是专为 DeepSeek Harness 打造的科研操作系统插件，为AI�
 
 ## 🚀 安装
 
-使用 [DSH-Launcher](https://github.com/ConvFusion/DSH-Launcher) 安装并启动 DeepSeek Harness，然后在插件管理页面中输入以下命令进行安装：
+使用 [DSH-Launcher](https://github.com/ConvFusion/DSH-Launcher) 安装并启动 DeepSeek Harness，然后在 DSH-Launcher 的插件管理页面中输入以下命令进行安装：
 
 ```bash
-npx @deepseek-ai/dsh plugin add https://github.com/ConvFusion/ConvFusion-dsh
+github:ConvFusion/ConvFusion-dsh
 ```
 
 ## 📖 快速开始
@@ -33,11 +33,13 @@ npx @deepseek-ai/dsh plugin add https://github.com/ConvFusion/ConvFusion-dsh
 ```
 
 例如：
+
 - `/research 我想做一个关于无人机视觉-LiDAR跨模态定位的研究`
 - `/research 帮我设计一个实验验证我的假设`
 - `/research 现在研究到哪一步了，接下来应该做什么？`
 
 ConvFusion会自动：
+
 1. 为你创建规范的研究工作区结构
 2. 根据当前研究阶段推荐合适的方法
 3. 追踪所有研究资产和决策过程
@@ -46,6 +48,7 @@ ConvFusion会自动：
 ## 📂 工作区结构
 
 ConvFusion使用标准化的研究工作区布局：
+
 ```
 <your-research-project>/
 ├── project.md          # 研究定义与范围
