@@ -27,17 +27,16 @@
     "build:host": "tsc -p tsconfig.json",
     "build:client": "node scripts/build-client.mjs && tsc -p tsconfig.client.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "verify:host-deps": "node scripts/verify-host-deps.mjs",
     "clean": "rm -rf lib"
   },
-  "dependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-llm": "^0.1.5-rc.1",
-    "@deepseek-ai/dsh-tools": "^0.1.5-rc.1",
-    "@deepseek-ai/dsh-util-values": "^0.1.5-rc.1"
-  },
   "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-commands": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.1.5-rc.1",
     "@deepseek-ai/dsh-system-prompt": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-util-values": "^0.1.5-rc.1",
     "@types/node": "^22.10.0",
     "typescript": "^5.6.0",
     "@types/react": "^18.3.0",
@@ -59,6 +58,10 @@
   },
   "license": "MIT",
   "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/dsh-util-values": "*",
     "react": "^18.0.0"
   },
   "peerDependenciesMeta": {
