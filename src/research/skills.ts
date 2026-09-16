@@ -30,7 +30,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { SkillOrigin } from './taxonomy.js'
 import { normalizeCategoryId } from './taxonomy.js'
@@ -175,7 +175,11 @@ export function parseSkillDocument(
   // 标题去掉 `Skill: ` 前缀（渲染器写的就是 `# Skill: X`）
   const parsed = parseSections(body)
   const skillTitle = parsed.title?.replace(/^Skill:\s*/i, '') ?? null
-  const id = (absPath.split('/').pop() ?? '').replace(/\.md$/, '')
+  // `absPath` comes from the host filesystem. Splitting only on `/` turns the
+  // entire absolute path into the skill id on Windows, which DSH rejects as an
+  // invalid skill name. Accept both platform separators so packaged skills
+  // retain the same stable id on every host.
+  const id = (absPath.split(/[\\/]/).pop() ?? '').replace(/\.md$/, '')
   const category = normalizeCategoryId(fm.category)
   const code = skillCode(id)
   const label = skillLabel(id)
@@ -234,7 +238,12 @@ function listMarkdownRecursive(root: string): Array<{ abs: string; rel: string }
       if (e.name.startsWith('.')) continue
       const abs = join(dir, e.name)
       if (e.isDirectory()) walk(abs)
-      else if (e.name.endsWith('.md')) out.push({ abs, rel: abs.slice(root.length + 1) })
+      else if (e.name.endsWith('.md')) {
+        // Published metadata uses portable `/` separators even when discovery
+        // runs on Windows.
+        const rel = relative(root, abs).replace(/\\/g, '/')
+        out.push({ abs, rel })
+      }
     }
   }
   walk(root)

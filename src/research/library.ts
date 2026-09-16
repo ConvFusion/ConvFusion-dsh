@@ -22,6 +22,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { dirname } from 'node:path'
 import type { SkillCategory } from './taxonomy.js'
 import { SYSTEM_CATEGORIES, categoryGroup, categoryName, systemGroups } from './taxonomy.js'
 import type { SkillCustomizationStore, SkillCustomizations } from './skill-customization.js'
@@ -308,7 +309,7 @@ export function createConvFusionSkillProvider(
           invocation: candidate.invocation,
           source: candidate.source,
           provider: SKILL_PROVIDER_NAME,
-          resourceBase: { kind: 'directory', path: doc.path.replace(/\/[^/]+$/, '') },
+          resourceBase: { kind: 'directory', path: dirname(doc.path) },
           content: effectiveSkillContent(doc, customizations),
           path: doc.path,
           metadata: {

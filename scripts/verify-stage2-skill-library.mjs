@@ -13,7 +13,7 @@
  */
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import process from 'node:process'
 
@@ -116,6 +116,19 @@ console.log('\n[B] Skill Markdown 与 Metadata')
   writeFileSync(tmp, ['---','name: T','category: literature','---','','# Skill: T','','## Purpose','','P.','','## 我的补充','','自定义内容.'].join('\n'))
   const extra = S.parseSkillDocument(tmp, 'skills/tmp.md')
   assert(extra.sections.some((s) => s.title === '我的补充'), '用户自加章节被完整保留（宽松解析）')
+
+  // 在 POSIX CI 上也构造一个含 Windows 分隔符的文件名，防止重新出现
+  // `C:\\...\\equation-formalization` 被整体当作 skill name 的回归。
+  const windowsShaped = join(
+    cfgDir,
+    String.raw`C:\Users\Administrator\.dsh\profiles\web\node_modules\dsh-convfusion\skills\academic-writing\equation-formalization.md`,
+  )
+  writeFileSync(windowsShaped, ['# Skill: Equation Formalization', '', '## Purpose', '', 'Test.'].join('\n'))
+  const windowsDoc = S.parseSkillDocument(
+    windowsShaped,
+    String.raw`skills\academic-writing\equation-formalization.md`,
+  )
+  assertEq(windowsDoc.id, 'equation-formalization', 'Windows 绝对路径只提取文件名作为 skill id')
 }
 
 /* ── C. 可定制项 ─────────────────────────────────────────────────── */
@@ -285,6 +298,7 @@ console.log('\n[H] Harness Skill Provider')
   assert(def.content.includes('我的实验设计方法。'), 'get().content 含用户定制')
   assert(def.content.includes('## Research Method'), 'get().content 含原有方法结构')
   assert(def.metadata.customizedSections >= 1, 'metadata 标注定制处数')
+  assertEq(def.resourceBase.path, dirname(def.path), 'resourceBase 使用平台原生父目录')
 
   store.set('experiment-design', 'Research Method', '改后的方法。')
   const def2 = await provider.get(c, { cwd: ws })
