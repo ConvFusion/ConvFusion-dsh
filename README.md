@@ -1,26 +1,42 @@
-# ConvFusion for DeepSeek Harness
+<p align="center">
+  <img src="./assets/favicon.svg" width="200" alt="ConvFusion Logo">
+</p>
 
-**v0.2.0**
+<h1 align="center">ConvFusion for DeepSeek Harness</h1>
 
-ConvFusion 是专为 DeepSeek Harness 打造的科研操作系统插件，为AI研究助手提供系统化的研究方法论、工作流管理和资产追踪能力。
+<p align="center"><strong>专为 DeepSeek Harness 打造的科研操作系统插件</strong></p>
 
-> ConvFusion 完全基于 DeepSeek Harness 原生扩展机制构建，不额外实现Agent运行时、不封装工具系统，只专注于提供科研领域的专业能力。
+<p align="center">
+  <img src="https://img.shields.io/badge/version-v0.2.0-4a43ea" alt="Version 0.2.0">
+  <img src="https://img.shields.io/badge/DeepSeek_Harness-plugin-4a43ea" alt="DeepSeek Harness Plugin">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-22c55e" alt="Apache-2.0 License"></a>
+</p>
+
+<p align="center">
+  <strong>简体中文</strong> · <a href="./README_EN.md">English</a>
+</p>
+
+---
+
+ConvFusion 是专为 DeepSeek Harness 打造的科研操作系统插件，为 AI 研究助手提供系统化的研究方法论、工作流管理和资产追踪能力。
+
+> ConvFusion 完全基于 DeepSeek Harness 原生扩展机制构建，不额外实现 Agent 运行时、不封装工具系统，只专注于提供科研领域的专业能力。
 
 ## ✨ 核心功能
 
-- **科研上下文注入**：自动维护研究项目状态，动态注入系统提示，让AI助手始终了解研究进展
-- **专业技能库**：内置49个经过验证的研究方法技能，覆盖文献综述、实验设计（含硬件不足时先出仿真结果）、结果分析、论文写作等科研全流程
-- **研究资产追踪**：原生支持证据(Evidence)、主张(Claim)、决策(Decision)的结构化记录与追溯
+- **科研上下文注入**：自动维护研究项目状态，动态注入系统提示，让 AI 助手始终了解研究进展
+- **专业技能库**：内置 49 个经过验证的研究方法技能，覆盖文献综述、实验设计（含硬件不足时先出仿真结果）、结果分析、论文写作等科研全流程
+- **研究资产追踪**：原生支持证据（Evidence）、主张（Claim）、决策（Decision）的结构化记录与追溯
 - **计划管理系统**：自然语言驱动的研究计划生命周期管理，支持草稿、评审、执行状态流转
 - **论文演化支持**：论文作为持续演化实体，支持修订提案、缺口分析、版本管理
 - **多类型成果输出**：统一管理学术论文、专利、技术报告、演示文稿等多种研究产出
-- **原生UI集成**：提供可视化设置页面，支持技能个性化定制
+- **原生 UI 集成**：提供可视化设置页面，支持技能个性化定制
 
 ## 🚀 安装
 
 使用 [DSH-Launcher](https://github.com/ConvFusion/DSH-Launcher) 安装并启动 DeepSeek Harness，然后在 DSH-Launcher 的插件管理页面中输入以下命令进行安装：
 
-```bash
+```text
 github:ConvFusion/ConvFusion-dsh
 ```
 
@@ -28,17 +44,17 @@ github:ConvFusion/ConvFusion-dsh
 
 安装完成后，你只需要一个命令即可开始使用：
 
-```bash
+```text
 /research 你的研究主题或需求
 ```
 
 例如：
 
-- `/research 我想做一个关于无人机视觉-LiDAR跨模态定位的研究`
+- `/research 我想做一个关于无人机视觉-LiDAR 跨模态定位的研究`
 - `/research 帮我设计一个实验验证我的假设`
 - `/research 现在研究到哪一步了，接下来应该做什么？`
 
-ConvFusion会自动：
+ConvFusion 会自动：
 
 1. 为你创建规范的研究工作区结构
 2. 根据当前研究阶段推荐合适的方法
@@ -47,9 +63,9 @@ ConvFusion会自动：
 
 ## 📂 工作区结构
 
-ConvFusion使用标准化的研究工作区布局：
+ConvFusion 使用标准化的研究工作区布局：
 
-```
+```text
 <your-research-project>/
 ├── project.md          # 研究定义与范围
 ├── plans/              # 各阶段研究计划
@@ -61,4 +77,4 @@ ConvFusion使用标准化的研究工作区布局：
 
 ## 📝 许可证
 
-MIT
+[Apache License 2.0](./LICENSE)
