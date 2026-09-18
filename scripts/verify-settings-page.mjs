@@ -177,11 +177,12 @@ console.log('\n[1c] 设置页术语')
     .replace(/\/\/.*$/gm, '')
     .replace(/^\s*(?:\*|\/\*).*$/gm, '')
 
-  assert(src.includes('① 能力类别'), '一级下拉叫「能力类别」')
-  assert(src.includes('② 能力'), '二级下拉叫「能力」（不是"研究方法"）')
-  assert(src.includes('能力库'), '选择区以「能力库」命名（用户的词）')
-  assert(src.includes('能力库'), '提到「能力库」')
-  assert(src.includes('形成你自己的研究方法'), '说明"定制多项能力 → 形成研究方法"')
+  const zh = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
+  assert(zh.includes('① 能力类别'), '一级下拉叫「能力类别」')
+  assert(zh.includes('② 能力'), '二级下拉叫「能力」（不是"研究方法"）')
+  assert(zh.includes("'settings.library.title': '能力库'"), '选择区以「能力库」命名（用户的词）')
+  assert(zh.includes('能力库'), '提到「能力库」')
+  assert(zh.includes('形成你自己的研究方法'), '说明"定制多项能力 → 形成研究方法"')
   assert(!/个研究方法/.test(src), '界面文案里不再把单个 Skill 称为"研究方法"')
   assert(!/>\s*研究方法\s*</.test(src) && !/② 研究方法/.test(src), '没有把下拉直接叫"研究方法"')
 
@@ -242,7 +243,7 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / 研究方法库 / 系统�
   assertEq(starLines.map((l) => l.trim().slice(0, 40)), [], '可见文案里没有字面 markdown（** 会显示成星号）')
 
   // ── Hero 副标题：一句话，不堆信息 ──
-  assert(/<div style=\{S\.heroSub\}>定制各项能力，形成你自己的研究方法<\/div>/.test(src), 'Hero 副标题只有一句话')
+  assert(/<div style=\{S\.heroSub\}>\{t\('settings\.hero\.subtitle'\)\}<\/div>/.test(src), 'Hero 副标题只有一句本地化文案')
   assert(!/全部能力已在 DSH 内原生运行/.test(visible), 'Hero 不再堆"原生运行 / 能力库 N 项"等冗余信息')
 
   // ── Tab 2：研究方法库 —— 演示列表 + 诚实标注 ──
@@ -250,7 +251,7 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / 研究方法库 / 系统�
   assert(bundleText.includes('演示数据'), '演示列表带「演示数据」徽章')
   assert(bundleText.includes('以上为界面演示'), '演示列表有脚注说明不是真实数据')
   assert(bundleText.includes('登录 ConvFusion.com 可获得更多研究方法'), '提醒登录可获得更多方法')
-  const community = src.slice(src.indexOf('function CommunityTab()'), src.indexOf('function SystemTab('))
+  const community = src.slice(src.indexOf('function CommunityTab('), src.indexOf('function SystemTab('))
   assert(!/<input/.test(community), '研究方法库没有登录表单（未实现，不假装能登录）')
   assert(!/fetch\(/.test(community), '研究方法库不发任何网络请求')
   assert(!/password/i.test(community), '研究方法库不收集口令')
@@ -265,7 +266,7 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / 研究方法库 / 系统�
   const retrieval = src.slice(src.indexOf('function SystemTab('))
   assert(/type="password"/.test(retrieval), 'Key 输入框 type=password')
   assert(/autoComplete="off"/.test(retrieval), 'Key 输入框关闭自动填充')
-  assert(/不会发送到浏览器|不会回传浏览器/.test(retrieval), '说明密钥不回传浏览器')
+  assert(bundleText.includes('不会发送到浏览器') && bundleText.includes('never returned to the browser'), '中英文都说明密钥不回传浏览器')
 
   // ── Tab 3：本地依赖（tectonic）—— 用户可能没装，必须给出检查与安装说明 ──
   assert(bundleText.includes('tectonic'), '系统设置提到 tectonic')
@@ -275,7 +276,7 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / 研究方法库 / 系统�
   assert(bundleText.includes('CONVFUSION_TECTONIC'), '给出环境变量覆盖入口（非标准位置）')
   assert(bundleText.includes('重新检查'), '有「重新检查」按钮')
   assert(/dependencies\/check/.test(src), '「重新检查」走 dependencies/check 端点')
-  assert(/已安装/.test(src) && /未安装/.test(src), '展示已安装/未安装状态徽章')
+  assert(bundleText.includes('已安装') && bundleText.includes('未安装'), '展示已安装/未安装状态徽章')
   // 已安装是常态：此时卡片必须压成一行，安装说明不得无谓地占据高度
   const depCard = src.slice(src.indexOf('function SystemTab('))
   const guardIdx = depCard.indexOf('dep && !dep.available')
@@ -322,7 +323,7 @@ console.log('\n[1f] OpenAlex Key 的存储与暴露面')
   assertEq(typeof dep.available, 'boolean', 'tectonic 可用性是布尔（不假设本机装没装）')
   assertEq(dep.name, 'tectonic', '依赖名正确')
   assertEq(dep.envVar, 'CONVFUSION_TECTONIC', '给出覆盖用环境变量名')
-  assert(dep.purpose.length > 0, 'tectonic 带用途说明（界面直接展示，用户才知道为什么要装）')
+  assertEq(dep.purposeCode, 'latex-pdf-compile', 'tectonic 返回稳定用途码（文案由客户端翻译）')
   if (dep.available) assert(typeof dep.path === 'string' && dep.path.length > 0, '可用时给出可执行文件路径')
 
   // 探测结果可注入 → 可离线断言"未安装"分支的形状
@@ -336,7 +337,7 @@ console.log('\n[1f] OpenAlex Key 的存储与暴露面')
         available: false,
         viaEnv: false,
         envVar: 'CONVFUSION_TECTONIC',
-        purpose: 'compile LaTeX to PDF',
+        purposeCode: 'latex-pdf-compile',
       },
     }),
   )
@@ -385,9 +386,10 @@ console.log('\n[1g] 宿主陈旧检测')
 
   // 界面必须把这件事说出来
   const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+  const zh = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
   assert(/staleHost/.test(src), '界面有陈旧宿主提示')
-  assert(/宿主侧仍在运行旧代码/.test(src), '提示文案说明"仍在运行旧代码"')
-  assert(/刷新页面不会生效/.test(src), '明确说明刷新无效、需重启 DSH')
+  assert(/宿主侧仍在运行旧代码/.test(zh), '提示文案说明"仍在运行旧代码"')
+  assert(/刷新页面不会生效/.test(zh), '明确说明刷新无效、需重启 DSH')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -558,9 +560,13 @@ console.log('\n[6] 客户端 bundle 格式与注册点')
   assertEq(pkg.exports['./client'].default, './lib/client.js', 'exports["./client"] 指向 bundle')
   assert(existsSync(join(PKG, 'lib', 'client', 'index.d.ts')), '客户端类型声明已生成')
 
-  // 数据面走同源 fetch，因此客户端只需要渲染用的两个硬依赖
+  // 数据面走同源 fetch；渲染再依赖 DSH 原生 locale。
   const clientSrc = readFileSync(join(PKG, 'src', 'client', 'index.tsx'), 'utf8')
-  assert(/export const inject = \['slots', 'settingsScope'\]/.test(clientSrc), '客户端 inject = slots + settingsScope')
+  assert(
+    /export const inject = \['slots', 'settingsScope', 'locale'\]/.test(clientSrc),
+    '客户端 inject = slots + settingsScope + locale',
+  )
+  assert(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'), 'package 注入 DSH 原生 locale 包')
   assert(!/export const inject = \[[^\]]*connection/.test(clientSrc), 'connection 不在硬 inject 里（已不再需要）')
 }
 
@@ -592,7 +598,7 @@ console.log('\n[7] 静态边界：客户端不引入禁用依赖、无凭据字�
   // 「研究方法库」是**预留**：界面必须存在，但不得有任何真实登录/联网实现
   const settingsSrc = readFileSync(join(dir, 'settings.tsx'), 'utf8')
   const community = settingsSrc.slice(
-    settingsSrc.indexOf('function CommunityTab()'),
+    settingsSrc.indexOf('function CommunityTab('),
     settingsSrc.indexOf('function SystemTab('),
   )
   assert(community.length > 200, '找得到 CommunityTab 的实现')

@@ -34,6 +34,13 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { fetchSettingsSend } from './settings.js'
+import {
+  maturityDimensionText,
+  maturityLevelText,
+  progressCountText,
+  translateOr,
+  type Translate,
+} from './i18n/index.js'
 
 /* ════════════════════════════════════════════════════════════════════════
  * 宿主契约（镜像，不 import：客户端 bundle 不依赖宿主模块）
@@ -49,25 +56,39 @@ interface ProgressDimension {
 /** 一行可数资产。 */
 interface ProgressCountRow {
   key: string
-  label: string
   value: number
-  note?: string
+  detail?: { code: 'settled' | 'supported' | 'ready'; count: number }
 }
+
+interface ProgressStage {
+  id: string
+  label: string
+}
+
+type ProgressGap =
+  | { code: 'stagePending'; stage: ProgressStage }
+  | { code: 'processComplete' }
+  | { code: 'unsupportedClaims'; count: number }
+  | { code: 'missingArtifacts'; count: number }
+  | { code: 'openQuestions'; count: number }
 
 /** 当前工作区的研究进展（宿主 `buildWorkspaceProgress` 的产物）。 */
 interface WorkspaceReport {
   at: string
   stateVersion: string
   overall: number
-  progress: { dimensions: ProgressDimension[]; stage: string | null }
+  progress: { dimensions: ProgressDimension[]; stage: ProgressStage | null }
   counts: ProgressCountRow[]
   paper: boolean
   need: {
-    gaps: string[]
+    gaps: ProgressGap[]
     clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown'
     basis: string
+    basisCode?: string
+    basisParams?: Record<string, string | number>
     nextStep?: string
     needsUserDecision?: string
+    decisionCode?: string
   }
 }
 
@@ -76,15 +97,17 @@ interface TurnReport {
   turn: number
   at: string
   summary: string
+  overall: { before: number; after: number }
   changes: {
     changed: boolean
     maturity: Array<{ dimension: string; from: string; to: string }>
-    counts: Array<{ key: string; label: string; from: number; to: number }>
+    counts: Array<{ key: string; from: number; to: number }>
   }
 }
 
 /** `progress/workspace` 的返回值。 */
 export interface WorkspaceProgressValue {
+  protocol: number
   sessionId: string
   workspace: string | null
   research: boolean
@@ -113,6 +136,7 @@ export function readProgressValue(res: unknown): ProgressProbe {
   const envelope = res as { ok?: unknown; value?: unknown } | null | undefined
   if (envelope?.ok !== true) return { kind: 'hidden' }
   const value = (envelope.value ?? {}) as Partial<WorkspaceProgressValue>
+  if (value.protocol !== __HOST_PROTOCOL__) return { kind: 'hidden' }
   if (value.research !== true) return { kind: 'hidden' }
   return {
     kind: 'shown',
@@ -136,6 +160,8 @@ export function shortenPath(path: string | null): string {
 interface ButtonProps {
   /** 当前会话 id（DSH 的 session 作用域 standard prop）。 */
   sessionId?: string
+  /** DSH Slot 标准注入。 */
+  t: Translate
 }
 
 /** 图标（16px，`currentColor`，与官方 header 工具图标同规格）。 */
@@ -188,17 +214,55 @@ function Bar({ scale }: { scale: number }): JSX.Element {
   )
 }
 
-function clarityText(clarity: WorkspaceReport['need']['clarity']): string {
-  switch (clarity) {
-    case 'clear':
-      return '方向明确 → 可直接推进'
-    case 'ambiguous':
-      return '需要你选一个方向'
-    case 'blocked':
-      return '等你拍板（阻塞）'
-    default:
-      return '（未判定）'
+function clarityText(t: Translate, clarity: WorkspaceReport['need']['clarity']): string {
+  return t(`progress.clarity.${clarity}`)
+}
+
+function stageText(t: Translate, stage: ProgressStage): string {
+  return translateOr(t, `progress.stage.${stage.id}`, stage.label)
+}
+
+function gapText(t: Translate, gap: ProgressGap): string {
+  switch (gap.code) {
+    case 'stagePending':
+      return t('progress.gap.stagePending', { stage: stageText(t, gap.stage) })
+    case 'processComplete':
+      return t('progress.gap.processComplete')
+    case 'unsupportedClaims':
+      return t('progress.gap.unsupportedClaims', { count: gap.count })
+    case 'missingArtifacts':
+      return t('progress.gap.missingArtifacts', { count: gap.count })
+    case 'openQuestions':
+      return t('progress.gap.openQuestions', { count: gap.count })
   }
+}
+
+function basisText(t: Translate, need: WorkspaceReport['need'], stage: ProgressStage | null): string {
+  if (!need.basisCode) return need.basis
+  const params = { ...(need.basisParams ?? {}) }
+  if (need.basisCode === 'stagePending' && stage) {
+    params.stage = stageText(t, stage)
+    params.evidence = translateOr(
+      t,
+      `progress.stageEvidence.${stage.id}`,
+      String(need.basisParams?.evidence ?? ''),
+    )
+  }
+  return translateOr(t, `progress.basis.${need.basisCode}`, need.basis).replace(
+    /\{(\w+)\}/g,
+    (match, name: string) => (name in params ? String(params[name]) : match),
+  )
+}
+
+function nextStepText(t: Translate, text: string, stage: ProgressStage | null): string {
+  return stage ? translateOr(t, `progress.stageOutput.${stage.id}`, text) : text
+}
+
+function decisionText(t: Translate, need: WorkspaceReport['need']): string | undefined {
+  if (need.decisionCode) {
+    return translateOr(t, `progress.decision.${need.decisionCode}`, need.needsUserDecision ?? '')
+  }
+  return need.needsUserDecision
 }
 
 /**
@@ -207,7 +271,7 @@ function clarityText(clarity: WorkspaceReport['need']['clarity']): string {
  * 会话作用域 → 换会话即重挂（`sessionId` 变化），因此**不存在跨会话串味**：
  * 每个会话只问自己的宿主答案，缓存也只在组件内部。
  */
-export function ResearchProgressButton({ sessionId }: ButtonProps): JSX.Element | null {
+export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Element | null {
   const [probe, setProbe] = useState<ProgressProbe>({ kind: 'loading' })
   const [open, setOpen] = useState(false)
   const [hover, setHover] = useState(false)
@@ -328,13 +392,17 @@ export function ResearchProgressButton({ sessionId }: ButtonProps): JSX.Element 
     <span ref={anchorRef} style={{ display: 'inline-flex', alignItems: 'center' }} data-convfusion-progress-button="1">
       <button
         type="button"
-        aria-label={report ? `研究进展（成熟度折算 ${pct(report.overall)}）` : '研究进展'}
+        aria-label={
+          report
+            ? t('progress.button.ariaWithPercent', { percent: pct(report.overall) })
+            : t('progress.name')
+        }
         aria-haspopup="dialog"
         aria-expanded={open}
         title={
           report
-            ? `查看当前工作区的研究进展（成熟度折算 ${pct(report.overall)}）`
-            : '查看当前工作区的研究进展'
+            ? t('progress.button.titleWithPercent', { percent: pct(report.overall) })
+            : t('progress.button.title')
         }
         onClick={() => setOpen((v) => !v)}
         onMouseEnter={() => setHover(true)}
@@ -371,7 +439,7 @@ export function ResearchProgressButton({ sessionId }: ButtonProps): JSX.Element 
         <div
           ref={panelRef}
           role="dialog"
-          aria-label="研究进展"
+          aria-label={t('progress.name')}
           data-convfusion-progress-panel="1"
           style={{
             position: 'fixed',
@@ -396,28 +464,36 @@ export function ResearchProgressButton({ sessionId }: ButtonProps): JSX.Element 
           }}
         >
           <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
-            <strong>研究进展</strong>
+            <strong>{t('progress.name')}</strong>
             {report ? (
               <span style={{ color: muted, ...mono }}>
-                成熟度折算 {pct(report.overall)}
-                {report.progress.stage ? ` · 当前阶段 ${report.progress.stage}` : ''}
+                {t('progress.summary', { percent: pct(report.overall) })}
+                {report.progress.stage
+                  ? t('progress.currentStage', { stage: stageText(t, report.progress.stage) })
+                  : ''}
               </span>
             ) : (
-              <span style={{ color: muted }}>尚无数据</span>
+              <span style={{ color: muted }}>{t('progress.noData')}</span>
             )}
             <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: '2px' }}>
-              {busy ? <span style={{ color: muted, ...mono }}>读取中…</span> : null}
+              {busy ? <span style={{ color: muted, ...mono }}>{t('progress.reading')}</span> : null}
               <button
                 type="button"
                 style={{ ...iconButton, opacity: busy ? 0.5 : 1 }}
-                aria-label="刷新"
-                title="刷新"
+                aria-label={t('progress.refresh')}
+                title={t('progress.refresh')}
                 disabled={busy}
                 onClick={() => void load()}
               >
                 ⟳
               </button>
-              <button type="button" style={iconButton} aria-label="关闭" title="关闭" onClick={() => setOpen(false)}>
+              <button
+                type="button"
+                style={iconButton}
+                aria-label={t('progress.close')}
+                title={t('progress.close')}
+                onClick={() => setOpen(false)}
+              >
                 ✕
               </button>
             </span>
@@ -428,13 +504,13 @@ export function ResearchProgressButton({ sessionId }: ButtonProps): JSX.Element 
             <>
               {/* A. 研究现在到了哪里 */}
               <div style={section}>
-                <div style={sectionTitle}>A · 研究成熟度（等级折算，非测量值）</div>
+                <div style={sectionTitle}>{t('progress.section.maturity')}</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
                   {report.progress.dimensions.map((d) => (
                     <div key={d.dimension} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ minWidth: '92px', ...mono }}>{d.dimension}</span>
+                      <span style={{ minWidth: '92px', ...mono }}>{maturityDimensionText(t, d.dimension)}</span>
                       <Bar scale={d.scale} />
-                      <span style={{ color: muted, ...mono }}>{d.level}</span>
+                      <span style={{ color: muted, ...mono }}>{maturityLevelText(t, d.level)}</span>
                     </div>
                   ))}
                 </div>
@@ -442,78 +518,111 @@ export function ResearchProgressButton({ sessionId }: ButtonProps): JSX.Element 
 
               {/* 可数资产（真实计数，不给百分比） */}
               <div style={section}>
-                <div style={sectionTitle}>A2 · 可数资产（真实计数）</div>
+                <div style={sectionTitle}>{t('progress.section.assets')}</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
                   {report.counts.map((row) => (
                     <div key={row.key} style={{ display: 'flex', gap: '8px' }}>
-                      <span style={{ minWidth: '92px', ...mono }}>{row.label}</span>
+                      <span style={{ minWidth: '92px', ...mono }}>{progressCountText(t, row.key)}</span>
                       <span style={mono}>{row.value}</span>
-                      {row.note ? <span style={{ color: muted }}>{row.note}</span> : null}
+                      {row.detail ? (
+                        <span style={{ color: muted }}>
+                          {t(`progress.count.${row.detail.code}`, { count: row.detail.count })}
+                        </span>
+                      ) : null}
                     </div>
                   ))}
                   <div style={{ display: 'flex', gap: '8px' }}>
-                    <span style={{ minWidth: '92px', ...mono }}>论文正文</span>
-                    <span style={{ color: muted }}>{report.paper ? '已有正文' : '尚无正文'}</span>
+                    <span style={{ minWidth: '92px', ...mono }}>{t('progress.paper')}</span>
+                    <span style={{ color: muted }}>
+                      {report.paper ? t('progress.paper.present') : t('progress.paper.absent')}
+                    </span>
                   </div>
                 </div>
-                <div style={{ color: muted }}>Research State 版本：{report.stateVersion}</div>
+                <div style={{ color: muted }}>{t('progress.stateVersion', { version: report.stateVersion })}</div>
               </div>
 
               {/* B. 最近一轮改变了什么（需要该会话跑完过至少一轮） */}
               <div style={section}>
-                <div style={sectionTitle}>B · 最近一轮变化</div>
+                <div style={sectionTitle}>{t('progress.section.turn')}</div>
                 {lastTurn ? (
                   <div>
                     <div style={{ color: muted, ...mono }}>
-                      第 {lastTurn.turn} 轮 · {lastTurn.summary}
+                      {t('progress.turn.summary', {
+                        turn: lastTurn.turn,
+                        before: pct(lastTurn.overall.before),
+                        after: pct(lastTurn.overall.after),
+                        assetChange:
+                          lastTurn.changes.counts.length > 0
+                            ? t('progress.turn.assetChange', { count: lastTurn.changes.counts.length })
+                            : t('progress.turn.noAssetChange'),
+                      })}
                     </div>
                     {lastTurn.changes.changed ? (
                       <ul style={{ margin: '2px 0 0', paddingLeft: '18px' }}>
                         {lastTurn.changes.maturity.map((m) => (
                           <li key={`m-${m.dimension}`}>
-                            成熟度 {m.dimension}：{m.from} → {m.to}
+                            {t('progress.turn.maturityChange', {
+                              dimension: maturityDimensionText(t, m.dimension),
+                              from: maturityLevelText(t, m.from),
+                              to: maturityLevelText(t, m.to),
+                            })}
                           </li>
                         ))}
                         {lastTurn.changes.counts.map((c) => (
                           <li key={`c-${c.key}`}>
-                            {c.label}：{c.from} → {c.to}（{c.to - c.from > 0 ? '+' : ''}
-                            {c.to - c.from}）
+                            {t('progress.turn.countChange', {
+                              label: progressCountText(t, c.key),
+                              from: c.from,
+                              to: c.to,
+                              delta: `${c.to - c.from > 0 ? '+' : ''}${c.to - c.from}`,
+                            })}
                           </li>
                         ))}
                       </ul>
                     ) : (
-                      <div style={{ color: muted }}>这一轮没有形成新的可验证研究资产（讨论/澄清不产生资产，这是正常的）。</div>
+                      <div style={{ color: muted }}>{t('progress.turn.noChange')}</div>
                     )}
                   </div>
                 ) : (
-                  <div style={{ color: muted }}>本会话还没有回合报告（对话结束后宿主才会生成；面板的 A 段始终是最新状态）。</div>
+                  <div style={{ color: muted }}>{t('progress.turn.unavailable')}</div>
                 )}
               </div>
 
               {/* C. 当前缺口与推进判定 */}
               <div style={section}>
-                <div style={sectionTitle}>C · 当前缺口与推进判定</div>
+                <div style={sectionTitle}>{t('progress.section.need')}</div>
                 <ul style={{ margin: '2px 0 0', paddingLeft: '18px' }}>
-                  {report.need.gaps.map((g) => (
-                    <li key={g}>{g}</li>
+                  {report.need.gaps.map((g, index) => (
+                    <li key={`${g.code}-${index}`}>{gapText(t, g)}</li>
                   ))}
                 </ul>
                 <div style={{ marginTop: '2px' }}>
-                  <span style={{ color: muted }}>推进判定：</span>
-                  {clarityText(report.need.clarity)}
-                  {report.need.basis ? <span style={{ color: muted }}>（依据：{report.need.basis}）</span> : null}
+                  <span style={{ color: muted }}>{t('progress.need.assessment')}</span>
+                  {clarityText(t, report.need.clarity)}
+                  {report.need.basis ? (
+                    <span style={{ color: muted }}>
+                      {t('progress.need.basis', { basis: basisText(t, report.need, report.progress.stage) })}
+                    </span>
+                  ) : null}
                 </div>
-                {report.need.nextStep ? <div>下一步：{report.need.nextStep}</div> : null}
-                {report.need.needsUserDecision ? <div>待你决定：{report.need.needsUserDecision}</div> : null}
+                {report.need.nextStep ? (
+                  <div>
+                    {t('progress.need.nextStep', {
+                      text: nextStepText(t, report.need.nextStep, report.progress.stage),
+                    })}
+                  </div>
+                ) : null}
+                {decisionText(t, report.need) ? (
+                  <div>{t('progress.need.decision', { text: decisionText(t, report.need) })}</div>
+                ) : null}
               </div>
             </>
           ) : (
-            <div style={{ marginTop: '8px', color: muted }}>宿主还没有返回这个工作区的进展数据。</div>
+            <div style={{ marginTop: '8px', color: muted }}>{t('progress.noReport')}</div>
           )}
 
           <div style={{ marginTop: '10px', color: muted, fontSize: '11.5px' }}>
-            数据全部来自磁盘上的真实资产（project.md / research-state.md / evidence / claims / plans）。
-            成熟度是 Research State 的等级折算，不是测量值；这里只陈述研究需求，不代表必须执行的下一步。
+            {t('progress.footnote')}
           </div>
         </div>
       ) : null}

@@ -17,6 +17,7 @@
  *    它们本来就是 bundle 的 external，import 值只会在运行期炸。
  */
 import logoUrl from '../../assets/favicon.svg';
+import { type Translate } from './i18n/index.js';
 import { loadSettingsState } from './settings.js';
 import { applyNavIcon, installNavIcon } from './nav-icon.js';
 import { ResearchProgressButton, readProgressValue, shortenPath } from './progress-panel.js';
@@ -43,6 +44,7 @@ interface SlotRegisterOptions {
     id?: string;
     order?: number;
     label?: () => string;
+    locale?: string;
     inject?: () => Record<string, unknown>;
     priority?: number;
     /**
@@ -67,6 +69,11 @@ interface ClientContext {
             namespace: string;
         }): SettingsScopeLike;
     };
+    locale: {
+        register(namespace: string, dictionaries: Record<string, Record<string, string>>): () => void;
+        bind(namespace: string): Translate;
+    };
+    effect(callback: () => void | (() => void), label?: string): void;
     /**
      * 读一个服务**不触发 inject 检查**（本插件目前不用可选服务，保留以便将来扩展）。
      *

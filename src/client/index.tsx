@@ -19,6 +19,7 @@
 
 import type React from 'react'
 import logoUrl from '../../assets/favicon.svg'
+import { CONVFUSION_LOCALE_NS, dictionaries, type Translate } from './i18n/index.js'
 import { ConvFusionProjectSettings, loadSettingsState } from './settings.js'
 import { applyNavIcon, installNavIcon } from './nav-icon.js'
 import {
@@ -54,6 +55,7 @@ interface SlotRegisterOptions {
   id?: string
   order?: number
   label?: () => string
+  locale?: string
   inject?: () => Record<string, unknown>
   priority?: number
   /**
@@ -78,6 +80,11 @@ interface ClientContext {
   settingsScope: {
     bind(spec: { namespace: string }): SettingsScopeLike
   }
+  locale: {
+    register(namespace: string, dictionaries: Record<string, Record<string, string>>): () => void
+    bind(namespace: string): Translate
+  }
+  effect(callback: () => void | (() => void), label?: string): void
   /**
    * 读一个服务**不触发 inject 检查**（本插件目前不用可选服务，保留以便将来扩展）。
    *
@@ -90,7 +97,7 @@ interface ClientContext {
 }
 
 /** 只有这些服务是硬依赖（缺一个，这一页就无从渲染）。 */
-export const inject = ['slots', 'settingsScope']
+export const inject = ['slots', 'settingsScope', 'locale']
 
 /**
  * 【设置】导航里的位置。
@@ -101,6 +108,11 @@ export const inject = ['slots', 'settingsScope']
 const SECTION_ORDER = 60
 
 export function apply(ctx: ClientContext): void {
+  ctx.effect(
+    () => ctx.locale.register(CONVFUSION_LOCALE_NS, dictionaries),
+    'convfusion: browser dictionaries',
+  )
+  const t = ctx.locale.bind(CONVFUSION_LOCALE_NS)
   const scope = ctx.settingsScope.bind({ namespace: 'convfusion' })
 
   ctx.slots.inject('settings.section', () =>
@@ -109,8 +121,8 @@ export function apply(ctx: ClientContext): void {
         name: 'settings.section',
         id: 'convfusion',
         order: SECTION_ORDER,
-        // label 由注册方本地化；这里直接给中文名，与 DSH 设置壳的其余中文项一致
-        label: () => 'ConvFusion',
+        label: () => t('settings.nav'),
+        locale: CONVFUSION_LOCALE_NS,
         inject: () => ({ scope }),
       },
       ConvFusionProjectSettings as unknown as React.ComponentType<unknown>,
@@ -127,7 +139,12 @@ export function apply(ctx: ClientContext): void {
   // 按磁盘真实资产算一份当前进展。
   ctx.slots.inject('conversation.session.header.utilities', () =>
     ctx.slots.register(
-      { name: 'conversation.session.header.utilities', id: 'convfusion-progress', order: 20 },
+      {
+        name: 'conversation.session.header.utilities',
+        id: 'convfusion-progress',
+        order: 20,
+        locale: CONVFUSION_LOCALE_NS,
+      },
       ResearchProgressButton as unknown as React.ComponentType<unknown>,
     ),
   )

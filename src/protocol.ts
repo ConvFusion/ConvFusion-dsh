@@ -29,8 +29,10 @@
  * - `4`：类别名统一为 4 字（`文献` → `文献调研`、`写作` → `论文写作` 等），研究阶段名同步。
  *   这是**取值语义**变化而非形状变化 —— 界面不会出错，但会安静地显示旧名字；
  *   升号才能让"宿主需重启"提示生效（v3 的教训：别指望用户自己发现）。
+ * - `5`：浏览器国际化。依赖用途改为稳定 `purposeCode`，进展报告改为稳定 code、数值与
+ *   `{ id, label }` 阶段对象；固定展示文案由客户端通过 DSH locale 翻译。
  */
-export const HOST_PROTOCOL = 4
+export const HOST_PROTOCOL = 5
 
 /** 状态响应里的协议字段名（两边共用，避免拼错）。 */
 export const HOST_PROTOCOL_FIELD = 'protocol'

@@ -31,6 +31,7 @@
  * 3. **不动别人的槽位**：`list` 槽位是追加式，官方条目（open-in-app / session-log-export）
  *    照常显示；面板是本组件自己的浮层，不开模态、不拦截对话。
  */
+import { type Translate } from './i18n/index.js';
 /** 成熟度维度（等级 + 等级折算的位置）。 */
 interface ProgressDimension {
     dimension: string;
@@ -40,10 +41,31 @@ interface ProgressDimension {
 /** 一行可数资产。 */
 interface ProgressCountRow {
     key: string;
-    label: string;
     value: number;
-    note?: string;
+    detail?: {
+        code: 'settled' | 'supported' | 'ready';
+        count: number;
+    };
 }
+interface ProgressStage {
+    id: string;
+    label: string;
+}
+type ProgressGap = {
+    code: 'stagePending';
+    stage: ProgressStage;
+} | {
+    code: 'processComplete';
+} | {
+    code: 'unsupportedClaims';
+    count: number;
+} | {
+    code: 'missingArtifacts';
+    count: number;
+} | {
+    code: 'openQuestions';
+    count: number;
+};
 /** 当前工作区的研究进展（宿主 `buildWorkspaceProgress` 的产物）。 */
 interface WorkspaceReport {
     at: string;
@@ -51,16 +73,19 @@ interface WorkspaceReport {
     overall: number;
     progress: {
         dimensions: ProgressDimension[];
-        stage: string | null;
+        stage: ProgressStage | null;
     };
     counts: ProgressCountRow[];
     paper: boolean;
     need: {
-        gaps: string[];
+        gaps: ProgressGap[];
         clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown';
         basis: string;
+        basisCode?: string;
+        basisParams?: Record<string, string | number>;
         nextStep?: string;
         needsUserDecision?: string;
+        decisionCode?: string;
     };
 }
 /** 最近一轮的变化（宿主 `TurnProgressReport` 的子集）。 */
@@ -68,6 +93,10 @@ interface TurnReport {
     turn: number;
     at: string;
     summary: string;
+    overall: {
+        before: number;
+        after: number;
+    };
     changes: {
         changed: boolean;
         maturity: Array<{
@@ -77,7 +106,6 @@ interface TurnReport {
         }>;
         counts: Array<{
             key: string;
-            label: string;
             from: number;
             to: number;
         }>;
@@ -85,6 +113,7 @@ interface TurnReport {
 }
 /** `progress/workspace` 的返回值。 */
 export interface WorkspaceProgressValue {
+    protocol: number;
     sessionId: string;
     workspace: string | null;
     research: boolean;
@@ -119,6 +148,8 @@ export declare function shortenPath(path: string | null): string;
 interface ButtonProps {
     /** 当前会话 id（DSH 的 session 作用域 standard prop）。 */
     sessionId?: string;
+    /** DSH Slot 标准注入。 */
+    t: Translate;
 }
 /** 顶部百分比的后台刷新间隔（毫秒）。见 `ResearchProgressButton` 里的说明。 */
 export declare const PROGRESS_REFRESH_MS = 60000;
@@ -128,5 +159,5 @@ export declare const PROGRESS_REFRESH_MS = 60000;
  * 会话作用域 → 换会话即重挂（`sessionId` 变化），因此**不存在跨会话串味**：
  * 每个会话只问自己的宿主答案，缓存也只在组件内部。
  */
-export declare function ResearchProgressButton({ sessionId }: ButtonProps): JSX.Element | null;
+export declare function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Element | null;
 export {};

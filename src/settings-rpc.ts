@@ -184,8 +184,8 @@ export interface LocalDependencyStatus {
   viaEnv: boolean
   /** 覆盖用的环境变量名。 */
   envVar: string
-  /** 用途一句话（设置页直接展示，避免用户不知道为什么要装）。 */
-  purpose: string
+  /** 稳定用途码；展示文字由浏览器 locale 决定。 */
+  purposeCode: string
 }
 
 /** 本机外部依赖的检测结果。 */
@@ -209,7 +209,7 @@ export function describeLocalDependencies(env: NodeJS.ProcessEnv = process.env):
       ...(bin ? { version: tectonicVersion(bin) } : {}),
       viaEnv: Boolean(override && bin === override),
       envVar: TECTONIC_ENV,
-      purpose: '把论文的 LaTeX 源码编译成 PDF（研究论文最终交付格式）。',
+      purposeCode: 'latex-pdf-compile',
     },
   }
 }
@@ -412,7 +412,14 @@ export function createSettingsRpcHandler(
           if (!root || !isResearchWorkspace(root)) {
             return {
               ok: true,
-              value: { sessionId, workspace: sessionWorkspace ?? null, research: false, report: null, lastTurn: null },
+              value: {
+                protocol: HOST_PROTOCOL,
+                sessionId,
+                workspace: sessionWorkspace ?? null,
+                research: false,
+                report: null,
+                lastTurn: null,
+              },
             }
           }
           // 过程判定要读**生效**的能力正文（用户可在设置里定制 `research-process`）
@@ -421,6 +428,7 @@ export function createSettingsRpcHandler(
           return {
             ok: true,
             value: {
+              protocol: HOST_PROTOCOL,
               sessionId,
               workspace: root,
               research: true,
