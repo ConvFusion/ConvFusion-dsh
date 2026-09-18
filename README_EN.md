@@ -75,6 +75,74 @@ ConvFusion uses a standardized research workspace layout:
 └── outputs/            # Patents, reports, presentations, and other outputs
 ```
 
+## 🔌 Connecting to ConvFusion.com (optional)
+
+> **ConvFusion-dsh executes research. ConvFusion.com connects research.**
+> Your research methods and prompts **always stay on this machine**; only research
+> progress (Research State) goes to the network.
+
+The ConvFusion settings section has two tabs: **Local Methodology** (this machine only)
+and **ConvFusion.com** (the research network). The latter is the community / commercial
+entry point: sign in, configure the server, browse research work from the network.
+
+### Signing in
+
+ConvFusion.com is **invitation-only** and has no passwords — the credential is an API key
+(`cf_live_…`), and there are two entry points:
+
+1. **You already have an API key** → paste it; the local host verifies the identity and stores it.
+2. **You have an invitation** (`cf_inv_…`) → enter the invitation code, email and display name;
+   the key issued on registration is stored on this machine automatically.
+
+The credential is stored **locally** (DSH settings user layer). It is never returned to the
+browser and never written into the conversation. Not signing in does not affect any local
+feature; while signed out the research-work list shows clearly labelled **sample data** and
+cannot be acted on. Once signed in, the account row shows the current **Token balance**
+(click to refresh; paid reads such as a brief refresh it automatically).
+
+### Research work and two-level disclosure
+
+What is published on the network is the Research State of **research projects**. The list
+follows the server's progressive disclosure and offers two levels:
+
+| Action | Cost | Contents |
+|---|---|---|
+| Summary | free | research question / summary / stage / progress (**no** core idea or method) |
+| Brief | 1 Token for non-authors | motivation / core idea / hypothesis / method overview / key evidence / open problems |
+| Full research state | requires a mentor relationship with the author | not implemented yet |
+
+A brief retry reuses the **same request identifier**, so a retry after topping up tokens is
+never charged twice.
+
+### Environment configuration (development / production)
+
+The server address is **not hard-coded**: development uses `http://localhost:8000` and
+production uses `https://convfusion.com`, supplied per environment by a config file. On a
+development machine, copy the template and edit it:
+
+```bash
+cp convfusion.env.example.json convfusion.env.json
+```
+
+```jsonc
+{
+  "environment": "development",          // or set CONVFUSION_ENV / NODE_ENV
+  "environments": {
+    "development": { "serverUrl": "http://localhost:8000" },
+    "production":  { "serverUrl": "https://convfusion.com" }
+  },
+  "dev": {                               // read only by development tooling (verification scripts)
+    "serverDir": "../ConvFusion-server",
+    "python": "python3"
+  }
+}
+```
+
+Effective address precedence: **DSH settings document > `CONVFUSION_SERVER_URL` > environment
+config file > built-in fallback**. `convfusion.env.json` contains machine-specific paths and is
+git-ignored; the committed template is `convfusion.env.example.json`. The settings page shows the
+current environment (development / production) and warns when the address clearly contradicts it.
+
 ## 📝 License
 
 [Apache License 2.0](./LICENSE)
