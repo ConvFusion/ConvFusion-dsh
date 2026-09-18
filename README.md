@@ -1,6 +1,6 @@
 # ConvFusion for DeepSeek Harness
 
-**v0.2.0**
+**v0.3.0**
 
 ConvFusion 是专为 DeepSeek Harness 打造的科研操作系统插件，为AI研究助手提供系统化的研究方法论、工作流管理和资产追踪能力。
 
@@ -58,6 +58,64 @@ ConvFusion使用标准化的研究工作区布局：
 ├── papers/             # 论文草稿与演化记录
 └── outputs/            # 专利、报告、演示文稿等成果
 ```
+
+## 🔌 接入 ConvFusion.com（可选）
+
+> **ConvFusion-dsh 执行研究，ConvFusion.com 连接研究。**
+> 你的研究方法与提示词**始终只留在本机**，上网络的只有研究进展（Research State）。
+
+【设置】-【ConvFusion】里有两个 Tab：**本地研究方法**（仅本机）与 **ConvFusion.com**（研究网络）。
+后者是社区 / 商业功能入口：登录账号、配置服务器、浏览网络上的研究工作。
+
+### 登录
+
+ConvFusion.com 采用**邀请制**，账号没有口令 —— 凭据是一份 API Key（`cf_live_…`），两条入口：
+
+1. **已有 API Key** → 粘贴后由本机宿主验证身份并保存；
+2. **有邀请码**（`cf_inv_…`）→ 填邀请码 + 邮箱 + 显示名，注册成功后 Key 直接保存在本机。
+
+凭据只保存在**本机**（DSH 设置用户层），**不会**回传到浏览器，也不会进入对话内容。
+不登录不影响任何本地功能；未登录时研究工作列表显示**标注清楚的示例数据**且不可操作。
+登录后账号行会显示当前 **Token 余额**（点一下可刷新；读完简报这类花钱的操作会自动刷新）。
+
+### 研究工作与两级披露
+
+网络上公开的是**研究工作**（Research Project）的 Research State。列表按服务器的渐进披露给出两级：
+
+| 操作 | 费用 | 内容 |
+|---|---|---|
+| 摘要 | 免费 | 研究问题 / 摘要 / 阶段 / 进度（**不含**核心想法与方法） |
+| 简报 | 非作者 1 Token | 动机 / 核心想法 / 假设 / 方法概览 / 关键证据 / 待解问题 |
+| 完整研究状态 | 需与作者建立导师关系 | 本轮尚未接入 |
+
+简报的重试使用**同一个请求标识**，因此因余额不足失败后充值再试**不会重复扣费**。
+
+### 环境配置（开发 / 生产）
+
+服务器地址**不写死在代码里**：开发是 `http://localhost:8000`、生产是 `https://convfusion.com`，
+由环境配置文件按环境给出。开发机上复制模板并按需修改：
+
+```bash
+cp convfusion.env.example.json convfusion.env.json
+```
+
+```jsonc
+{
+  "environment": "development",          // 或用 CONVFUSION_ENV / NODE_ENV 指定
+  "environments": {
+    "development": { "serverUrl": "http://localhost:8000" },
+    "production":  { "serverUrl": "https://convfusion.com" }
+  },
+  "dev": {                               // 只有开发流程（验证脚本）会读这段
+    "serverDir": "../ConvFusion-server",
+    "python": "python3"
+  }
+}
+```
+
+生效地址的优先级：**DSH 设置文档 > `CONVFUSION_SERVER_URL` > 环境配置文件 > 内置兜底**。
+`convfusion.env.json` 含机器相关路径，已被 `.gitignore`；提交进仓库的是模板
+`convfusion.env.example.json`。设置页会显示当前环境（开发 / 生产），地址与环境明显矛盾时会提示。
 
 ## 📝 许可证
 

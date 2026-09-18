@@ -37,6 +37,8 @@ const lib = (f) => pathToFileURL(join(PKG, 'lib', f)).href
 const RPC = await import(lib('settings-rpc.js'))
 const CUST = await import(lib('research/skill-customization.js'))
 const CFG = await import(lib('config.js'))
+// 环境配置（开发 / 生产的地址分岔）—— 只在这里断言，逻辑细节见 verify-server-login.mjs
+const ENVCFG = await import(lib('server-env.js'))
 
 let passed = 0
 let failed = 0
@@ -222,10 +224,12 @@ console.log('\n[1d] 定制文件不出现在界面上')
 /* ════════════════════════════════════════════════════════════════════════
  * 1e. 三个 Tab
  * ════════════════════════════════════════════════════════════════════════ */
-console.log('\n[1e] 三个 Tab：本地研究方法 / 研究方法库 / 系统设置')
+console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设置')
 {
   const bundleText = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
-  for (const label of ['本地研究方法', '研究方法库', '系统设置']) {
+  // ⚠️ 第二个 Tab 已由【研究方法库】改名为【ConvFusion.com】：它是社区 / 商业功能入口
+  // （账号 + 服务器 + 研究网络），不只是"研究方法库"（2026-09 用户拍板）。
+  for (const label of ['本地研究方法', 'ConvFusion.com', '系统设置']) {
     assert(bundleText.includes(label), `Tab 存在：${label}`)
   }
   const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
@@ -243,29 +247,149 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / 研究方法库 / 系统�
 
   // ── Hero 副标题：一句话，不堆信息 ──
   assert(/<div style=\{S\.heroSub\}>定制各项能力，形成你自己的研究方法<\/div>/.test(src), 'Hero 副标题只有一句话')
+  // 方法只在本地（Pitch Deck 第 5 页的核心原则）：本地页要明确标出来
+  assert(/仅本机/.test(src), '能力库标注「仅本机」（定制不会上传）')
   assert(!/全部能力已在 DSH 内原生运行/.test(visible), 'Hero 不再堆"原生运行 / 能力库 N 项"等冗余信息')
 
-  // ── Tab 2：研究方法库 —— 演示列表 + 诚实标注 ──
-  assert(bundleText.includes('尚未开放'), '研究方法库标注尚未开放')
-  assert(bundleText.includes('演示数据'), '演示列表带「演示数据」徽章')
-  assert(bundleText.includes('以上为界面演示'), '演示列表有脚注说明不是真实数据')
-  assert(bundleText.includes('登录 ConvFusion.com 可获得更多研究方法'), '提醒登录可获得更多方法')
-  const community = src.slice(src.indexOf('function CommunityTab()'), src.indexOf('function SystemTab('))
-  assert(!/<input/.test(community), '研究方法库没有登录表单（未实现，不假装能登录）')
-  assert(!/fetch\(/.test(community), '研究方法库不发任何网络请求')
-  assert(!/password/i.test(community), '研究方法库不收集口令')
-  // 演示条目本身不得宣称"已可用"
-  assert(!/已登录|已同步|下载/.test(community), '演示数据不宣称任何已发生的联网行为')
-  assert((community.match(/disabled/g) ?? []).length >= 2, '「套用」与「登录」都是禁用态')
+  // ── Tab 2：ConvFusion.com —— 账号 + 服务器 + 研究工作列表（2026-09 起是**真实**功能）──
+  //
+  // ⚠️ 这一节曾经断言的是"尚未开放、没有表单、不发请求"。接入服务器后那些断言
+  // **必须改**，否则它们会把正确实现判成失败 —— 但"不假装成功"的原则要留下来，
+  // 所以下面仍然要求：登录的两种入口都存在，且**没有**凭据被写死在源码里。
+  assert(bundleText.includes('API Key 登录'), '给出「使用 API Key 登录」入口')
+  assert(bundleText.includes('使用邀请码注册'), '给出「使用邀请码注册」入口')
+  assert(bundleText.includes('重新验证'), '已登录后可重新验证身份')
+  assert(bundleText.includes('登出'), '已登录后可登出')
+  const community = src.slice(src.indexOf('function CommunityTab('), src.indexOf('function SystemTab('))
+  assert(/account\/login/.test(community) && /account\/register/.test(community), '两个入口各自走对应端点')
+  assert(!/cf_live_[0-9a-f]{16}/.test(community), '不得把任何 API Key 写死进源码')
+  // 服务器端**没有**口令登录：界面不得出现口令输入（那是凭空造的概念）
+  assert(!/type="password"[^>]*name="password"/.test(community), '不发明口令字段')
+  assert(/invitationCode/.test(community), '邀请码注册会用邀请码')
+  // 「共享研究方法」接口服务器尚未提供 → 必须如实说明，不得列假数据
+  const demoLeftovers = ['convfusion 官方', 'ss_theory', 'bm_researcher', '演示数据']
+  for (const ghost of demoLeftovers) {
+    assert(!community.includes(ghost), `不再残留旧的演示数据：${ghost}`)
+  }
+  assert(/研究工作/.test(community), '有「研究工作」卡片（这一页的主体内容）')
+
+  // ── 版式：用户与登录必须是**一张紧凑卡片**（2026-09 用户反馈）──
+  //
+  // 反馈原文：① API Key 登录 + ② 邀请码注册 各占一大片，"面积大、体验不好"。
+  // 要求：未登录只显示必须的登录项；登录之后**同一张卡片**显示用户信息。
+  // 下面几条把版式钉住，防止回归成两个大表单。
+  const cardHeads = (community.match(/S\.cardHead/g) ?? []).length
+  assert(cardHeads <= 2, `ConvFusion.com 最多两张卡片（用户信息卡 + 研究工作卡），实际 ${cardHeads}`)
+  // 用户信息区里必须有"账号 / 服务器设置"两个内部 Tab
+  assert(/S\.miniTabs/.test(community) && /<MiniTab/.test(community), '用户信息区用内部 Tabs（账号 / 服务器设置）')
+  assert(/服务器设置/.test(community), '第二个内部 Tab 是「服务器设置」')
+  assert((community.match(/S\.field/g) ?? []).length === 0, '不再用大块 S.field 排表单（改用行内 compactInput）')
+  assert(/compactInput/.test(community), '登录 / 注册输入框用行内紧凑样式')
+  assert(/inviteOpen/.test(community) && /setInviteOpen/.test(community), '邀请码注册是折叠的次要入口')
+  assert(
+    /inviteOpen \? '收起邀请码注册' : '使用邀请码注册'/.test(community),
+    '未登录时次要入口显示「使用邀请码注册」（点开才出现表单）',
+  )
+  // 已登录 / 未登录两个分支必须在**同一张卡片**里。以卡片边界判定，不靠字符串先后
+  // （第一版用 `{account ? (` 的 indexOf 排序，结果命中的是研究工作卡里的分支 —— 脆且错）。
+  const firstHead = community.indexOf('S.cardHead')
+  const secondHead = community.indexOf('S.cardHead', firstHead + 1)
+  const firstCard = community.slice(firstHead, secondHead === -1 ? undefined : secondHead)
+  assert(/<span style=\{S\.label\}>API Key 登录<\/span>/.test(firstCard), '登录表单在第一张卡片内')
+  assert(/S\.accountName/.test(firstCard), '账号信息和登录表单在同一张卡片（登录后同一个位置）')
+  assert(/S\.accountName/.test(community), '已登录时同一张卡片里显示账号名（与邮箱）')
+
+  // ── 研究工作：两个视图（我的 / 可指导，2026-09 用户定稿）──────────────
+  assert(/workTab === 'mine'/.test(community) && /workTab === 'mentor'/.test(community), '研究工作卡片分两个视图')
+  assert(
+    /workTab === 'mine'/.test(community) &&
+      community.indexOf("workTab === 'mine'") < community.indexOf("workTab === 'mentor'"),
+    '「我的」在「可指导」之前（所有人都可能被指导，先看自己的）',
+  )
+  assert(/work\/mine/.test(community), '「我的」走 work/mine（本机研究项目）')
+  assert(/canMentor/.test(community) && /MENTOR/.test(community), '「可指导」需要导师角色')
+  assert(/需要导师角色/.test(community), '没有角色时如实说明权限（不是把内容藏起来不说）')
+  assert(/本机还没有研究项目/.test(community), '本机为空时给出空状态（业务发生时）')
+  // ⚠️ 铁律：读失败**不能**显示成"没有研究项目"（实测踩过：端点不存在时界面说"本机还没有研究项目"）
+  assert(/mineError/.test(community), '「我的」有独立的失败态')
+  assert(/host-restart/.test(community) && /宿主侧需要重启/.test(community), '旧宿主（无 work/mine）时提示需重启')
+  assert(/注册表不可用/.test(community), '注册表读不到时如实标注（≠ 没有研究项目）')
+  assert(/<MiniTab/.test(community), '研究工作卡片用内部 Tabs 切换视图')
+  // Tab 前必须有「研究工作」字样：不能只看到「我的 / 可指导」两个孤立标签
+  {
+    const titleIdx = community.indexOf('>研究工作<')
+    const firstTabIdx = community.indexOf("workTab === 'mine'")
+    assert(titleIdx > -1, '卡片头带「研究工作」标题')
+    assert(titleIdx < firstTabIdx, '「研究工作」标题在「我的 / 可指导」Tab 之前')
+  }
+
+  // ── 研究工作列表（Pitch Deck：Discover Research, Not People）──────────
+  assert(/SAMPLE_WORKS/.test(community), '有示例研究工作数据（可指导 · 未登录时展示）')
+  assert(/示例数据/.test(community), '示例列表带「示例数据」徽章（不假装是真的）')
+  assert(/work\/list/.test(community), '登录后走 work/list 拉真实列表')
+  assert(/work\/summary/.test(community) && /work\/brief/.test(community), '列表项操作走 work/summary 与 work/brief')
+  assert(/intents/.test(community) && /crypto\.randomUUID/.test(community), '简报带幂等键（402 后重试不重复扣费）')
+  // 未登录时"不可交互"由**状态**表达（按钮 disabled），不再靠一句常驻说明
+  assert(/示例数据，登录后可浏览并操作/.test(community), '未登录时标注示例数据（不假装是真的）')
+  assert(/摘要（免费）/.test(community) && /1 Token/.test(community), '说明两级披露：摘要免费 / 简报 1 Token')
+  // 未登录分支的示例行必须整行禁用
+  const sampleIdx = community.indexOf('SAMPLE_WORKS.map')
+  assert(sampleIdx > -1 && /disabled/.test(community.slice(sampleIdx, sampleIdx + 1200)), '示例行按钮禁用')
+
+  // ── 文案纪律：设置页**不放常驻的产品说明**（2026-09 用户要求）──────────────
+  //
+  // 用户原话：「不要总是添加这类啰嗦的信息，只有在实际业务发生时给提示」。
+  // 产品定位、Discover Research 这类原则属于文档与首页；设置页只在
+  // 失败 / 空结果 / 待填字段 / 状态异常 这些**业务发生时**给提示。
+  // 这几条断言就是防止后来者再把说明文案加回来。
+  const bannedCopy = [
+    '执行研究，ConvFusion.com 连接研究',
+    'Discover Research, Not People',
+    '摘要免费；简报消耗 1 Token',
+    '完整研究状态（Level 3）',
+    '邀请制：账号没有口令',
+    // 服务器设置 Tab 的那段常驻说明（留空含义 / 归一规则 → 悬浮提示）
+    '留空 = 跟随环境配置（本环境默认',
+    '改完地址需重新登录。',
+  ]
+  for (const copy of bannedCopy) {
+    assert(!community.includes(copy), `设置页不放常驻说明文案：${copy}`)
+  }
+  // 反而必须有：业务发生时才出现的提示
+  assert(/暂无可发现的研究工作/.test(community), '列表为空时给出空结果提示（业务发生时）')
+  assert(/示例数据，登录后可浏览并操作/.test(community), '未登录时标注示例数据（必须，不能看起来像真的）')
+  assert(/邮箱必须与邀请码签发时指定的邮箱一致/.test(community), '展开邀请码注册时才提示邮箱约束（关键时刻）')
+  assert(/serverChanged/.test(community) && /地址已改/.test(community), '地址真的改了才提示"需要重新登录"（业务发生时）')
+  // 花钱的那一刻要给出回执（用户会问"扣了没、扣了几次"）
+  assert(/chargeNotice/.test(community) && /已读取简报，消耗/.test(community), '读完简报当场显示扣费回执')
+  assert(/refreshBalance\(\)/.test(community) && /Promise<number \| null>/.test(community), '刷新余额返回新余额（回执照它组）')
+  // Token 余额：登录后要显示"我还剩多少"（点了可刷新）；花 Token 后自动刷新
+  assert(
+    /state\?\.tokens \?/.test(community) && /state\.tokens\.available\} Token/.test(community),
+    '登录后显示 Token 余额',
+  )
+  assert(/refreshBalance/.test(community) && /account\/tokens/.test(community), '余额可单独刷新（走 account/tokens）')
+  assert(
+    /void refreshBalance\(\)/.test(community),
+    '读完简报（花掉 Token）后自动刷新余额',
+  )
+  assert(/冻结/.test(community), '有冻结余额时也说明（押金仍是用户的钱）')
 
   // ── Tab 3：系统设置 —— OpenAlex 凭据 + 本地依赖检查 ──
   assert(bundleText.includes('OpenAlex'), '提到 OpenAlex')
-  assert(bundleText.includes('免费注册并复制 API Key'), '提示免费申请并引导获取 Key')
-  assert(bundleText.includes('openalex.org'), '给出申请入口')
   const retrieval = src.slice(src.indexOf('function SystemTab('))
   assert(/type="password"/.test(retrieval), 'Key 输入框 type=password')
   assert(/autoComplete="off"/.test(retrieval), 'Key 输入框关闭自动填充')
-  assert(/不会发送到浏览器|不会回传浏览器/.test(retrieval), '说明密钥不回传浏览器')
+  // 文案纪律：申请入口只在**未配置**（需要动作）时出现，不再常驻
+  assert(/!configured \?/.test(retrieval) && /openalex.org/.test(retrieval), '未配置时才给申请入口')
+  assert(
+    /密钥仅保存在本机，不会回传浏览器/.test(retrieval),
+    '凭据纪律写在输入框悬浮提示（不占版面）',
+  )
+  // 常驻说明必须已删除
+  for (const gone of ['文献检索使用 OpenAlex', '未配置时仍可通过公共池检索，但速率较低']) {
+    assert(!retrieval.includes(gone), `系统设置不再常驻这段说明：${gone}`)
+  }
 
   // ── Tab 3：本地依赖（tectonic）—— 用户可能没装，必须给出检查与安装说明 ──
   assert(bundleText.includes('tectonic'), '系统设置提到 tectonic')
@@ -305,8 +429,14 @@ console.log('\n[1f] OpenAlex Key 的存储与暴露面')
 
   // 关键：state 里**只有可用性，没有密钥**
   const secret = 'sk-super-secret-openalex-value'
+  const cfSecret = 'cf_live_deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdead'
   const st = RPC.buildSettingsState(
-    { customizationFile: 'x.json', customizationDir: '/tmp', openalexApiKey: secret },
+    {
+      customizationFile: 'x.json',
+      customizationDir: '/tmp',
+      openalexApiKey: secret,
+      convfusionApiKey: cfSecret,
+    },
     CUST.createMemoryCustomizationStore(),
   )
   assertEq(st.retrieval.configured, true, 'state 报告已配置')
@@ -314,6 +444,14 @@ console.log('\n[1f] OpenAlex Key 的存储与暴露面')
   assert(!JSON.stringify(st).includes(secret), 'state 里**没有**密钥明文（浏览器永远拿不到）')
   assert(!JSON.stringify(st.config).includes(secret), 'config 里的密钥被剔除')
   assert(st.config.openalexApiKey === undefined, '返回给界面的 config 不含该字段')
+
+  // ⚠️ 第二个 secret（ConvFusion.com API Key）必须享受**同一条**纪律。
+  // 这条断言是防回归的：只摘掉一个 secret 是最容易犯的漏（改一处、漏一处）。
+  assert(!JSON.stringify(st).includes(cfSecret), 'state 里**没有** ConvFusion.com API Key 明文')
+  assert(!JSON.stringify(st.config).includes(cfSecret), 'config 里的 ConvFusion.com Key 被剔除')
+  assert(st.config.convfusionApiKey === undefined, '返回给界面的 config 不含 convfusionApiKey')
+  assert(st.account.keyConfigured === true, 'account 只报告"有凭据"')
+  assert(st.account.account === null, 'account/state 不联网 → 未验证账号为 null')
 
   // ── 本地依赖（tectonic）：论文编译靠本机装的它，用户可能没装 ──
   // 设置页要能看到"有没有 / 在哪 / 什么版本 / 没装怎么办"，因此 state 必须带回检测结果。
@@ -388,6 +526,99 @@ console.log('\n[1g] 宿主陈旧检测')
   assert(/staleHost/.test(src), '界面有陈旧宿主提示')
   assert(/宿主侧仍在运行旧代码/.test(src), '提示文案说明"仍在运行旧代码"')
   assert(/刷新页面不会生效/.test(src), '明确说明刷新无效、需重启 DSH')
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 1h. 服务器地址与凭据的**来源判定**（【ConvFusion.com】登录用的两个配置）
+ *
+ * 离线可断言的部分只有"从哪个来源取地址/凭据"；真实登录流程在
+ * `verify-server-login.mjs`（stub fetch）与 `verify-server-login-live.mjs`（真服务器）。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[1h] ConvFusion.com：服务器地址与凭据来源')
+{
+  const CFG = await import(lib('config.js'))
+  assertEq(CFG.CONVFUSION_API_KEY_ENV, 'CONVFUSION_API_KEY', '凭据环境变量名')
+  assertEq(CFG.CONVFUSION_SERVER_URL_ENV, 'CONVFUSION_SERVER_URL', '地址环境变量名')
+  // ⚠️ 地址**不写死在代码里**：开发 / 生产是两套环境，由 `convfusion.env.json` 按环境给出。
+  // 这个常量只是"连配置文件都没有"时的开发兜底，真正的解析在 `environmentServerUrl`。
+  assertEq(CFG.DEFAULT_SERVER_URL, 'http://localhost:8000', '开发兜底地址（非唯一来源）')
+  assertEq(ENVCFG.BUILTIN_SERVER_URL.production, 'https://convfusion.com', '生产兜底地址是线上域名')
+
+  // 默认值必须真的进 schema（否则用户在设置页看不到、也改不了）
+  const schemaJson = JSON.stringify(CFG.Config.toJSON())
+  assert(/serverUrl/.test(schemaJson), 'schema 含 serverUrl')
+  assert(/convfusionApiKey/.test(schemaJson), 'schema 含 convfusionApiKey')
+  assertEq(
+    (schemaJson.match(/"role":"secret"/g) ?? []).length,
+    2,
+    '两个 secret 字段（OpenAlex Key + ConvFusion.com Key）都声明了 role=secret',
+  )
+
+  // 地址：设置 > 环境变量 > 环境配置文件 > 内置兜底
+  //
+  // ⚠️ 这里全部用**显式 env**（`CONVFUSION_ENV_FILE='-'` = 不读任何文件），
+  // 否则断言会取决于跑测试的这台机器上有没有 `convfusion.env.json`。
+  const NOFILE = { CONVFUSION_ENV_FILE: '-', CONVFUSION_ENV: 'development' }
+  assertEq(CFG.resolveServerUrl({ serverUrl: 'http://a:1' }, NOFILE).url, 'http://a:1', '设置里的地址优先')
+  assertEq(CFG.resolveServerUrl({ serverUrl: 'http://a:1' }, NOFILE).source, 'settings', '来源 = 设置文档')
+  assertEq(
+    CFG.resolveServerUrl({}, { ...NOFILE, CONVFUSION_SERVER_URL: 'http://b:2' }).url,
+    'http://b:2',
+    '设置空 → 环境变量',
+  )
+  assertEq(
+    CFG.resolveServerUrl({}, { ...NOFILE, CONVFUSION_SERVER_URL: 'http://b:2' }).source,
+    'env',
+    '来源 = 环境变量',
+  )
+  assertEq(
+    CFG.resolveServerUrl({}, NOFILE).url,
+    'http://localhost:8000',
+    '都没有 → 内置兜底（开发）',
+  )
+  assertEq(
+    CFG.resolveServerUrl({}, { ...NOFILE, CONVFUSION_ENV: 'production' }).url,
+    'https://convfusion.com',
+    '生产环境的内置兜底是线上地址（**开发/生产不同**）',
+  )
+  assertEq(
+    CFG.resolveServerUrl({ serverUrl: 'http://a:1' }, { ...NOFILE, CONVFUSION_SERVER_URL: 'http://b:2' }).source,
+    'settings',
+    '设置优先于环境变量',
+  )
+  // 环境徽章与"地址/环境矛盾"提示所需的字段必须带回界面
+  assertEq(CFG.resolveServerUrl({}, NOFILE).environment, 'development', '报告当前环境')
+  assertEq(
+    CFG.resolveServerUrl({ serverUrl: 'http://localhost:8000' }, { ...NOFILE, CONVFUSION_ENV: 'production' })
+      .mismatched,
+    true,
+    '生产环境 + 本机地址 → 标记矛盾（界面要提示）',
+  )
+
+  // 凭据：设置 > 环境变量 > 无；明文取值是**宿主专用**函数
+  assertEq(CFG.describeConvFusionKey({ convfusionApiKey: 'k' }, {}), { configured: true, source: 'settings' }, '设置里有 → settings')
+  assertEq(CFG.describeConvFusionKey({}, { CONVFUSION_API_KEY: 'k' }), { configured: true, source: 'env' }, '环境变量 → env')
+  assertEq(CFG.describeConvFusionKey({}, {}), { configured: false, source: 'none' }, '都没有 → 未配置')
+  assertEq(CFG.resolveConvFusionApiKey({}, { CONVFUSION_API_KEY: 'env-key' }), 'env-key', '明文取值支持环境变量回退')
+  assertEq(
+    CFG.resolveConvFusionApiKey({ convfusionApiKey: 'settings-key' }, { CONVFUSION_API_KEY: 'env-key' }),
+    'settings-key',
+    '明文取值：设置优先',
+  )
+
+  // 归一配置：空地址**保持空串**（= 跟随环境配置，不替用户填地址）
+  assertEq(CFG.resolveConfig({}).serverUrl, '', 'resolveConfig 不替用户填服务器地址')
+  assertEq(CFG.resolveConfig({ serverUrl: '  ' }).serverUrl, '', '空白地址 → 空（= 跟随环境配置）')
+  assertEq(CFG.resolveConfig({ convfusionApiKey: '  k  ' }).convfusionApiKey, 'k', '凭据首尾空白被去掉')
+
+  // account/state 端点：**不联网**也要能回答"当前地址 + 有没有凭据"
+  const h = makeHost()
+  const res = await h.handler('account/state', {})
+  assert(res.ok, 'account/state 可用')
+  assertEq(res.value.account, null, '不联网 → 无已认证账号')
+  assertEq(typeof res.value.keyConfigured, 'boolean', '报告凭据可用性')
+  assert(/^https?:\/\//.test(res.value.serverUrl), '报告生效的服务器地址')
+  assert(!('convfusionApiKey' in res.value), 'account 状态里没有凭据字段')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -580,25 +811,45 @@ console.log('\n[7] 静态边界：客户端不引入禁用依赖、无凭据字�
   }
 
   const all = files.map((f) => readFileSync(join(dir, f), 'utf8')).join('\n')
-  // v2 推倒的 v1 **配置字段**都不该回来（OpenAlex Key 与 ConvFusion.com 是用户后来
-  // 明确要求重做的 UI，不在此列 —— 但它们的**实现**仍必须是空的）
-  for (const banned of ['serverUrl', 'cloudMode', 'methodTemplates', 'myTemplates', 'authToken']) {
+  // v2 推倒的 v1 **配置字段**都不该回来。
+  // ⚠️ `serverUrl` 曾经在这张黑名单里 —— 那时"研究方法库"还没实现。2026-09 接入
+  // ConvFusion.com 后它是**真实存在**的字段（宿主配置，登录时可由用户改写地址），
+  // 所以移出黑名单；`cloudMode` / `methodTemplates` 那套 v1 云模板模型仍然禁止。
+  for (const banned of ['cloudMode', 'methodTemplates', 'myTemplates', 'authToken']) {
     assert(!all.includes(banned), `不出现 v1 遗留配置字段：${banned}`)
   }
-  assert(!/localStorage/.test(all), '客户端不用 localStorage（定制存宿主侧文件）')
+  assert(!/localStorage/.test(all), '客户端不用 localStorage（凭据不进浏览器）')
   assert(/fetch\(/.test(all), '客户端用同源 fetch 调自己的路由')
   assert(!/https?:\/\/(?!127\.0\.0\.1|localhost)/.test(all), '不硬编码外部地址（只同源）')
 
-  // 「研究方法库」是**预留**：界面必须存在，但不得有任何真实登录/联网实现
+  // 「研究方法库」= 登录 ConvFusion.com。凭据纪律现在由**实现**保证：
+  //   · 有登录表单（不再假装未实现）
+  //   · 但**不发跨域请求** —— 所有服务器调用都经宿主 account/* 端点
+  //   · 不在浏览器侧缓存凭据（无 localStorage；Key 用完即清空 state）
   const settingsSrc = readFileSync(join(dir, 'settings.tsx'), 'utf8')
   const community = settingsSrc.slice(
-    settingsSrc.indexOf('function CommunityTab()'),
+    settingsSrc.indexOf('function CommunityTab('),
     settingsSrc.indexOf('function SystemTab('),
   )
   assert(community.length > 200, '找得到 CommunityTab 的实现')
-  assert(!/<input/.test(community), '研究方法库没有登录表单（未实现，不假装能登录）')
-  assert(!/fetch\(/.test(community), '研究方法库不发任何网络请求')
-  assert(!/password/i.test(community), '研究方法库不收集口令')
+  assert(/<input/.test(community), '研究方法库有登录表单（登录 ConvFusion.com）')
+  assert(/type="password"/.test(community), '凭据输入框是 password 类型')
+  assert(/autoComplete="off"/.test(community), '凭据输入框关闭自动填充')
+  assert(/account\/login/.test(community), '登录走宿主 account/login 端点')
+  assert(/account\/register/.test(community), '邀请码注册走宿主 account/register 端点')
+  assert(/account\/logout/.test(community), '登出走宿主 account/logout 端点')
+  assert(
+    !/fetch\(/.test(community),
+    '研究方法库自己不发请求（服务器未开 CORS；一律经宿主 account/*）',
+  )
+  assert(
+    !/https?:\/\//.test(community),
+    '研究方法库不写死服务器地址（地址由宿主配置提供，界面只展示/可改）',
+  )
+  assert(
+    !/cf_live_[0-9a-f]{8}/.test(community),
+    '源码里没有硬编码的 API Key',
+  )
 
   // OpenAlex Key 的输入必须是 password 类型 + 不自动填充
   const retrieval = settingsSrc.slice(settingsSrc.indexOf('function SystemTab('))

@@ -33,14 +33,51 @@
  *
  * ⚠️ 刻意**没有**"默认 Skill 目录"之类的配置：系统 Skill Library 是包内资产，
  * 由我们维护；把它做成可配置项会诱导用户去改库，与架构冲突。
+ *
+ * ## ConvFusion.com 凭据（`serverUrl` + `convfusionApiKey`）
+ *
+ * 【设置】-【ConvFusion】-【ConvFusion.com】的「登录」把两样东西落在这里：
+ *
+ * ```text
+ * serverUrl         服务器地址（**留空 = 跟随环境配置**，见 src/server-env.ts）
+ * convfusionApiKey  cf_live_…   ← role('secret')，只被宿主使用
+ * ```
+ *
+ * 服务器**没有口令登录**：账号是邀请制，鉴权只有 `Authorization: Bearer cf_live_…`
+ * 一条通道（见 `ConvFusion-server/docs/API.md` §2）。所以"登录"= 把一份有效凭据
+ * 交给宿主、由宿主调 `GET /api/v1/auth/me` 验证身份 —— 浏览器从头到尾拿不到明文。
+ *
+ * ⚠️ **地址不写死在这个文件里**。开发（`http://localhost:8000`）与生产
+ * （`https://convfusion.com`）是两套环境，地址由 `convfusion.env.json` 按环境给出，
+ * 解析顺序见 {@link resolveServerUrl}。
  */
 
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import Schema from '@deepseek-ai/schemastery'
+import {
+  BUILTIN_SERVER_URL,
+  environmentServerUrl,
+  serverUrlMismatch,
+  type ConvFusionEnvironment,
+} from './server-env.js'
 
 /** 设置里没配 OpenAlex Key 时回退的环境变量名。 */
 export const OPENALEX_API_KEY_ENV = 'OPENALEX_API_KEY'
+
+/** 设置里没配 ConvFusion.com API Key 时回退的环境变量名。 */
+export const CONVFUSION_API_KEY_ENV = 'CONVFUSION_API_KEY'
+
+/** 设置里没配服务器地址时回退的环境变量名。 */
+export const CONVFUSION_SERVER_URL_ENV = 'CONVFUSION_SERVER_URL'
+
+/**
+ * 服务器地址的**内置兜底**（开发环境）。
+ *
+ * ⚠️ 真正的地址来自环境配置文件（`src/server-env.ts`）；这个常量只是"连配置文件都没有"
+ * 时的最后手段。要"当前环境的默认地址"请调 {@link environmentServerUrl}。
+ */
+export const DEFAULT_SERVER_URL = BUILTIN_SERVER_URL.development
 
 /** DSH 主目录（可用环境变量覆盖，便于测试与多 profile）。 */
 export function dshHome(): string {
@@ -65,6 +102,25 @@ export interface Config {
    */
   openalexApiKey: string
   /**
+   * ConvFusion.com 服务器地址（不含 `/api/v1`）。
+   *
+   * ⚠️ **默认是空串 = "跟随环境配置"**，不是某个写死的地址：开发环境由
+   * `convfusion.env.json` 指向 `http://localhost:8000`、生产指向
+   * `https://convfusion.com`。schema 默认值不填地址是**故意的** ——
+   * 一旦这里给了非空默认值，"设置文档"这一层就会永远盖住环境配置文件，
+   * 配置文件里的生产地址就再也生效不了。
+   *
+   * 解析顺序见 {@link resolveServerUrl}。
+   */
+  serverUrl: string
+  /**
+   * ConvFusion.com API Key（**secret**，`cf_live_…`）。
+   *
+   * ⚠️ 由宿主独占使用：浏览器只见"是否已登录 + 账号信息"（见 `server-client.ts`）。
+   * 服务器没有口令登录，这份 Key 就是全部凭据。
+   */
+  convfusionApiKey: string
+  /**
    * 方向明确时是否允许**自动继续推进**（用户要求）。
    *
    * 判定见 `advance.ts`：只有"下一步确实清楚、没有阻塞项、没有歧义、没有连续停滞"
@@ -86,6 +142,15 @@ export const Config: Schema<Config> = Schema.object({
     .role('secret')
     .default('')
     .description('OpenAlex API Key（免费申请：https://openalex.org/）。用于文献检索。'),
+  serverUrl: Schema.string()
+    .default('')
+    .description(
+      'ConvFusion.com 服务器地址；留空 = 跟随环境配置（开发 localhost:8000 / 生产 convfusion.com）。',
+    ),
+  convfusionApiKey: Schema.string()
+    .role('secret')
+    .default('')
+    .description('ConvFusion.com API Key（cf_live_…）。由【ConvFusion.com】页的登录流程写入。'),
   autoContinue: Schema.boolean()
     .default(true)
     .description('方向明确时自动继续推进；遇到需要取舍的抉择会停下来问你。'),
@@ -114,6 +179,10 @@ export function resolveConfig(input: Partial<Config> | undefined): Config {
     customizationFile: (c.customizationFile ?? '').trim() || 'skill-customizations.json',
     customizationDir: (c.customizationDir ?? '').trim(),
     openalexApiKey: (c.openalexApiKey ?? '').trim(),
+    // ⚠️ 空串**保持空串**：它表示"跟随环境配置"。这里若补成某个地址，
+    // 就会永久压住 `convfusion.env.json` 里的生产地址（见 Config.serverUrl 注释）。
+    serverUrl: (c.serverUrl ?? '').trim(),
+    convfusionApiKey: (c.convfusionApiKey ?? '').trim(),
     autoContinue: c.autoContinue !== false,
     autoContinueMaxRounds:
       typeof c.autoContinueMaxRounds === 'number' && c.autoContinueMaxRounds >= 0
@@ -129,11 +198,99 @@ export function resolveConfig(input: Partial<Config> | undefined): Config {
  * （`redactSecrets: true`），而设置页走的是我们自己的 `/dsh-convfusion/state` 路由 ——
  * 那条路不经过 DSH 的脱敏，原样返回 `config` 就等于把密钥送进浏览器。
  * `verify-settings-page.mjs` 有一条断言专门守这个泄漏（曾经真的漏了）。
+ *
+ * 现在是**两个** secret：OpenAlex Key 与 ConvFusion.com API Key。
  */
-export function redactConfig(config: Config): Omit<Config, 'openalexApiKey'> {
-  const { openalexApiKey: _omit, ...rest } = config
-  void _omit
+export function redactConfig(config: Config): Omit<Config, SecretField> {
+  const { openalexApiKey: _a, convfusionApiKey: _b, ...rest } = config
+  void _a
+  void _b
   return rest
+}
+
+/** 需要脱敏的字段名（集中一处，新增 secret 只需改这里）。 */
+export type SecretField = 'openalexApiKey' | 'convfusionApiKey'
+
+/**
+ * ConvFusion.com 服务器地址的**有效值**与来源。
+ *
+ * ```text
+ * ① 设置文档 convfusion.serverUrl        用户显式指定过（设置页登录时会写入）
+ * ② $CONVFUSION_SERVER_URL               部署 / CI 覆盖
+ * ③ 环境配置文件 environments[环境]      开发 → localhost:8000；生产 → convfusion.com
+ * ④ 内置兜底（按环境）                   连配置文件都没有时的最后手段
+ * ```
+ *
+ * ⚠️ 顺序**不能颠倒**：配置文件是"每个环境应连哪里"，用户设置是"这台机器实际连哪里"。
+ * 也正因为如此，`Config.serverUrl` 的默认值必须是空串（见其注释）。
+ *
+ * `source` 与 `environment` 只用于界面提示，不参与任何鉴权判断。
+ */
+export function resolveServerUrl(
+  config: Partial<Config>,
+  env: NodeJS.ProcessEnv = process.env,
+  options: { fresh?: boolean } = {},
+): {
+  url: string
+  source: 'settings' | 'env' | 'config' | 'default'
+  environment: ConvFusionEnvironment
+  /** 地址与当前环境是否矛盾（生产却指向本机 / 开发却指向线上）。 */
+  mismatched: boolean
+  /** 读到环境配置文件时给出它的路径（诊断用）。 */
+  envFile?: string
+} {
+  const fallback = environmentServerUrl(env, options)
+  const fromSettings = (config.serverUrl ?? '').trim()
+  const fromEnv = (env[CONVFUSION_SERVER_URL_ENV] ?? '').trim()
+  const url = fromSettings || fromEnv || fallback.url
+  const source: 'settings' | 'env' | 'config' | 'default' = fromSettings
+    ? 'settings'
+    : fromEnv
+      ? 'env'
+      : fallback.source === 'config'
+        ? 'config'
+        : 'default'
+  return {
+    url,
+    source,
+    environment: fallback.environment,
+    mismatched: serverUrlMismatch(fallback.environment, url, env),
+    ...(fallback.path ? { envFile: fallback.path } : {}),
+  }
+}
+
+/** 当前环境的**默认**地址（界面"恢复默认"、占位符用）。 */
+export function defaultServerUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return environmentServerUrl(env).url
+}
+
+/**
+ * ConvFusion.com 凭据的**可用性**（只有布尔与来源，**没有密钥**）。
+ *
+ * 与 {@link describeOpenAlexKey} 同款：这个结果可以直接回给浏览器。
+ */
+export function describeConvFusionKey(
+  config: Partial<Config>,
+  env: NodeJS.ProcessEnv = process.env,
+): { configured: boolean; source: 'settings' | 'env' | 'none' } {
+  if ((config.convfusionApiKey ?? '').trim()) return { configured: true, source: 'settings' }
+  if ((env[CONVFUSION_API_KEY_ENV] ?? '').trim()) return { configured: true, source: 'env' }
+  return { configured: false, source: 'none' }
+}
+
+/**
+ * 取出生效的 ConvFusion.com API Key（**明文**）。
+ *
+ * ⚠️ **只允许宿主调用**：返回值不得进入 `SettingsState`、日志、错误信息。
+ * 设置文档优先，其次环境变量。
+ */
+export function resolveConvFusionApiKey(
+  config: Partial<Config>,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const fromSettings = (config.convfusionApiKey ?? '').trim()
+  if (fromSettings) return fromSettings
+  return (env[CONVFUSION_API_KEY_ENV] ?? '').trim()
 }
 
 /**

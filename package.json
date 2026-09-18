@@ -1,6 +1,6 @@
 {
   "name": "dsh-convfusion",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "ConvFusion research operating system as a DeepSeek Harness plugin: research context injection, native skill provider, and runtime observation. Harness is the agent runtime.",
   "type": "module",
   "main": "lib/index.js",
@@ -20,6 +20,7 @@
     "lib",
     "skills",
     "cordis.patch.yml",
+    "convfusion.env.example.json",
     "README.md"
   ],
   "scripts": {
@@ -28,6 +29,9 @@
     "build:client": "node scripts/build-client.mjs && tsc -p tsconfig.client.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "verify:host-deps": "node scripts/verify-host-deps.mjs",
+    "verify:settings": "node scripts/verify-settings-page.mjs .",
+    "verify:server-login": "node scripts/verify-server-login.mjs .",
+    "verify:server-login-live": "node scripts/verify-server-login-live.mjs .",
     "clean": "rm -rf lib"
   },
   "devDependencies": {

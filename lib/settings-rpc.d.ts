@@ -74,6 +74,8 @@
  */
 import type { SkillCustomizationStore } from './research/skill-customization.js';
 import type { Config } from './config.js';
+import { type SecretField } from './config.js';
+import { type FetchLike, type TokenBalance } from './server-client.js';
 /**
  * 设置面的 HTTP 路由前缀（客户端必须用同一个）。
  *
@@ -141,6 +143,131 @@ export interface RetrievalKeyStatus {
     envVar: string;
 }
 /**
+ * 把宿主工作区注册表的**原始实体**归一成纯数据。
+ *
+ * 规则照抄 `dsh-additive` 的 `listWorkspaces`（那套已经在跑，行为经过验证）：
+ *
+ * ```text
+ * ① path 必填，取不到 → 跳过该条
+ * ② id 缺失 → 回退为 path
+ * ③ 去重：id 或 path 任一已出现 → 跳过
+ * ④ 顺序 = 注册表顺序（list() 不重排），与侧边栏那份清单一致
+ * ```
+ *
+ * 只做纯数据归一：目录是否存在 / 真身路径由 fs 探测（见 `work/mine`），
+ * 标题的友好缺省也留给端点（研究根永远叫 `workspace`，不能拿它当标题）。
+ */
+export declare function normalizeWorkspaceEntities(entities: ReadonlyArray<{
+    id?: unknown;
+    title?: unknown;
+    path?: unknown;
+    updatedAt?: unknown;
+}>): Array<{
+    id: string;
+    title: string;
+    path: string;
+    updatedAt: string;
+}>;
+/**
+ * **本机**的一项研究工作（【研究工作 · 我的】的一行）。
+ *
+ * 与 {@link WorkItem} 的区别：那个是**服务器上**别人公开的研究工作，这个是
+ * **本机工作区**里的研究项目 —— 数据全部来自磁盘，不需要登录、不发网络请求。
+ */
+export interface LocalWorkItem {
+    /** 工作区注册表 id（稳定；路径可能被重命名）。 */
+    id: string;
+    /** 显示名（注册表标题，缺省用研究根目录名）。 */
+    title: string;
+    /** 会话工作区路径（用户的工作区）。 */
+    path: string;
+    /** 研究根目录（`<会话工作区>/workspace`，旧布局下可能是会话工作区本身）。 */
+    researchRoot: string;
+    /** 注册表里的目录已消失。 */
+    missingDir: boolean;
+    /** 研究阶段（取自 Research State，可能为空）。 */
+    stage: string | null;
+    /** 成熟度均值（0..1），与「研究进展」面板同一个数。 */
+    overall: number;
+    /** 可数资产（证据 / 主张 / 计划 / 论文 …），与进展面板同一份口径。 */
+    counts: Array<{
+        key: string;
+        label: string;
+        value: number;
+        note?: string;
+    }>;
+    /** 是否已有论文正文。 */
+    paper: boolean;
+    /** 当前推进判定（clear / ambiguous / blocked / unknown）。 */
+    clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown';
+    /** 注册表最近一次变更时刻（ISO）。 */
+    updatedAt: string;
+}
+/** 服务器上的账号（`GET /api/v1/auth/me`）。**不含任何凭据。** */
+export interface AccountWire {
+    id: string;
+    email: string;
+    displayName: string;
+    status: string;
+    /** `RESEARCHER` / `MENTOR` / `ADMIN`（可多个）。 */
+    roles: string[];
+}
+/**
+ * 【ConvFusion.com】的登录状态 —— **回给浏览器的那一份**。
+ *
+ * ⚠️ 这里只有"有没有凭据 + 是哪个账号"，**永远不会**出现 `cf_live_…` 明文。
+ * 明文只在宿主内存里被 {@link resolveConvFusionApiKey} 取出、直接用于 HTTP 请求头。
+ *
+ * `account` 只有在**联网验证过**之后才非空：
+ *
+ * - `account/state` 不联网（服务器挂了也要能打开设置页）→ `account: null`；
+ * - `account/verify` / `login` / `register` 联网成功 → 填入账号。
+ */
+export interface AccountState {
+    /** 生效的服务器地址（不含 `/api/v1`）。 */
+    serverUrl: string;
+    /** 当前环境的**默认**地址（界面占位符 / 提示用）。 */
+    defaultServerUrl: string;
+    /** 这个地址是哪来的：设置文档 / 环境变量 / 环境配置文件 / 内置兜底。 */
+    serverUrlSource: 'settings' | 'env' | 'config' | 'default';
+    /**
+     * 当前环境（开发 / 生产）。
+     *
+     * ⚠️ **地址随环境而变**：开发是 `http://localhost:8000`、生产是
+     * `https://convfusion.com`（见 `src/server-env.ts`）。界面必须说清现在连的是哪一边，
+     * 否则"在本机测通了"和"线上能用"会被混为一谈。
+     */
+    environment: 'development' | 'production';
+    /** 地址与环境互相矛盾（生产却指向本机 / 开发却指向线上）。 */
+    serverUrlMismatch: boolean;
+    /** 是否已有可用凭据（**只报可用性，不回传凭据**）。 */
+    keyConfigured: boolean;
+    keySource: 'settings' | 'env' | 'none';
+    /** 凭据的环境变量名（仅提示）。 */
+    apiKeyEnvVar: string;
+    /** 已认证账号；未验证或未登录时为 null。 */
+    account: AccountWire | null;
+    /**
+     * Token 余额（登录后显示；未验证时为 null）。
+     *
+     * ⚠️ **尽力而为**：余额接口单独失败（网络抖动）不会让登录失败 —— 那种时候这里是 null，
+     * 界面不显示余额，用户点「重新验证」即可。**绝不**把拿不到余额显示成 0。
+     */
+    tokens: TokenBalance | null;
+}
+/**
+ * 组装登录状态（纯函数，可离线验证）。
+ *
+ * @param config 生效配置（**可含明文 Key** —— 本函数只读它的"有没有"，不把它放进结果）
+ * @param env 环境变量（测试注入）
+ * @param account 已验证的账号（未验证传 null）
+ * @param options.fresh 忽略环境配置文件的进程内缓存（测试用）
+ */
+export declare function buildAccountState(config: Config, env?: NodeJS.ProcessEnv, account?: AccountWire | null, options?: {
+    fresh?: boolean;
+    tokens?: TokenBalance | null;
+}): AccountState;
+/**
  * 一个**本地外部依赖**的可用性（目前只有 tectonic —— 它不在 Node 生态里，用户可能没装）。
  *
  * 论文写到最后要出 LaTeX/PDF，编译由 tectonic 完成；它不是 npm 依赖，装没装只有本机能查。
@@ -181,7 +308,7 @@ export interface SettingsState {
      *
      * ⚠️ **已剔除 secret**（见 {@link redactConfig}）：这个对象会经 HTTP 返回浏览器。
      */
-    config: Omit<Config, 'openalexApiKey'>;
+    config: Omit<Config, SecretField>;
     /** 定制文件的解析结果（展示"定制存在哪里"）。 */
     file: {
         path: string;
@@ -206,6 +333,8 @@ export interface SettingsState {
      * 远端读取会被 `redactSecrets` 摘掉，界面也从不持有明文。
      */
     retrieval: RetrievalKeyStatus;
+    /** 【ConvFusion.com】的登录状态（服务器地址 + 是否有凭据 + 已验证的账号）。 */
+    account: AccountState;
     /** 本地外部依赖（tectonic 等）的可用性 —— 【系统设置】页展示。 */
     dependencies: LocalDependencyReport;
 }
@@ -214,7 +343,7 @@ export interface SettingsState {
  *
  * 分组在这里做，客户端只负责渲染 —— 设置页不该自己理解 Skill 的存储结构。
  */
-export declare function buildSettingsState(config: Config, store: SkillCustomizationStore, resolvePath?: (c: Config) => string, probeDependencies?: () => LocalDependencyReport): SettingsState;
+export declare function buildSettingsState(config: Config, store: SkillCustomizationStore, resolvePath?: (c: Config) => string, probeDependencies?: () => LocalDependencyReport, env?: NodeJS.ProcessEnv): SettingsState;
 /** 设置面依赖（由插件入口注入，便于离线测试）。 */
 export interface SettingsRpcDeps {
     /** 当前生效配置（每次调用重新取，文件改名后立即生效）。 */
@@ -231,6 +360,43 @@ export interface SettingsRpcDeps {
      * （2026-09 实测发生）。
      */
     resolveSessionWorkspace?: (sessionId: string) => string | undefined;
+    /**
+     * 把配置补丁写回 **settings 用户层**（保存 API Key / 服务器地址）。
+     *
+     * 由插件入口接到 `settingsScope.update()`。缺省 = 设置存储不可用 —— 这时登录必须
+     * **明确失败**（`storage-unavailable`），而不是"看着登录成功、重启后没了"。
+     */
+    setConfig?: (patch: Partial<Config>) => Promise<void>;
+    /**
+     * 连接 ConvFusion.com 用的网络实现（测试注入假 fetch）。
+     *
+     * ⚠️ 插件自身**从不**在浏览器侧发这些请求：服务器未开 CORS，且凭据是 secret。
+     * 见 `server-client.ts` 文件头。
+     */
+    fetchImpl?: FetchLike;
+    /** 环境变量（测试注入；缺省 `process.env`）。 */
+    env?: NodeJS.ProcessEnv;
+    /** 服务器请求超时（测试用小值）。 */
+    serverTimeoutMs?: number;
+    /**
+     * 本机**工作区注册表**里的条目（DSH `ctx.workspaceRegistry.list()` 的投影）。
+     *
+     * 用于【研究工作 · 我的】：只列**含有效 research workspace** 的工作区
+     * （过滤与进度计算在本文件里做，入口只负责把注册表读出来）。
+     * 缺省 = 这台机器上没有工作区注册表（列表为空，不报错）。
+     */
+    listLocalWorkspaces?: () => Promise<{
+        /** DSH 是否真的提供了工作区注册表（false = 精简 profile / 服务缺失）。 */
+        available: boolean;
+        /** 不可用时的原因（直接给界面看，用于区分"没数据"和"读不到"）。 */
+        reason?: string;
+        items: Array<{
+            id: string;
+            title: string;
+            path: string;
+            updatedAt: string;
+        }>;
+    }>;
 }
 /**
  * 建立一个端点分发器。
@@ -245,6 +411,20 @@ export interface SettingsRpcDeps {
  * | `customization/reset` | `{ skillId, section }` | 清除一个章节的覆盖 |
  * | `customization/resetSkill` | `{ skillId }` | 清除一个 Skill 的全部覆盖 |
  * | `customization/resetAll` | `{}` | 清除全部定制（回到全系统原文） |
+ * | `account/state` | `{}` | 【ConvFusion.com】登录状态（**不联网**） |
+ * | `account/login` | `{ apiKey, serverUrl? }` | 用 API Key 登录（联网验证后落盘） |
+ * | `account/register` | `{ invitationCode, email, displayName, serverUrl? }` | 凭邀请码注册并登录 |
+ * | `account/verify` | `{}` | 用已保存的凭据重新验证身份（联网） |
+ * | `account/logout` | `{}` | 清除凭据（账号信息随之消失） |
+ * | `account/tokens` | `{}` | 重新读 Token 余额（登录后显示 / 花完 Token 后刷新） |
+ * | `work/mine` | `{}` | **本机**研究工作（有效研究项目的工作区；不联网、不需登录） |
+ * | `work/list` | `{}` | 研究网络里已公开的研究工作（需登录；条数由服务器定） |
+ * | `work/summary` | `{ projectId }` | 一项研究工作的摘要（免费） |
+ * | `work/brief` | `{ projectId, intentKey }` | 一项研究工作的简报（非 owner 花 1 Token） |
+ *
+ * ⚠️ **凭据纪律**（改动这里前先读 `server-client.ts` 文件头）：
+ * 服务器地址与 API Key 只出现在**宿主**与**服务器**之间；本渠道的任何返回值都不得
+ * 包含 `cf_live_…`。`account/*` 一律返回 {@link AccountState}（只有可用性 + 账号信息）。
  */
 export declare function createSettingsRpcHandler(deps: SettingsRpcDeps): (endpoint: string, payload: unknown) => Promise<SettingsRpcResult>;
 /** 最小化的 node:http 请求/响应视图（避免为了类型而依赖 @types/node 之外的东西）。 */

@@ -118,10 +118,55 @@ interface HostState {
         source: 'settings' | 'env' | 'none';
         envVar: string;
     };
+    /** 【ConvFusion.com】的登录状态（服务器地址 + 有无凭据 + 已验证账号）。**不含凭据。** */
+    account?: HostAccountState;
     /** 本地外部依赖（tectonic）——【系统设置】页的"配置检查"。 */
     dependencies?: {
         tectonic: HostDependency;
     };
+}
+/**
+ * 服务器上的账号（宿主 `AccountWire` 的镜像）。**没有任何凭据字段。**
+ *
+ * ConvFusion.com 没有口令登录：账号是邀请制，凭据是一份 `cf_live_…` API Key，
+ * 它**只存在于宿主**。浏览器这一侧从头到尾拿不到明文。
+ */
+interface HostAccount {
+    id: string;
+    email: string;
+    displayName: string;
+    status: string;
+    roles: string[];
+}
+/** 【ConvFusion.com】的登录状态（宿主 `AccountState` 的镜像）。 */
+interface HostAccountState {
+    serverUrl: string;
+    defaultServerUrl: string;
+    serverUrlSource: 'settings' | 'env' | 'config' | 'default';
+    /**
+     * 当前环境（开发 / 生产）。
+     *
+     * ⚠️ **地址随环境而变**（开发 = 本机服务器，生产 = 线上）。界面必须把这件事说出来：
+     * "在我电脑上登录成功"与"线上能用"是两件事，混在一起会得出错误结论。
+     */
+    environment?: 'development' | 'production';
+    /** 地址与环境矛盾（生产却指向本机 / 开发却指向线上）。 */
+    serverUrlMismatch?: boolean;
+    keyConfigured: boolean;
+    keySource: 'settings' | 'env' | 'none';
+    apiKeyEnvVar: string;
+    /** 只有在**联网验证过**之后才非空。 */
+    account: HostAccount | null;
+    /**
+     * Token 余额（联网验证过才有）。
+     *
+     * 宿主是**尽力而为**地取它：拿不到就是 null（界面不显示数字，而不是显示 0）。
+     */
+    tokens?: {
+        available: number;
+        frozen: number;
+        total: number;
+    } | null;
 }
 /** 一个本地外部依赖的检测结果（与 host 的 LocalDependencyStatus 对应）。 */
 interface HostDependency {
