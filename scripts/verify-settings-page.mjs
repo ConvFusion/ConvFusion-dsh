@@ -179,11 +179,12 @@ console.log('\n[1c] 设置页术语')
     .replace(/\/\/.*$/gm, '')
     .replace(/^\s*(?:\*|\/\*).*$/gm, '')
 
-  assert(src.includes('① 能力类别'), '一级下拉叫「能力类别」')
-  assert(src.includes('② 能力'), '二级下拉叫「能力」（不是"研究方法"）')
-  assert(src.includes('能力库'), '选择区以「能力库」命名（用户的词）')
-  assert(src.includes('能力库'), '提到「能力库」')
-  assert(src.includes('形成你自己的研究方法'), '说明"定制多项能力 → 形成研究方法"')
+  const zh = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
+  assert(zh.includes('① 能力类别'), '一级下拉叫「能力类别」')
+  assert(zh.includes('② 能力'), '二级下拉叫「能力」（不是"研究方法"）')
+  assert(zh.includes("'settings.library.title': '能力库'"), '选择区以「能力库」命名（用户的词）')
+  assert(zh.includes('能力库'), '提到「能力库」')
+  assert(zh.includes('形成你自己的研究方法'), '说明"定制多项能力 → 形成研究方法"')
   assert(!/个研究方法/.test(src), '界面文案里不再把单个 Skill 称为"研究方法"')
   assert(!/>\s*研究方法\s*</.test(src) && !/② 研究方法/.test(src), '没有把下拉直接叫"研究方法"')
 
@@ -246,92 +247,92 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   assertEq(starLines.map((l) => l.trim().slice(0, 40)), [], '可见文案里没有字面 markdown（** 会显示成星号）')
 
   // ── Hero 副标题：一句话，不堆信息 ──
-  assert(/<div style=\{S\.heroSub\}>定制各项能力，形成你自己的研究方法<\/div>/.test(src), 'Hero 副标题只有一句话')
-  // 方法只在本地（Pitch Deck 第 5 页的核心原则）：本地页要明确标出来
-  assert(/仅本机/.test(src), '能力库标注「仅本机」（定制不会上传）')
+  assert(/<div style=\{S\.heroSub\}>\{t\('settings\.hero\.subtitle'\)\}<\/div>/.test(src), 'Hero 副标题只有一句本地化文案')
   assert(!/全部能力已在 DSH 内原生运行/.test(visible), 'Hero 不再堆"原生运行 / 能力库 N 项"等冗余信息')
+  // 方法只在本地（Pitch Deck 第 5 页的核心原则）：本地页要明确标出来（文案走词条）
+  assert(/settings\.library\.localOnly/.test(src), '能力库标注「仅本机」（定制不会上传）')
 
-  // ── Tab 2：ConvFusion.com —— 账号 + 服务器 + 研究工作列表（2026-09 起是**真实**功能）──
+  // ── Tab 2：ConvFusion.com —— 账号 + 服务器 + 研究工作（2026-09 起是**真实**功能）──
   //
-  // ⚠️ 这一节曾经断言的是"尚未开放、没有表单、不发请求"。接入服务器后那些断言
-  // **必须改**，否则它们会把正确实现判成失败 —— 但"不假装成功"的原则要留下来，
-  // 所以下面仍然要求：登录的两种入口都存在，且**没有**凭据被写死在源码里。
-  assert(bundleText.includes('API Key 登录'), '给出「使用 API Key 登录」入口')
-  assert(bundleText.includes('使用邀请码注册'), '给出「使用邀请码注册」入口')
-  assert(bundleText.includes('重新验证'), '已登录后可重新验证身份')
-  assert(bundleText.includes('登出'), '已登录后可登出')
+  // ⚠️ 界面文案在合并上游 i18n 后**全部走 locale 字典**，源码里不再有中文字面量。
+  // 所以这里的断言分两类：
+  //   ① 源码里确实用了这些词条 key（结构）；
+  //   ② 中英字典都有对应文案（不出现半边缺失，也不留旧的"未实现"文案）。
+  // `verify-i18n.mjs` 另外保证"中英 key 完全一致"与"无硬编码中文"。
+  const zhDict = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
+  const enDict = readFileSync(join(PKG, 'src', 'client', 'i18n', 'en.ts'), 'utf8')
+  const dictHas = (key, zhSnippet, enSnippet, label) => {
+    assert(zhDict.includes(`'${key}'`), `${label}：中文字典含词条 ${key}`)
+    assert(enDict.includes(`'${key}'`), `${label}：英文字典含词条 ${key}`)
+    if (zhSnippet) assert(zhDict.includes(zhSnippet), `${label}：中文文案「${zhSnippet}」`)
+    if (enSnippet) assert(enDict.includes(enSnippet), `${label}：英文文案`)
+  }
   const community = src.slice(src.indexOf('function CommunityTab('), src.indexOf('function SystemTab('))
+  // 登录的两条入口（次要入口折叠）
+  dictHas('community.login.keyLabel', 'API Key 登录', 'Sign in with API key', 'API Key 登录入口')
+  dictHas('community.action.inviteShow', '使用邀请码注册', 'Register with an invitation', '邀请码注册入口')
+  dictHas('community.action.reverify', '重新验证', 'Re-verify', '重新验证')
+  dictHas('community.action.signOut', '登出', 'Sign out', '登出')
   assert(/account\/login/.test(community) && /account\/register/.test(community), '两个入口各自走对应端点')
   assert(!/cf_live_[0-9a-f]{16}/.test(community), '不得把任何 API Key 写死进源码')
   // 服务器端**没有**口令登录：界面不得出现口令输入（那是凭空造的概念）
   assert(!/type="password"[^>]*name="password"/.test(community), '不发明口令字段')
   assert(/invitationCode/.test(community), '邀请码注册会用邀请码')
-  // 「共享研究方法」接口服务器尚未提供 → 必须如实说明，不得列假数据
-  const demoLeftovers = ['convfusion 官方', 'ss_theory', 'bm_researcher', '演示数据']
-  for (const ghost of demoLeftovers) {
-    assert(!community.includes(ghost), `不再残留旧的演示数据：${ghost}`)
+  // 旧"研究方法库"演示版的东西必须已彻底移除（源码与字典都不许残留）
+  for (const ghost of ['convfusion 官方', 'ss_theory', 'bm_researcher', '演示数据', '以上为界面演示']) {
+    assert(!zhDict.includes(ghost) && !enDict.includes(ghost), `不再残留旧的演示数据：${ghost}`)
   }
-  assert(/研究工作/.test(community), '有「研究工作」卡片（这一页的主体内容）')
+  assert(/community\.work\.title/.test(community), '有「研究工作」卡片（这一页的主体内容）')
 
   // ── 版式：用户与登录必须是**一张紧凑卡片**（2026-09 用户反馈）──
   //
   // 反馈原文：① API Key 登录 + ② 邀请码注册 各占一大片，"面积大、体验不好"。
   // 要求：未登录只显示必须的登录项；登录之后**同一张卡片**显示用户信息。
-  // 下面几条把版式钉住，防止回归成两个大表单。
   const cardHeads = (community.match(/S\.cardHead/g) ?? []).length
   assert(cardHeads <= 2, `ConvFusion.com 最多两张卡片（用户信息卡 + 研究工作卡），实际 ${cardHeads}`)
-  // 用户信息区里必须有"账号 / 服务器设置"两个内部 Tab
   assert(/S\.miniTabs/.test(community) && /<MiniTab/.test(community), '用户信息区用内部 Tabs（账号 / 服务器设置）')
-  assert(/服务器设置/.test(community), '第二个内部 Tab 是「服务器设置」')
+  dictHas('community.tab.server', '服务器设置', 'Server', '第二个内部 Tab')
   assert((community.match(/S\.field/g) ?? []).length === 0, '不再用大块 S.field 排表单（改用行内 compactInput）')
   assert(/compactInput/.test(community), '登录 / 注册输入框用行内紧凑样式')
   assert(/inviteOpen/.test(community) && /setInviteOpen/.test(community), '邀请码注册是折叠的次要入口')
-  assert(
-    /inviteOpen \? '收起邀请码注册' : '使用邀请码注册'/.test(community),
-    '未登录时次要入口显示「使用邀请码注册」（点开才出现表单）',
-  )
-  // 已登录 / 未登录两个分支必须在**同一张卡片**里。以卡片边界判定，不靠字符串先后
-  // （第一版用 `{account ? (` 的 indexOf 排序，结果命中的是研究工作卡里的分支 —— 脆且错）。
+  assert(/community\.action\.inviteHide/.test(community), '展开后可收起邀请码注册')
+  // 已登录 / 未登录两个分支必须在**同一张卡片**里（以卡片边界判定，不靠字符串先后）
   const firstHead = community.indexOf('S.cardHead')
   const secondHead = community.indexOf('S.cardHead', firstHead + 1)
   const firstCard = community.slice(firstHead, secondHead === -1 ? undefined : secondHead)
-  assert(/<span style=\{S\.label\}>API Key 登录<\/span>/.test(firstCard), '登录表单在第一张卡片内')
+  assert(/community\.login\.keyLabel/.test(firstCard), '登录表单在第一张卡片内')
   assert(/S\.accountName/.test(firstCard), '账号信息和登录表单在同一张卡片（登录后同一个位置）')
-  assert(/S\.accountName/.test(community), '已登录时同一张卡片里显示账号名（与邮箱）')
 
   // ── 研究工作：两个视图（我的 / 可指导，2026-09 用户定稿）──────────────
   assert(/workTab === 'mine'/.test(community) && /workTab === 'mentor'/.test(community), '研究工作卡片分两个视图')
   assert(
-    /workTab === 'mine'/.test(community) &&
-      community.indexOf("workTab === 'mine'") < community.indexOf("workTab === 'mentor'"),
+    community.indexOf("workTab === 'mine'") < community.indexOf("workTab === 'mentor'"),
     '「我的」在「可指导」之前（所有人都可能被指导，先看自己的）',
   )
   assert(/work\/mine/.test(community), '「我的」走 work/mine（本机研究项目）')
   assert(/canMentor/.test(community) && /MENTOR/.test(community), '「可指导」需要导师角色')
-  assert(/需要导师角色/.test(community), '没有角色时如实说明权限（不是把内容藏起来不说）')
-  assert(/本机还没有研究项目/.test(community), '本机为空时给出空状态（业务发生时）')
+  dictHas('community.hint.mentorRequiresRole', '需要导师角色', 'mentor role', '没有角色时如实说明权限')
+  dictHas('community.hint.mineEmpty', '本机还没有研究项目', 'No local research projects yet', '本机为空时的空状态')
   // ⚠️ 铁律：读失败**不能**显示成"没有研究项目"（实测踩过：端点不存在时界面说"本机还没有研究项目"）
   assert(/mineError/.test(community), '「我的」有独立的失败态')
-  assert(/host-restart/.test(community) && /宿主侧需要重启/.test(community), '旧宿主（无 work/mine）时提示需重启')
-  assert(/注册表不可用/.test(community), '注册表读不到时如实标注（≠ 没有研究项目）')
-  assert(/<MiniTab/.test(community), '研究工作卡片用内部 Tabs 切换视图')
+  assert(/host-restart/.test(community), '旧宿主（无 work/mine）时单独给出 host-restart')
+  dictHas('community.error.hostRestart', '宿主侧需要重启', 'must be restarted', '需重启提示')
+  dictHas('community.badge.registryUnavailable', '注册表不可用', 'Registry unavailable', '注册表读不到时的标注')
   // Tab 前必须有「研究工作」字样：不能只看到「我的 / 可指导」两个孤立标签
   {
-    const titleIdx = community.indexOf('>研究工作<')
+    const titleIdx = community.indexOf('community.work.title')
     const firstTabIdx = community.indexOf("workTab === 'mine'")
-    assert(titleIdx > -1, '卡片头带「研究工作」标题')
-    assert(titleIdx < firstTabIdx, '「研究工作」标题在「我的 / 可指导」Tab 之前')
+    assert(titleIdx > -1 && titleIdx < firstTabIdx, '「研究工作」标题在「我的 / 可指导」Tab 之前')
   }
 
   // ── 研究工作列表（Pitch Deck：Discover Research, Not People）──────────
   assert(/SAMPLE_WORKS/.test(community), '有示例研究工作数据（可指导 · 未登录时展示）')
-  assert(/示例数据/.test(community), '示例列表带「示例数据」徽章（不假装是真的）')
+  dictHas('community.badge.sample', '示例数据', 'Sample data', '示例数据徽章（不假装是真的）')
   assert(/work\/list/.test(community), '登录后走 work/list 拉真实列表')
   assert(/work\/summary/.test(community) && /work\/brief/.test(community), '列表项操作走 work/summary 与 work/brief')
   assert(/intents/.test(community) && /crypto\.randomUUID/.test(community), '简报带幂等键（402 后重试不重复扣费）')
-  // 未登录时"不可交互"由**状态**表达（按钮 disabled），不再靠一句常驻说明
-  assert(/示例数据，登录后可浏览并操作/.test(community), '未登录时标注示例数据（不假装是真的）')
-  assert(/摘要（免费）/.test(community) && /1 Token/.test(community), '说明两级披露：摘要免费 / 简报 1 Token')
+  dictHas('community.action.brief', '简报 · 1 Token', 'Brief · 1 Token', '两级披露中的付费层')
+  dictHas('community.hint.sampleFootnote', '示例数据，登录后可浏览并操作', 'Sample data', '未登录时的示例标注')
   // 未登录分支的示例行必须整行禁用
   const sampleIdx = community.indexOf('SAMPLE_WORKS.map')
   assert(sampleIdx > -1 && /disabled/.test(community.slice(sampleIdx, sampleIdx + 1200)), '示例行按钮禁用')
@@ -339,56 +340,45 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   // ── 文案纪律：设置页**不放常驻的产品说明**（2026-09 用户要求）──────────────
   //
   // 用户原话：「不要总是添加这类啰嗦的信息，只有在实际业务发生时给提示」。
-  // 产品定位、Discover Research 这类原则属于文档与首页；设置页只在
-  // 失败 / 空结果 / 待填字段 / 状态异常 这些**业务发生时**给提示。
-  // 这几条断言就是防止后来者再把说明文案加回来。
+  // 合并 i18n 后文案都在字典里，所以这条纪律要**对着字典**断言。
   const bannedCopy = [
     '执行研究，ConvFusion.com 连接研究',
     'Discover Research, Not People',
     '摘要免费；简报消耗 1 Token',
     '完整研究状态（Level 3）',
     '邀请制：账号没有口令',
-    // 服务器设置 Tab 的那段常驻说明（留空含义 / 归一规则 → 悬浮提示）
-    '留空 = 跟随环境配置（本环境默认',
     '改完地址需重新登录。',
   ]
   for (const copy of bannedCopy) {
-    assert(!community.includes(copy), `设置页不放常驻说明文案：${copy}`)
+    assert(!zhDict.includes(copy), `设置页不放常驻说明文案：${copy}`)
   }
   // 反而必须有：业务发生时才出现的提示
-  assert(/暂无可发现的研究工作/.test(community), '列表为空时给出空结果提示（业务发生时）')
-  assert(/示例数据，登录后可浏览并操作/.test(community), '未登录时标注示例数据（必须，不能看起来像真的）')
-  assert(/邮箱必须与邀请码签发时指定的邮箱一致/.test(community), '展开邀请码注册时才提示邮箱约束（关键时刻）')
-  assert(/serverChanged/.test(community) && /地址已改/.test(community), '地址真的改了才提示"需要重新登录"（业务发生时）')
+  dictHas('community.hint.noDiscoverable', '暂无可发现的研究工作', 'No discoverable research work', '空结果提示')
+  dictHas('community.hint.inviteRule', '邮箱必须与邀请码签发时指定的邮箱一致', 'must match', '邀请码的邮箱约束')
+  dictHas('community.badge.addressChanged', '地址已改', 'Address changed', '地址真的改了才提示')
   // 花钱的那一刻要给出回执（用户会问"扣了没、扣了几次"）
-  assert(/chargeNotice/.test(community) && /已读取简报，消耗/.test(community), '读完简报当场显示扣费回执')
-  assert(/refreshBalance\(\)/.test(community) && /Promise<number \| null>/.test(community), '刷新余额返回新余额（回执照它组）')
-  // Token 余额：登录后要显示"我还剩多少"（点了可刷新）；花 Token 后自动刷新
-  assert(
-    /state\?\.tokens \?/.test(community) && /state\.tokens\.available\} Token/.test(community),
-    '登录后显示 Token 余额',
-  )
-  assert(/refreshBalance/.test(community) && /account\/tokens/.test(community), '余额可单独刷新（走 account/tokens）')
-  assert(
-    /void refreshBalance\(\)/.test(community),
-    '读完简报（花掉 Token）后自动刷新余额',
-  )
-  assert(/冻结/.test(community), '有冻结余额时也说明（押金仍是用户的钱）')
+  dictHas('community.notice.charged', '已读取简报，消耗 {tokens} Token（余额 {balance}）', 'Token charged', '扣费回执')
+  assert(/chargeNotice/.test(community) && /refreshBalance\(\)/.test(community), '扣费回执 + 读简报后刷新余额')
+  // Token 余额：登录后要显示"我还剩多少"（点了可刷新）
+  assert(/state\?\.tokens \?/.test(community) && /community\.tip\.balance/.test(community), '登录后显示 Token 余额并可刷新')
+  assert(/account\/tokens/.test(community), '余额刷新走 account/tokens')
+  dictHas('community.balance.frozenNote', '冻结', 'frozen', '有冻结余额时也说明（押金仍是用户的钱）')
 
   // ── Tab 3：系统设置 —— OpenAlex 凭据 + 本地依赖检查 ──
   assert(bundleText.includes('OpenAlex'), '提到 OpenAlex')
   const retrieval = src.slice(src.indexOf('function SystemTab('))
   assert(/type="password"/.test(retrieval), 'Key 输入框 type=password')
   assert(/autoComplete="off"/.test(retrieval), 'Key 输入框关闭自动填充')
-  // 文案纪律：申请入口只在**未配置**（需要动作）时出现，不再常驻
-  assert(/!configured \?/.test(retrieval) && /openalex.org/.test(retrieval), '未配置时才给申请入口')
+  // 文案纪律：申请入口只在**未配置**（需要动作）时出现，不再常驻一段说明
   assert(
-    /密钥仅保存在本机，不会回传浏览器/.test(retrieval),
-    '凭据纪律写在输入框悬浮提示（不占版面）',
+    /!configured \?/.test(retrieval) && /system\.retrieval\.notConfigured/.test(retrieval),
+    '未配置时才给申请入口',
   )
-  // 常驻说明必须已删除
+  assert(/system\.retrieval\.secretHint/.test(retrieval), '凭据纪律写在输入框悬浮提示（不占版面）')
+  dictHas('system\.retrieval\.secretHint'.replace(/\\/g, ''), '密钥仅保存在本机', 'never returned to the browser', '凭据纪律文案')
+  // 旧的常驻说明必须已从源码与字典里删除
   for (const gone of ['文献检索使用 OpenAlex', '未配置时仍可通过公共池检索，但速率较低']) {
-    assert(!retrieval.includes(gone), `系统设置不再常驻这段说明：${gone}`)
+    assert(!retrieval.includes(gone) && !zhDict.includes(gone), `系统设置不再常驻这段说明：${gone}`)
   }
 
   // ── Tab 3：本地依赖（tectonic）—— 用户可能没装，必须给出检查与安装说明 ──
@@ -399,7 +389,7 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   assert(bundleText.includes('CONVFUSION_TECTONIC'), '给出环境变量覆盖入口（非标准位置）')
   assert(bundleText.includes('重新检查'), '有「重新检查」按钮')
   assert(/dependencies\/check/.test(src), '「重新检查」走 dependencies/check 端点')
-  assert(/已安装/.test(src) && /未安装/.test(src), '展示已安装/未安装状态徽章')
+  assert(bundleText.includes('已安装') && bundleText.includes('未安装'), '展示已安装/未安装状态徽章')
   // 已安装是常态：此时卡片必须压成一行，安装说明不得无谓地占据高度
   const depCard = src.slice(src.indexOf('function SystemTab('))
   const guardIdx = depCard.indexOf('dep && !dep.available')
@@ -460,7 +450,7 @@ console.log('\n[1f] OpenAlex Key 的存储与暴露面')
   assertEq(typeof dep.available, 'boolean', 'tectonic 可用性是布尔（不假设本机装没装）')
   assertEq(dep.name, 'tectonic', '依赖名正确')
   assertEq(dep.envVar, 'CONVFUSION_TECTONIC', '给出覆盖用环境变量名')
-  assert(dep.purpose.length > 0, 'tectonic 带用途说明（界面直接展示，用户才知道为什么要装）')
+  assertEq(dep.purposeCode, 'latex-pdf-compile', 'tectonic 返回稳定用途码（文案由客户端翻译）')
   if (dep.available) assert(typeof dep.path === 'string' && dep.path.length > 0, '可用时给出可执行文件路径')
 
   // 探测结果可注入 → 可离线断言"未安装"分支的形状
@@ -474,7 +464,7 @@ console.log('\n[1f] OpenAlex Key 的存储与暴露面')
         available: false,
         viaEnv: false,
         envVar: 'CONVFUSION_TECTONIC',
-        purpose: 'compile LaTeX to PDF',
+        purposeCode: 'latex-pdf-compile',
       },
     }),
   )
@@ -523,9 +513,10 @@ console.log('\n[1g] 宿主陈旧检测')
 
   // 界面必须把这件事说出来
   const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+  const zh = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
   assert(/staleHost/.test(src), '界面有陈旧宿主提示')
-  assert(/宿主侧仍在运行旧代码/.test(src), '提示文案说明"仍在运行旧代码"')
-  assert(/刷新页面不会生效/.test(src), '明确说明刷新无效、需重启 DSH')
+  assert(/宿主侧仍在运行旧代码/.test(zh), '提示文案说明"仍在运行旧代码"')
+  assert(/刷新页面不会生效/.test(zh), '明确说明刷新无效、需重启 DSH')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -789,9 +780,13 @@ console.log('\n[6] 客户端 bundle 格式与注册点')
   assertEq(pkg.exports['./client'].default, './lib/client.js', 'exports["./client"] 指向 bundle')
   assert(existsSync(join(PKG, 'lib', 'client', 'index.d.ts')), '客户端类型声明已生成')
 
-  // 数据面走同源 fetch，因此客户端只需要渲染用的两个硬依赖
+  // 数据面走同源 fetch；渲染再依赖 DSH 原生 locale。
   const clientSrc = readFileSync(join(PKG, 'src', 'client', 'index.tsx'), 'utf8')
-  assert(/export const inject = \['slots', 'settingsScope'\]/.test(clientSrc), '客户端 inject = slots + settingsScope')
+  assert(
+    /export const inject = \['slots', 'settingsScope', 'locale'\]/.test(clientSrc),
+    '客户端 inject = slots + settingsScope + locale',
+  )
+  assert(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'), 'package 注入 DSH 原生 locale 包')
   assert(!/export const inject = \[[^\]]*connection/.test(clientSrc), 'connection 不在硬 inject 里（已不再需要）')
 }
 

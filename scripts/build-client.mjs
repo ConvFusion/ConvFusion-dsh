@@ -56,7 +56,11 @@ const bundle = [
   '\t\tvar module = { exports: {} };',
   '\t\tvar exports = module.exports;',
   '\t\tObject.defineProperty(exports, Symbol.toStringTag, { value: "Module" });',
-  '\t\t' + code.trim().replace(/\n/g, '\n\t\t'),
+  code
+    .trim()
+    .split('\n')
+    .map((line) => (line.length > 0 ? `\t\t${line}` : ''))
+    .join('\n'),
   '\t\treturn module.exports;',
   '\t}',
   '});',

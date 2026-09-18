@@ -76,6 +76,7 @@ import type { SkillCustomizationStore } from './research/skill-customization.js'
 import type { Config } from './config.js';
 import { type SecretField } from './config.js';
 import { type FetchLike, type TokenBalance } from './server-client.js';
+import type { ProgressCountRow } from './research/progress.js';
 /**
  * 设置面的 HTTP 路由前缀（客户端必须用同一个）。
  *
@@ -185,17 +186,20 @@ export interface LocalWorkItem {
     researchRoot: string;
     /** 注册表里的目录已消失。 */
     missingDir: boolean;
-    /** 研究阶段（取自 Research State，可能为空）。 */
-    stage: string | null;
+    /**
+     * 研究阶段：稳定 `id` + 宿主给的原始 `label`。
+     *
+     * ⚠️ 展示名**由客户端按 locale 翻译**（上游约定：宿主只给稳定 code/数值），
+     * 客户端用 `translateOr(t, \`progress.stage.${id}\`, label)`，与「研究进展」面板同款。
+     */
+    stage: {
+        id: string;
+        label: string;
+    } | null;
     /** 成熟度均值（0..1），与「研究进展」面板同一个数。 */
     overall: number;
-    /** 可数资产（证据 / 主张 / 计划 / 论文 …），与进展面板同一份口径。 */
-    counts: Array<{
-        key: string;
-        label: string;
-        value: number;
-        note?: string;
-    }>;
+    /** 可数资产（证据 / 主张 / 计划 …）：稳定 key + 计数 + 结构化 detail，与进展面板同一份口径。 */
+    counts: ProgressCountRow[];
     /** 是否已有论文正文。 */
     paper: boolean;
     /** 当前推进判定（clear / ambiguous / blocked / unknown）。 */
@@ -286,8 +290,8 @@ export interface LocalDependencyStatus {
     viaEnv: boolean;
     /** 覆盖用的环境变量名。 */
     envVar: string;
-    /** 用途一句话（设置页直接展示，避免用户不知道为什么要装）。 */
-    purpose: string;
+    /** 稳定用途码；展示文字由浏览器 locale 决定。 */
+    purposeCode: string;
 }
 /** 本机外部依赖的检测结果。 */
 export interface LocalDependencyReport {

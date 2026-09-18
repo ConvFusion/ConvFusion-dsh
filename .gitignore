@@ -25,6 +25,7 @@ package-lock.json
 # 忽略根目录开发文档，保留README和插件技能文档
 /*.md
 !README.md
+!README_EN.md
 
 # 本机环境配置（含机器相关的路径：本地服务器仓库位置、python 解释器）
 # 模板见 convfusion.env.example.json —— 它才是提交进仓库的那份。

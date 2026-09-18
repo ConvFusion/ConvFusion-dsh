@@ -38,6 +38,7 @@
  * 详见 `src/settings-rpc.ts` 文件头与 `scripts/probe-settings-rpc-route.mjs`。
  * 路由带 Harness 的信任/鉴权栅栏，等价于 RPC 渠道的安全级别。
  */
+import { type Translate } from './i18n/index.js';
 /**
  * settings scope 的快照。
  *
@@ -67,6 +68,8 @@ export declare const SETTINGS_ROUTE_PREFIX = "/dsh-convfusion";
 export type SettingsSend = (endpoint: string, payload: unknown, signal?: AbortSignal) => Promise<RpcResult>;
 export interface ConvFusionSettingsProps {
     scope: SettingsScopeLike;
+    /** DSH Slot 标准注入：跟随全局语言并在切换时重渲染。 */
+    t: Translate;
     /** 传输实现（缺省 = 浏览器同源 fetch）。 */
     send?: SettingsSend | undefined;
 }
@@ -176,7 +179,7 @@ interface HostDependency {
     version?: string;
     viaEnv: boolean;
     envVar: string;
-    purpose: string;
+    purposeCode: string;
 }
 /** 能力下优先选已有定制的章节；都没有定制 → 第一个。 */
 export declare function preferredSection(sections: HostSection[] | undefined): string;
@@ -207,6 +210,6 @@ export declare const fetchSettingsSend: SettingsSend;
  */
 export declare function loadSettingsState(send?: SettingsSend, options?: {
     timeoutMs?: number;
-}): Promise<SettingsLoad>;
-export declare function ConvFusionProjectSettings({ scope, send, }: ConvFusionSettingsProps): JSX.Element;
+}, t?: Translate): Promise<SettingsLoad>;
+export declare function ConvFusionProjectSettings({ scope, t, send, }: ConvFusionSettingsProps): JSX.Element;
 export default ConvFusionProjectSettings;

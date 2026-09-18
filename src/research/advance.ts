@@ -43,12 +43,17 @@ export type AdvanceClarity = 'clear' | 'ambiguous' | 'blocked'
 /** 一次推进判定。 */
 export interface AdvanceAssessment {
   clarity: AdvanceClarity
+  /** 稳定展示码；浏览器据此本地化，`basis` 只保留给日志/Agent。 */
+  basisCode: 'blockingQuestion' | 'stalled' | 'draftPlans' | 'processComplete' | 'stagePending'
+  basisParams?: Record<string, string | number>
   /** 判定依据（可核查的一句话）。 */
   basis: string
   /** 建议的下一步（`clarity === 'clear'` 时给出；否则为空）。 */
   nextStep?: string
   /** 需要用户决定的事项（`clear` 时为空）。 */
   needsUserDecision?: string
+  /** 固定提示的稳定码；缺省表示 `needsUserDecision` 是用户原文。 */
+  decisionCode?: 'stalled' | 'draftPlans' | 'processComplete'
 }
 
 /**
@@ -94,6 +99,7 @@ export function assessAdvance(input: AdvanceInput): AdvanceAssessment {
   if (blocking) {
     return {
       clarity: 'blocked',
+      basisCode: 'blockingQuestion',
       basis: '研究问题中存在显式标记的阻塞项',
       needsUserDecision: blocking,
     }
@@ -103,9 +109,12 @@ export function assessAdvance(input: AdvanceInput): AdvanceAssessment {
   if (staleRounds >= staleThreshold) {
     return {
       clarity: 'ambiguous',
+      basisCode: 'stalled',
+      basisParams: { rounds: staleRounds },
       basis: `连续 ${staleRounds} 轮没有形成新的可验证研究资产`,
       needsUserDecision:
         '当前推进方式没有产生资产。请确认：是继续这个方向，还是换一个方向／调整目标？',
+      decisionCode: 'stalled',
     }
   }
 
@@ -119,9 +128,12 @@ export function assessAdvance(input: AdvanceInput): AdvanceAssessment {
     if (decided.length === 0) {
       return {
         clarity: 'ambiguous',
+        basisCode: 'draftPlans',
+        basisParams: { count: drafts.length, plans: drafts.map((p) => p.id).join(', ') },
         basis: `存在 ${drafts.length} 个仍是 draft 的计划（${drafts.map((p) => p.id).join(', ')}）`,
         needsUserDecision:
           '多个计划都还是草稿、没有排序。请确认以哪一个为准，或说明取舍标准。',
+        decisionCode: 'draftPlans',
       }
     }
     // 已有 decided 决策：draft 计划不作为方向歧义证据，继续按过程阶段判定。
@@ -131,8 +143,10 @@ export function assessAdvance(input: AdvanceInput): AdvanceAssessment {
   if (!process.current) {
     return {
       clarity: 'ambiguous',
+      basisCode: 'processComplete',
       basis: '科研过程各阶段均已有落地资产，没有结构性缺口',
       needsUserDecision: '接下来是继续深化、转向写作，还是开新的问题？请指定方向。',
+      decisionCode: 'processComplete',
     }
   }
 
@@ -140,6 +154,8 @@ export function assessAdvance(input: AdvanceInput): AdvanceAssessment {
   const stage = process.current.stage
   return {
     clarity: 'clear',
+    basisCode: 'stagePending',
+    basisParams: { stage: stage.label, evidence: process.current.evidence },
     basis: `当前阶段「${stage.label}」尚未落地（${process.current.evidence}）`,
     nextStep: stage.produces,
   }

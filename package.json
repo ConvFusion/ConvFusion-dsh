@@ -28,6 +28,7 @@
     "build:host": "tsc -p tsconfig.json",
     "build:client": "node scripts/build-client.mjs && tsc -p tsconfig.client.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "verify:i18n": "node scripts/verify-i18n.mjs .",
     "verify:host-deps": "node scripts/verify-host-deps.mjs",
     "verify:settings": "node scripts/verify-settings-page.mjs .",
     "verify:server-login": "node scripts/verify-server-login.mjs .",
@@ -37,6 +38,7 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-commands": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-locale": "^0.1.5-rc.1",
     "@deepseek-ai/dsh-llm": "^0.1.5-rc.1",
     "@deepseek-ai/dsh-system-prompt": "^0.1.5-rc.1",
     "@deepseek-ai/dsh-tools": "^0.1.5-rc.1",
@@ -54,6 +56,7 @@
     "client": {
       "platform": "web",
       "inject": [
+        "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-settings"

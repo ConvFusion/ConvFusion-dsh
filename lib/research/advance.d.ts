@@ -37,12 +37,17 @@ export type AdvanceClarity = 'clear' | 'ambiguous' | 'blocked';
 /** 一次推进判定。 */
 export interface AdvanceAssessment {
     clarity: AdvanceClarity;
+    /** 稳定展示码；浏览器据此本地化，`basis` 只保留给日志/Agent。 */
+    basisCode: 'blockingQuestion' | 'stalled' | 'draftPlans' | 'processComplete' | 'stagePending';
+    basisParams?: Record<string, string | number>;
     /** 判定依据（可核查的一句话）。 */
     basis: string;
     /** 建议的下一步（`clarity === 'clear'` 时给出；否则为空）。 */
     nextStep?: string;
     /** 需要用户决定的事项（`clear` 时为空）。 */
     needsUserDecision?: string;
+    /** 固定提示的稳定码；缺省表示 `needsUserDecision` 是用户原文。 */
+    decisionCode?: 'stalled' | 'draftPlans' | 'processComplete';
 }
 /**
  * 判断研究问题里是否有**显式标记**的阻塞项。

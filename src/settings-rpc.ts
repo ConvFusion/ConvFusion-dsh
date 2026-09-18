@@ -119,6 +119,7 @@ import {
 import { isResearchWorkspace, researchWorkspaceOf } from './research/workspace.js'
 import { latestTurnReport } from './research/progress-bridge.js'
 import { buildWorkspaceProgress, captureProgress } from './research/progress.js'
+import type { ProgressCountRow } from './research/progress.js'
 import { findTectonic, tectonicVersion, TECTONIC_ENV } from './research/latex-compile.js'
 
 /**
@@ -248,12 +249,17 @@ export interface LocalWorkItem {
   researchRoot: string
   /** 注册表里的目录已消失。 */
   missingDir: boolean
-  /** 研究阶段（取自 Research State，可能为空）。 */
-  stage: string | null
+  /**
+   * 研究阶段：稳定 `id` + 宿主给的原始 `label`。
+   *
+   * ⚠️ 展示名**由客户端按 locale 翻译**（上游约定：宿主只给稳定 code/数值），
+   * 客户端用 `translateOr(t, \`progress.stage.${id}\`, label)`，与「研究进展」面板同款。
+   */
+  stage: { id: string; label: string } | null
   /** 成熟度均值（0..1），与「研究进展」面板同一个数。 */
   overall: number
-  /** 可数资产（证据 / 主张 / 计划 / 论文 …），与进展面板同一份口径。 */
-  counts: Array<{ key: string; label: string; value: number; note?: string }>
+  /** 可数资产（证据 / 主张 / 计划 …）：稳定 key + 计数 + 结构化 detail，与进展面板同一份口径。 */
+  counts: ProgressCountRow[]
   /** 是否已有论文正文。 */
   paper: boolean
   /** 当前推进判定（clear / ambiguous / blocked / unknown）。 */
@@ -365,8 +371,8 @@ export interface LocalDependencyStatus {
   viaEnv: boolean
   /** 覆盖用的环境变量名。 */
   envVar: string
-  /** 用途一句话（设置页直接展示，避免用户不知道为什么要装）。 */
-  purpose: string
+  /** 稳定用途码；展示文字由浏览器 locale 决定。 */
+  purposeCode: string
 }
 
 /** 本机外部依赖的检测结果。 */
@@ -390,7 +396,7 @@ export function describeLocalDependencies(env: NodeJS.ProcessEnv = process.env):
       ...(bin ? { version: tectonicVersion(bin) } : {}),
       viaEnv: Boolean(override && bin === override),
       envVar: TECTONIC_ENV,
-      purpose: '把论文的 LaTeX 源码编译成 PDF（研究论文最终交付格式）。',
+      purposeCode: 'latex-pdf-compile',
     },
   }
 }
@@ -723,7 +729,14 @@ export function createSettingsRpcHandler(
           if (!root || !isResearchWorkspace(root)) {
             return {
               ok: true,
-              value: { sessionId, workspace: sessionWorkspace ?? null, research: false, report: null, lastTurn: null },
+              value: {
+                protocol: HOST_PROTOCOL,
+                sessionId,
+                workspace: sessionWorkspace ?? null,
+                research: false,
+                report: null,
+                lastTurn: null,
+              },
             }
           }
           // 过程判定要读**生效**的能力正文（用户可在设置里定制 `research-process`）
@@ -732,6 +745,7 @@ export function createSettingsRpcHandler(
           return {
             ok: true,
             value: {
+              protocol: HOST_PROTOCOL,
               sessionId,
               workspace: root,
               research: true,
@@ -927,24 +941,18 @@ export function createSettingsRpcHandler(
             // 只列**有效**研究项目：目录不在、或没有 project.md / research-state.md 的都跳过
             if (missingDir || !isResearchWorkspace(root)) continue
             // 进度与「研究进展」面板同源同口径；单个工作区读失败不影响其余
-            let stage: string | null = null
+            let stage: LocalWorkItem['stage'] = null
             let overall = 0
-            let counts: LocalWorkItem['counts'] = []
+            let counts: ProgressCountRow[] = []
             let paper = false
             let clarity: LocalWorkItem['clarity'] = 'unknown'
             try {
               const snapshot = captureProgress(root, skillContent)
               const progress = buildWorkspaceProgress(snapshot)
+              // 原样透传上游的结构（阶段对象 / ProgressCountRow），翻译留给客户端
               stage = progress.progress.stage
               overall = progress.overall
-              counts = snapshot.counts
-                ? progress.counts.map((c) => ({
-                    key: c.key,
-                    label: c.label,
-                    value: c.value,
-                    ...(c.note ? { note: c.note } : {}),
-                  }))
-                : []
+              counts = progress.counts
               paper = progress.paper
               clarity = progress.need.clarity
             } catch {
