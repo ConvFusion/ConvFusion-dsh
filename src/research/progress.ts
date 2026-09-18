@@ -342,6 +342,28 @@ export function researchGaps(snapshot: ProgressSnapshot): string[] {
   return out
 }
 
+/** 浏览器展示用的结构化缺口；固定文案由客户端按 code 本地化。 */
+export type ProgressGap =
+  | { code: 'stagePending'; stage: { id: string; label: string } }
+  | { code: 'processComplete' }
+  | { code: 'unsupportedClaims'; count: number }
+  | { code: 'missingArtifacts'; count: number }
+  | { code: 'openQuestions'; count: number }
+
+export function progressGapData(snapshot: ProgressSnapshot): ProgressGap[] {
+  const out: ProgressGap[] = []
+  if (snapshot.stage) out.push({ code: 'stagePending', stage: snapshot.stage })
+  else out.push({ code: 'processComplete' })
+  const unsupported = snapshot.counts.claims - snapshot.counts.claimsSupported
+  if (unsupported > 0) out.push({ code: 'unsupportedClaims', count: unsupported })
+  const noArtifact = snapshot.counts.evidence - snapshot.counts.evidenceWithArtifact
+  if (noArtifact > 0) out.push({ code: 'missingArtifacts', count: noArtifact })
+  if (snapshot.counts.openQuestions > 0) {
+    out.push({ code: 'openQuestions', count: snapshot.counts.openQuestions })
+  }
+  return out
+}
+
 /* ════════════════════════════════════════════════════════════════════════
  * 回合报告（界面用结构化数据）
  * ════════════════════════════════════════════════════════════════════════ */
@@ -365,21 +387,24 @@ export interface TurnProgressReport {
   /** A. 研究现在到了哪里。 */
   progress: {
     dimensions: Array<{ dimension: string; level: MaturityLevel; scale: number }>
-    stage: string | null
+    stage: { id: string; label: string } | null
   }
   /** B. 刚才这轮改变了什么。 */
   changes: {
     changed: boolean
     maturity: Array<{ dimension: string; from: MaturityLevel; to: MaturityLevel }>
-    counts: Array<{ key: string; label: string; from: number; to: number }>
+    counts: Array<{ key: string; from: number; to: number }>
   }
   /** C. 接下来最值得做什么。 */
   need: {
-    gaps: string[]
+    gaps: ProgressGap[]
     clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown'
     basis: string
+    basisCode?: string
+    basisParams?: Record<string, string | number>
     nextStep?: string
     needsUserDecision?: string
+    decisionCode?: string
   }
   /** 本轮是否推进了（供界面决定强调程度）。 */
   moved: boolean
@@ -411,24 +436,26 @@ export function buildTurnReport(
         level: diff.after.maturity[d],
         scale: MATURITY_SCALE[diff.after.maturity[d]],
       })),
-      stage: diff.after.stage?.label ?? null,
+      stage: diff.after.stage,
     },
     changes: {
       changed: moved,
       maturity: diff.maturityChanges.map((m) => ({ dimension: m.dimension, from: m.from, to: m.to })),
       counts: diff.countChanges.map((c) => ({
         key: String(c.key),
-        label: countLabel(String(c.key)),
         from: c.from,
         to: c.to,
       })),
     },
     need: {
-      gaps: researchGaps(diff.after),
+      gaps: progressGapData(diff.after),
       clarity: advance?.clarity ?? 'unknown',
       basis: advance?.basis ?? '',
+      ...(advance?.basisCode ? { basisCode: advance.basisCode } : {}),
+      ...(advance?.basisParams ? { basisParams: advance.basisParams } : {}),
       ...(advance?.nextStep ? { nextStep: advance.nextStep } : {}),
       ...(advance?.needsUserDecision ? { needsUserDecision: advance.needsUserDecision } : {}),
+      ...(advance?.decisionCode ? { decisionCode: advance.decisionCode } : {}),
     },
     moved,
   }
@@ -452,12 +479,10 @@ export function buildTurnReport(
 export interface ProgressCountRow {
   /** 计数键（`ProgressSnapshot['counts']` 的子集）。 */
   key: string
-  /** 显示名。 */
-  label: string
   /** 计数。 */
   value: number
-  /** 附带说明（如"5 已确认"）。 */
-  note?: string
+  /** 附带的结构化计数（如"5 已确认"）。 */
+  detail?: { code: 'settled' | 'supported' | 'ready'; count: number }
 }
 
 /**
@@ -476,7 +501,7 @@ export interface WorkspaceProgress {
   /** A. 研究现在到了哪里。 */
   progress: {
     dimensions: Array<{ dimension: string; level: MaturityLevel; scale: number }>
-    stage: string | null
+    stage: { id: string; label: string } | null
   }
   /** 可数资产（真实计数）。 */
   counts: ProgressCountRow[]
@@ -484,11 +509,14 @@ export interface WorkspaceProgress {
   paper: boolean
   /** C. 当前缺口与推进判定。 */
   need: {
-    gaps: string[]
+    gaps: ProgressGap[]
     clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown'
     basis: string
+    basisCode?: string
+    basisParams?: Record<string, string | number>
     nextStep?: string
     needsUserDecision?: string
+    decisionCode?: string
   }
 }
 
@@ -496,12 +524,12 @@ export interface WorkspaceProgress {
 export function progressCountRows(snapshot: ProgressSnapshot): ProgressCountRow[] {
   const c = snapshot.counts
   return [
-    { key: 'evidence', label: COUNT_LABEL.evidence, value: c.evidence, note: `${c.evidenceSettled} 已确认` },
-    { key: 'claims', label: COUNT_LABEL.claims, value: c.claims, note: `${c.claimsSupported} 有支撑证据` },
-    { key: 'decisions', label: COUNT_LABEL.decisions, value: c.decisions },
-    { key: 'plans', label: COUNT_LABEL.plans, value: c.plans, note: `${c.plansReady} 可执行` },
-    { key: 'openQuestions', label: COUNT_LABEL.openQuestions, value: c.openQuestions },
-    { key: 'outputs', label: COUNT_LABEL.outputs, value: c.outputs },
+    { key: 'evidence', value: c.evidence, detail: { code: 'settled', count: c.evidenceSettled } },
+    { key: 'claims', value: c.claims, detail: { code: 'supported', count: c.claimsSupported } },
+    { key: 'decisions', value: c.decisions },
+    { key: 'plans', value: c.plans, detail: { code: 'ready', count: c.plansReady } },
+    { key: 'openQuestions', value: c.openQuestions },
+    { key: 'outputs', value: c.outputs },
   ]
 }
 
@@ -518,16 +546,19 @@ export function buildWorkspaceProgress(snapshot: ProgressSnapshot, at: Date = ne
         level: snapshot.maturity[d],
         scale: MATURITY_SCALE[snapshot.maturity[d]],
       })),
-      stage: snapshot.stage?.label ?? null,
+      stage: snapshot.stage,
     },
     counts: progressCountRows(snapshot),
     paper: snapshot.counts.paperPresent,
     need: {
-      gaps: researchGaps(snapshot),
+      gaps: progressGapData(snapshot),
       clarity: advance?.clarity ?? 'unknown',
       basis: advance?.basis ?? '',
+      ...(advance?.basisCode ? { basisCode: advance.basisCode } : {}),
+      ...(advance?.basisParams ? { basisParams: advance.basisParams } : {}),
       ...(advance?.nextStep ? { nextStep: advance.nextStep } : {}),
       ...(advance?.needsUserDecision ? { needsUserDecision: advance.needsUserDecision } : {}),
+      ...(advance?.decisionCode ? { decisionCode: advance.decisionCode } : {}),
     },
   }
 }

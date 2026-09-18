@@ -129,6 +129,26 @@ export declare function countLabel(key: string): string;
  * `v2-Progress.md` 的 C 段：Research State 现在暴露了什么需求。
  */
 export declare function researchGaps(snapshot: ProgressSnapshot): string[];
+/** 浏览器展示用的结构化缺口；固定文案由客户端按 code 本地化。 */
+export type ProgressGap = {
+    code: 'stagePending';
+    stage: {
+        id: string;
+        label: string;
+    };
+} | {
+    code: 'processComplete';
+} | {
+    code: 'unsupportedClaims';
+    count: number;
+} | {
+    code: 'missingArtifacts';
+    count: number;
+} | {
+    code: 'openQuestions';
+    count: number;
+};
+export declare function progressGapData(snapshot: ProgressSnapshot): ProgressGap[];
 /**
  * 一轮对话结束后的研究进展报告（`v2-Progress.md` 的三段式）。
  *
@@ -155,7 +175,10 @@ export interface TurnProgressReport {
             level: MaturityLevel;
             scale: number;
         }>;
-        stage: string | null;
+        stage: {
+            id: string;
+            label: string;
+        } | null;
     };
     /** B. 刚才这轮改变了什么。 */
     changes: {
@@ -167,18 +190,20 @@ export interface TurnProgressReport {
         }>;
         counts: Array<{
             key: string;
-            label: string;
             from: number;
             to: number;
         }>;
     };
     /** C. 接下来最值得做什么。 */
     need: {
-        gaps: string[];
+        gaps: ProgressGap[];
         clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown';
         basis: string;
+        basisCode?: string;
+        basisParams?: Record<string, string | number>;
         nextStep?: string;
         needsUserDecision?: string;
+        decisionCode?: string;
     };
     /** 本轮是否推进了（供界面决定强调程度）。 */
     moved: boolean;
@@ -189,12 +214,13 @@ export declare function buildTurnReport(diff: ProgressDiff, turn: number, advanc
 export interface ProgressCountRow {
     /** 计数键（`ProgressSnapshot['counts']` 的子集）。 */
     key: string;
-    /** 显示名。 */
-    label: string;
     /** 计数。 */
     value: number;
-    /** 附带说明（如"5 已确认"）。 */
-    note?: string;
+    /** 附带的结构化计数（如"5 已确认"）。 */
+    detail?: {
+        code: 'settled' | 'supported' | 'ready';
+        count: number;
+    };
 }
 /**
  * 当前工作区的研究进展（**不是**"本轮变化"）。
@@ -216,7 +242,10 @@ export interface WorkspaceProgress {
             level: MaturityLevel;
             scale: number;
         }>;
-        stage: string | null;
+        stage: {
+            id: string;
+            label: string;
+        } | null;
     };
     /** 可数资产（真实计数）。 */
     counts: ProgressCountRow[];
@@ -224,11 +253,14 @@ export interface WorkspaceProgress {
     paper: boolean;
     /** C. 当前缺口与推进判定。 */
     need: {
-        gaps: string[];
+        gaps: ProgressGap[];
         clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown';
         basis: string;
+        basisCode?: string;
+        basisParams?: Record<string, string | number>;
         nextStep?: string;
         needsUserDecision?: string;
+        decisionCode?: string;
     };
 }
 /** 可数资产 → 面板行（顺序固定，便于两次点开之间对照）。 */

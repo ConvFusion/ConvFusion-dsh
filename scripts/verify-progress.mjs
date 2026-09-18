@@ -28,6 +28,7 @@ const BRIDGE = await import(lib('research/progress-bridge.js'))
 const ADV = await import(lib('research/advance.js'))
 const LIB = await import(lib('research/library.js'))
 const RPC = await import(lib('settings-rpc.js'))
+const PROTO = await import(lib('protocol.js'))
 const PROGRESS_PLUGIN_NAME = 'convfusion'
 const CUST = await import(lib('research/skill-customization.js'))
 const CTX = await import(lib('research/context.js'))
@@ -289,8 +290,11 @@ console.log('\n[5b] 工作区进度：任何时刻可重算、且不伪造精度
   assert(Math.abs(ws.overall - mean) < 1e-9, '整体进度 = 各维度折算的均值（可复算，不是另算一个数）')
   assert(ws.counts.length >= 5, `面板列出 ${ws.counts.length} 项可数资产`)
   assert(ws.counts.every((r) => Number.isInteger(r.value) && r.value >= 0), '资产计数是真实整数，不是估算')
+  assert(ws.counts.every((r) => !('label' in r) && !('note' in r)), '面板资产只传稳定 key/数值，不传宿主中文文案')
   assert(typeof ws.paper === 'boolean', '论文正文以"有/无"陈述，不给百分比')
   assert(Array.isArray(ws.need.gaps), '面板带当前缺口')
+  assert(ws.need.gaps.every((g) => typeof g.code === 'string'), '当前缺口使用稳定 code')
+  assert(typeof ws.need.basisCode === 'string', '推进依据使用稳定 code')
   assert(['clear', 'ambiguous', 'blocked', 'unknown'].includes(ws.need.clarity), '面板带推进判定三态')
 
   // 只有研究问题、没有任何成熟度评估的工作区：维度必须是 Unknown 且折算为 0
@@ -345,6 +349,8 @@ console.log('\n[7] 进展桥（回合报告 → 界面卡片 + waterfall 必须�
   assertEq(typeof report.summary, 'string', '报告带一行摘要')
   assertEq(report.progress.dimensions.length, 6, '报告含 6 个成熟度维度（供界面画条）')
   assert(Array.isArray(report.need.gaps), '报告含"当前缺口"列表')
+  assert(report.need.gaps.every((g) => typeof g.code === 'string'), '回合报告缺口使用稳定 code')
+  assert(report.changes.counts.every((c) => !('label' in c)), '回合报告计数变化不携带宿主中文标签')
   BRIDGE.rememberTurnReport('s-report', report)
   assertEq(BRIDGE.latestTurnReport('s-report')?.turn, 3, '按会话读回最近报告')
   assertEq(BRIDGE.latestTurnReport('s-unknown'), undefined, '没有报告的会话返回 undefined')
@@ -425,6 +431,7 @@ console.log('\n[7b] progress/workspace：按会话自己的工作区判定')
   const research = await handler('progress/workspace', { sessionId: 's-rpc-research' })
   assertEq(research.ok, true, '研究工作区：端点返回 ok')
   assertEq(research.value.research, true, '研究工作区：research=true（按钮显示）')
+  assertEq(research.value.protocol, PROTO.HOST_PROTOCOL, '进展端点带回协议号')
   assertEq(research.value.workspace, wsResearch, '研究工作区：返回的是研究根目录')
   assertEq(research.value.report?.progress.dimensions.length, 6, '面板数据含 6 个成熟度维度')
   assert(Array.isArray(research.value.report?.counts), '面板数据含可数资产')
@@ -490,6 +497,7 @@ console.log('\n[8] 推进判定与自动继续闸门')
   const wsClear = mk()
   const aClear = ADV.assessAdvance({ workspace: wsClear })
   assertEq(aClear.clarity, 'clear', '无阻塞/无歧义/未停滞 → clear')
+  assertEq(aClear.basisCode, 'stagePending', 'clear 判定带稳定 basisCode')
   assert(typeof aClear.nextStep === 'string' && aClear.nextStep.length > 0, 'clear 时给出下一步')
   assertEq(aClear.needsUserDecision, undefined, 'clear 时不要求用户决定')
   assertEq(ADV.shouldAutoContinue(aClear, ADV.DEFAULT_AUTO_CONTINUE, 0).go, true, 'clear 且预算未用 → 自动继续')
@@ -505,6 +513,7 @@ console.log('\n[8] 推进判定与自动继续闸门')
   const wsBlocked = mk({ questions: ['- [blocking] 用哪种评测协议才公平？'] })
   const aBlocked = ADV.assessAdvance({ workspace: wsBlocked })
   assertEq(aBlocked.clarity, 'blocked', '显式标记 [blocking] → blocked')
+  assertEq(aBlocked.basisCode, 'blockingQuestion', 'blocked 判定带稳定 basisCode')
   assert(aBlocked.needsUserDecision?.includes('[blocking]'), '把待决问题原文交给用户')
   assertEq(ADV.shouldAutoContinue(aBlocked, ADV.DEFAULT_AUTO_CONTINUE, 0).go, false, 'blocked 时绝不自动继续')
   // 中文写法同样识别
@@ -518,6 +527,7 @@ console.log('\n[8] 推进判定与自动继续闸门')
   const wsStale = mk()
   const aStale = ADV.assessAdvance({ workspace: wsStale, staleRounds: ADV.DEFAULT_STALE_THRESHOLD })
   assertEq(aStale.clarity, 'ambiguous', `连续 ${ADV.DEFAULT_STALE_THRESHOLD} 轮无资产 → ambiguous`)
+  assertEq(aStale.decisionCode, 'stalled', '停滞提示带稳定 decisionCode')
   assert(/没有形成新的可验证研究资产/.test(aStale.basis), '停滞依据可核查')
   assertEq(ADV.shouldAutoContinue(aStale, ADV.DEFAULT_AUTO_CONTINUE, 0).go, false, '停滞时停止自动推进')
   rmSync(wsStale, { recursive: true, force: true })
@@ -526,6 +536,7 @@ console.log('\n[8] 推进判定与自动继续闸门')
   const wsDrafts = mk({ plans: ['alpha', 'beta'] })
   const aDrafts = ADV.assessAdvance({ workspace: wsDrafts })
   assertEq(aDrafts.clarity, 'ambiguous', '两个 draft 计划并存 → ambiguous')
+  assertEq(aDrafts.decisionCode, 'draftPlans', '多计划提示带稳定 decisionCode')
   assert(/draft/.test(aDrafts.basis), '指出是草稿未定')
   rmSync(wsDrafts, { recursive: true, force: true })
 
@@ -641,13 +652,32 @@ console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会�
   if (mod) {
     assertEq(typeof mod.ResearchProgressButton, 'function', 'bundle 导出 ResearchProgressButton')
     // 判定：只有宿主明确回答 research=true 才显示按钮
-    assertEq(mod.readProgressValue({ ok: true, value: { research: true } }).kind, 'shown', '研究工作区 → 显示按钮')
-    assertEq(mod.readProgressValue({ ok: true, value: { research: false } }).kind, 'hidden', '非研究工作区 → 不显示')
+    assertEq(
+      mod.readProgressValue({ ok: true, value: { protocol: PROTO.HOST_PROTOCOL, research: true } }).kind,
+      'shown',
+      '研究工作区 → 显示按钮',
+    )
+    assertEq(
+      mod.readProgressValue({ ok: true, value: { protocol: PROTO.HOST_PROTOCOL, research: false } }).kind,
+      'hidden',
+      '非研究工作区 → 不显示',
+    )
+    assertEq(
+      mod.readProgressValue({ ok: true, value: { protocol: PROTO.HOST_PROTOCOL - 1, research: true } }).kind,
+      'hidden',
+      '旧宿主协议 → 隐藏按钮（不让新客户端按旧形状渲染崩溃）',
+    )
     assertEq(mod.readProgressValue({ ok: false }).kind, 'hidden', '宿主出错 → 不显示（不猜）')
     assertEq(mod.readProgressValue(undefined).kind, 'hidden', '宿主没回答 → 不显示（不猜）')
     const shown = mod.readProgressValue({
       ok: true,
-      value: { research: true, workspace: '/a/b/workspace', report: { progress: { dimensions: [] } }, lastTurn: null },
+      value: {
+        protocol: PROTO.HOST_PROTOCOL,
+        research: true,
+        workspace: '/a/b/workspace',
+        report: { progress: { dimensions: [] } },
+        lastTurn: null,
+      },
     })
     assertEq(shown.workspace, '/a/b/workspace', '面板带工作区路径（用户能确认看的是哪个项目）')
     assertEq(mod.shortenPath('/a/b/c/workspace'), 'c/workspace', '路径只保留末两段')

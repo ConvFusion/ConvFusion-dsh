@@ -159,8 +159,8 @@ export interface LocalDependencyStatus {
     viaEnv: boolean;
     /** 覆盖用的环境变量名。 */
     envVar: string;
-    /** 用途一句话（设置页直接展示，避免用户不知道为什么要装）。 */
-    purpose: string;
+    /** 稳定用途码；展示文字由浏览器 locale 决定。 */
+    purposeCode: string;
 }
 /** 本机外部依赖的检测结果。 */
 export interface LocalDependencyReport {

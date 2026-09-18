@@ -41,6 +41,13 @@
 
 import React from 'react'
 import { ConvFusionMark } from './icon.js'
+import {
+  categoryText,
+  sectionText,
+  skillText,
+  translateEnglish,
+  type Translate,
+} from './i18n/index.js'
 
 /* ════════════════════════════════════════════════════════════════════════
  * 跨插件服务的结构化契约（镜像，不 import）
@@ -69,6 +76,16 @@ interface RpcResult {
   error?: { code?: string; message?: string }
 }
 
+function rpcErrorDetail(t: Translate, error: RpcResult['error']): string {
+  if (!error) return t('settings.error.unknown')
+  if (error.code) {
+    const key = `settings.error.code.${error.code}`
+    const localized = t(key)
+    if (localized !== key) return localized
+  }
+  return error.message ?? t('settings.error.unknown')
+}
+
 /** 设置面的 HTTP 路由前缀（与宿主 `settings-rpc.ts` 的常量一致）。 */
 export const SETTINGS_ROUTE_PREFIX = '/dsh-convfusion'
 
@@ -81,6 +98,8 @@ export type SettingsSend = (
 
 export interface ConvFusionSettingsProps {
   scope: SettingsScopeLike
+  /** DSH Slot 标准注入：跟随全局语言并在切换时重渲染。 */
+  t: Translate
   /** 传输实现（缺省 = 浏览器同源 fetch）。 */
   send?: SettingsSend | undefined
 }
@@ -144,7 +163,7 @@ interface HostDependency {
   version?: string
   viaEnv: boolean
   envVar: string
-  purpose: string
+  purposeCode: string
 }
 
 /** 设置页的三个 Tab。 */
@@ -223,9 +242,10 @@ export const fetchSettingsSend: SettingsSend = async (endpoint, payload, signal)
 export async function loadSettingsState(
   send: SettingsSend = fetchSettingsSend,
   options: { timeoutMs?: number } = {},
+  t: Translate = translateEnglish,
 ): Promise<SettingsLoad> {
   if (typeof send !== 'function') {
-    return { kind: 'error', message: '设置页缺少传输实现。' }
+    return { kind: 'error', message: t('settings.error.missingTransport') }
   }
   const timeoutMs = options.timeoutMs ?? SETTINGS_LOAD_TIMEOUT_MS
   const ac = new AbortController()
@@ -244,13 +264,18 @@ export async function loadSettingsState(
   try {
     const res = await Promise.race([send('state', {}, ac.signal), timeout])
     if (!res || res.ok !== true) {
-      return { kind: 'error', message: `设置服务返回失败：${res?.error?.message ?? '未知原因'}` }
+      return {
+        kind: 'error',
+        message: t('settings.error.service', {
+          detail: rpcErrorDetail(t, res?.error),
+        }),
+      }
     }
     const value = res.value as HostState | undefined
     if (!value || !Array.isArray(value.categories)) {
       return {
         kind: 'error',
-        message: '设置服务返回的数据不完整，请重启 DSH 后重试。',
+        message: t('settings.error.incomplete'),
       }
     }
     return { kind: 'ok', state: value }
@@ -258,10 +283,14 @@ export async function loadSettingsState(
     return {
       kind: 'error',
       message: timedOut
-        ? `请求超时（${Math.round(timeoutMs / 1000)} 秒无响应）。` +
-          `若反复出现，请查看 DSH 宿主日志中与 ${SETTINGS_ROUTE_PREFIX} 相关的记录。`
-        : `无法连接设置服务：${e instanceof Error ? e.message : String(e)}\n` +
-          `（路由 ${SETTINGS_ROUTE_PREFIX}/state。DSH 宿主日志会记录该路由的注册结果。）`,
+        ? t('settings.error.timeout', {
+            seconds: Math.round(timeoutMs / 1000),
+            route: SETTINGS_ROUTE_PREFIX,
+          })
+        : t('settings.error.connection', {
+            detail: e instanceof Error ? e.message : String(e),
+            route: `${SETTINGS_ROUTE_PREFIX}/state`,
+          }),
     }
   } finally {
     if (timer !== undefined) clearTimeout(timer)
@@ -512,6 +541,7 @@ function TabButton({
 
 export function ConvFusionProjectSettings({
   scope,
+  t,
   send = fetchSettingsSend,
 }: ConvFusionSettingsProps): JSX.Element {
   const [state, setState] = React.useState<HostState | null>(null)
@@ -552,7 +582,7 @@ export function ConvFusionProjectSettings({
     async (endpoint: string, payload: unknown): Promise<HostState | null> => {
       try {
         if (endpoint === 'state') {
-          const outcome = await loadSettingsState(send)
+          const outcome = await loadSettingsState(send, {}, t)
           if (outcome.kind === 'error') {
             setError(outcome.message)
             return null
@@ -566,7 +596,11 @@ export function ConvFusionProjectSettings({
         }
         const res = await send(endpoint, payload)
         if (!res || res.ok !== true) {
-          setError(`设置服务返回失败：${res?.error?.message ?? '未知原因'}`)
+          setError(
+            t('settings.error.service', {
+              detail: rpcErrorDetail(t, res?.error),
+            }),
+          )
           return null
         }
         setError(null)
@@ -574,11 +608,16 @@ export function ConvFusionProjectSettings({
         setState(next)
         return next
       } catch (e) {
-        setError(`调用 ${endpoint} 失败：${e instanceof Error ? e.message : String(e)}`)
+        setError(
+          t('settings.error.call', {
+            endpoint,
+            detail: e instanceof Error ? e.message : String(e),
+          }),
+        )
         return null
       }
     },
-    [send],
+    [send, t],
   )
 
   /** 首次加载（含"重新读取"）：无论成功失败都必须结束 loading。 */
@@ -674,28 +713,34 @@ export function ConvFusionProjectSettings({
       text: draft,
     })
     setSaving(false)
-    if (next) setNotice({ tone: 'success', text: draft.trim() ? '已保存' : '已恢复系统原文' })
+    if (next) {
+      setNotice({
+        tone: 'success',
+        text: draft.trim() ? t('settings.editor.saved') : t('settings.editor.restoredDefault'),
+      })
+    }
   }
 
   const reset = async (): Promise<void> => {
     if (!skill || !point) return
-    if (!window.confirm(`恢复「${point.section}」的系统原文？你的定制会被删除。`)) return
+    if (!window.confirm(t('settings.editor.confirmSection', { section: sectionText(t, point.section) }))) return
     setSaving(true)
     const next = await call('customization/reset', { skillId: skill.skillId, section: point.section })
     setSaving(false)
     if (next) {
       setDraft('')
-      setNotice({ tone: 'success', text: '已恢复系统原文' })
+      setNotice({ tone: 'success', text: t('settings.editor.restoredDefault') })
     }
   }
 
   const resetSkill = async (): Promise<void> => {
     if (!skill) return
-    if (!window.confirm(`恢复「${skill.skillName}」的全部章节？该能力的定制会被删除。`)) return
+    const displaySkill = skillText(t, skill.skillId, skill.skillName)
+    if (!window.confirm(t('settings.editor.confirmSkill', { skill: displaySkill }))) return
     setSaving(true)
     const next = await call('customization/resetSkill', { skillId: skill.skillId })
     setSaving(false)
-    if (next) setNotice({ tone: 'success', text: `已恢复「${skill.skillName}」` })
+    if (next) setNotice({ tone: 'success', text: t('settings.editor.restoredSkill', { skill: displaySkill }) })
   }
 
   const totalOverridden = state ? state.categories.reduce((n, c) => n + c.overriddenCount, 0) : 0
@@ -710,31 +755,31 @@ export function ConvFusionProjectSettings({
         </div>
         <div style={{ flex: '1 1 auto', minWidth: 0 }}>
           <div style={S.heroTitle}>ConvFusion</div>
-          <div style={S.heroSub}>定制各项能力，形成你自己的研究方法</div>
+          <div style={S.heroSub}>{t('settings.hero.subtitle')}</div>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           {totalOverridden > 0 ? (
-            <Badge tone="brand">已定制 {totalOverridden} 项</Badge>
+            <Badge tone="brand">{t('settings.badge.customized', { count: totalOverridden })}</Badge>
           ) : (
-            <Badge tone="neutral">全部使用系统原文</Badge>
+            <Badge tone="neutral">{t('settings.badge.systemDefaults')}</Badge>
           )}
-          {scopeSnap.status === 'unavailable' ? <Badge tone="warn">设置只读</Badge> : null}
+          {scopeSnap.status === 'unavailable' ? <Badge tone="warn">{t('settings.badge.readOnly')}</Badge> : null}
         </div>
       </div>
 
       {/* ── Tabs ─────────────────────────────────────────────────── */}
       <div style={S.tabs}>
         <TabButton active={tab === 'local'} onClick={() => setTab('local')}>
-          ⚙ 本地研究方法
+          ⚙ {t('settings.tab.local')}
         </TabButton>
         <TabButton active={tab === 'community'} onClick={() => setTab('community')}>
-          ◈ 研究方法库
-          <span style={{ ...S.hint, marginLeft: 6 }}>即将开放</span>
+          ◈ {t('settings.tab.community')}
+          <span style={{ ...S.hint, marginLeft: 6 }}>{t('settings.status.comingSoon')}</span>
         </TabButton>
         <TabButton active={tab === 'retrieval'} onClick={() => setTab('retrieval')}>
-          ⚙ 系统设置
+          ⚙ {t('settings.tab.system')}
           {state && (!state.retrieval.configured || state.dependencies?.tectonic.available === false) ? (
-            <span style={{ ...S.hint, marginLeft: 6 }}>待配置</span>
+            <span style={{ ...S.hint, marginLeft: 6 }}>{t('settings.status.needsConfiguration')}</span>
           ) : null}
         </TabButton>
       </div>
@@ -742,15 +787,15 @@ export function ConvFusionProjectSettings({
       {staleHost ? (
         <div style={S.card}>
           <div style={S.cardHead}>
-            宿主侧需要重启
+            {t('settings.stale.title')}
             <span style={{ flex: '1 1 auto' }} />
-            <Badge tone="warn">需重启</Badge>
+            <Badge tone="warn">{t('settings.stale.badge')}</Badge>
           </div>
           <div style={S.cardBody}>
             <div style={{ ...S.hint, lineHeight: 1.7 }}>
-              宿主侧仍在运行旧代码，下面的内容可能不是最新的。
+              {t('settings.stale.body')}
               <br />
-              刷新页面不会生效（宿主模块在 DSH 启动时载入内存）。请重启 DSH 后再打开本页。
+              {t('settings.stale.action')}
             </div>
           </div>
         </div>
@@ -759,9 +804,9 @@ export function ConvFusionProjectSettings({
       {error ? (
         <div style={S.card}>
           <div style={S.cardHead}>
-            加载失败
+            {t('settings.error.title')}
             <span style={{ flex: '1 1 auto' }} />
-            <Badge tone="error">错误</Badge>
+            <Badge tone="error">{t('settings.error.badge')}</Badge>
           </div>
           <div style={S.cardBody}>
             <div
@@ -776,7 +821,7 @@ export function ConvFusionProjectSettings({
             </div>
             <div style={S.footer}>
               <button type="button" style={S.ghostBtn} onClick={() => void reload()}>
-                重试
+                {t('settings.action.retry')}
               </button>
             </div>
           </div>
@@ -786,13 +831,13 @@ export function ConvFusionProjectSettings({
       {loading && !state ? (
         <div style={S.card}>
           <div style={S.cardBody}>
-            <div style={S.hint}>正在加载…</div>
+            <div style={S.hint}>{t('settings.status.loading')}</div>
           </div>
         </div>
       ) : null}
 
       {/* ── Tab 2：研究方法库（社区，**尚未开放**）──────────────────── */}
-      {tab === 'community' ? <CommunityTab /> : null}
+      {tab === 'community' ? <CommunityTab t={t} /> : null}
 
       {/* ── Tab 3：系统设置（OpenAlex 凭据 + 本地依赖检查）──────────── */}
       {tab === 'retrieval' ? (
@@ -804,6 +849,7 @@ export function ConvFusionProjectSettings({
           onRecheck={recheckDependencies}
           scope={scope}
           onNotice={setNotice}
+          t={t}
         />
       ) : null}
 
@@ -812,53 +858,61 @@ export function ConvFusionProjectSettings({
           {/* ── 选择区（能力类别 → 能力 → 章节）──────────────────── */}
           <div style={S.card}>
             <div style={S.cardHead}>
-              能力库
+              {t('settings.library.title')}
               <span style={{ flex: '1 1 auto' }} />
               <span style={{ ...S.hint, fontWeight: 400 }}>
-                共 {totalPoints} 项 · 已定制 {totalOverridden}
+                {t('settings.library.summary', { total: totalPoints, customized: totalOverridden })}
               </span>
             </div>
             <div style={S.cardBody}>
               <div style={S.row}>
                 <div style={S.field}>
-                  <div style={S.label}>① 能力类别</div>
+                  <div style={S.label}>{t('settings.library.category')}</div>
                   <select style={S.select} value={categoryId} onChange={(e) => onCategory(e.target.value)}>
                     {state.categories.map((c) => (
                       <option key={c.categoryId} value={c.categoryId}>
                         {c.code ? `${c.code} ` : ''}
-                        {c.label ?? c.categoryName}（{c.skills.length}）
-                        {c.overriddenCount > 0 ? ` · 已定制 ${c.overriddenCount}` : ''}
+                        {categoryText(t, c.categoryId, c.categoryName)} ({c.skills.length})
+                        {c.overriddenCount > 0
+                          ? t('settings.library.customizedSuffix', { count: c.overriddenCount })
+                          : ''}
                       </option>
                     ))}
                   </select>
                   <div style={S.hint}>
-                    {category ? `${category.skills.length} 项能力 · 类别按研究过程排序` : '该类别下暂无可定制能力'}
+                    {category
+                      ? t('settings.library.categoryHint', { count: category.skills.length })
+                      : t('settings.library.emptyCategory')}
                   </div>
                 </div>
                 <div style={S.field}>
-                  <div style={S.label}>② 能力</div>
+                  <div style={S.label}>{t('settings.library.skill')}</div>
                   <select style={S.select} value={skillId} onChange={(e) => onSkill(e.target.value)}>
                     {category?.skills.map((s) => (
                       <option key={s.skillId} value={s.skillId}>
                         {s.code ? `${s.code} · ` : ''}
-                        {s.label ?? s.skillName}
-                        {s.overriddenCount > 0 ? ` · 已定制 ${s.overriddenCount}` : ''}
+                        {skillText(t, s.skillId, s.skillName)}
+                        {s.overriddenCount > 0
+                          ? t('settings.library.customizedSuffix', { count: s.overriddenCount })
+                          : ''}
                       </option>
                     ))}
                   </select>
-                  <div style={S.hint}>{skill ? `${skill.sections.length} 个章节` : ''}</div>
+                  <div style={S.hint}>
+                    {skill ? t('settings.library.sectionCount', { count: skill.sections.length }) : ''}
+                  </div>
                 </div>
                 <div style={S.field}>
-                  <div style={S.label}>③ 可定制章节</div>
+                  <div style={S.label}>{t('settings.library.section')}</div>
                   <select style={S.select} value={section} onChange={(e) => onSection(e.target.value)}>
                     {skill?.sections.map((s) => (
                       <option key={s.section} value={s.section}>
-                        {s.section}
-                        {s.overridden ? ' · 已定制' : ''}
+                        {sectionText(t, s.section)}
+                        {s.overridden ? t('settings.library.sectionCustomizedSuffix') : ''}
                       </option>
                     ))}
                   </select>
-                  <div style={S.hint}>留空则使用系统原文</div>
+                  <div style={S.hint}>{t('settings.library.emptyUsesDefault')}</div>
                 </div>
               </div>
             </div>
@@ -870,26 +924,33 @@ export function ConvFusionProjectSettings({
               <div style={S.cardHead}>
                 <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {skill.code ? `${skill.code} · ` : ''}
-                  {skill.label ?? skill.skillName} · {point.section}
+                  {skillText(t, skill.skillId, skill.skillName)} · {sectionText(t, point.section)}
                 </span>
                 <span style={{ flex: '1 1 auto' }} />
-                {point.overridden ? <Badge tone="brand">已定制</Badge> : <Badge tone="neutral">系统原文</Badge>}
+                {point.overridden ? (
+                  <Badge tone="brand">{t('settings.editor.customized')}</Badge>
+                ) : (
+                  <Badge tone="neutral">{t('settings.editor.systemDefault')}</Badge>
+                )}
               </div>
               <div style={S.cardBody}>
                 <div style={S.hint}>
                   {category?.code ? `${category.code} ` : ''}
-                  {category?.label ?? category?.categoryName} · {skill.label ?? skill.skillName} · {point.section}
+                  {category ? categoryText(t, category.categoryId, category.categoryName) : ''} ·{' '}
+                  {skillText(t, skill.skillId, skill.skillName)} · {sectionText(t, point.section)}
                 </div>
-                <div style={S.label}>你的额外要求</div>
+                <div style={S.label}>{t('settings.editor.requirements')}</div>
                 <textarea
                   style={S.textarea}
                   spellCheck={false}
                   value={draft}
-                  placeholder={'留空则使用系统原文。\n例如：评估研究想法时，优先考虑能否用现有设备完成表征。'}
+                  placeholder={t('settings.editor.placeholder')}
                   onChange={(e) => setDraft(e.target.value)}
                 />
                 <details>
-                  <summary style={{ ...S.label, cursor: 'pointer' }}>系统原文（{point.base.length} 字）</summary>
+                  <summary style={{ ...S.label, cursor: 'pointer' }}>
+                    {t('settings.editor.base', { count: point.base.length })}
+                  </summary>
                   <div style={{ ...S.base, marginTop: 8 }}>{point.base}</div>
                 </details>
                 <div style={S.footer}>
@@ -907,7 +968,9 @@ export function ConvFusionProjectSettings({
                       {notice.text}
                     </span>
                   ) : (
-                    <span style={{ ...S.hint, marginRight: 'auto' }}>{draft.length} 字</span>
+                    <span style={{ ...S.hint, marginRight: 'auto' }}>
+                      {t('settings.editor.characterCount', { count: draft.length })}
+                    </span>
                   )}
                   <button
                     type="button"
@@ -915,7 +978,7 @@ export function ConvFusionProjectSettings({
                     disabled={!point.overridden || saving}
                     onClick={() => void reset()}
                   >
-                    恢复该章节
+                    {t('settings.editor.resetSection')}
                   </button>
                   <button
                     type="button"
@@ -923,7 +986,7 @@ export function ConvFusionProjectSettings({
                     disabled={skill.overriddenCount === 0 || saving}
                     onClick={() => void resetSkill()}
                   >
-                    恢复该能力
+                    {t('settings.editor.resetSkill')}
                   </button>
                   <button
                     type="button"
@@ -931,7 +994,7 @@ export function ConvFusionProjectSettings({
                     disabled={!dirty || saving}
                     onClick={() => void save()}
                   >
-                    {saving ? '保存中…' : '保存'}
+                    {saving ? t('settings.editor.saving') : t('settings.editor.save')}
                   </button>
                 </div>
               </div>
@@ -950,15 +1013,36 @@ export function ConvFusionProjectSettings({
  * 服务未开通时明确标注演示数据，不用假成功欺骗用户）。服务端接通后整块替换。
  */
 const COMMUNITY_DEMO_METHODS: ReadonlyArray<{
-  name: string
-  discipline: string
+  nameKey: string
+  disciplineKey: string
   count: number
-  author: string
+  authorKey?: string
+  author?: string
 }> = [
-  { name: '实验验证导向', discipline: '材料科学', count: 47, author: 'convfusion 官方' },
-  { name: '理论建构导向', discipline: '社会科学', count: 39, author: 'ss_theory' },
-  { name: '应用与可复现导向', discipline: '机器学习', count: 47, author: 'convfusion 官方' },
-  { name: '临床相关性导向', discipline: '生物医学', count: 41, author: 'bm_researcher' },
+  {
+    nameKey: 'community.demo.experimental.name',
+    disciplineKey: 'community.demo.experimental.discipline',
+    count: 47,
+    authorKey: 'community.demo.officialAuthor',
+  },
+  {
+    nameKey: 'community.demo.theory.name',
+    disciplineKey: 'community.demo.theory.discipline',
+    count: 39,
+    author: 'ss_theory',
+  },
+  {
+    nameKey: 'community.demo.reproducible.name',
+    disciplineKey: 'community.demo.reproducible.discipline',
+    count: 47,
+    authorKey: 'community.demo.officialAuthor',
+  },
+  {
+    nameKey: 'community.demo.clinical.name',
+    disciplineKey: 'community.demo.clinical.discipline',
+    count: 41,
+    author: 'bm_researcher',
+  },
 ]
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -971,70 +1055,70 @@ const COMMUNITY_DEMO_METHODS: ReadonlyArray<{
  * 不发任何网络请求。服务接通后，整块替换为真实数据即可。
  * ════════════════════════════════════════════════════════════════════════ */
 
-function CommunityTab(): JSX.Element {
+function CommunityTab({ t }: { t: Translate }): JSX.Element {
   return (
     <>
       <div style={S.card}>
         <div style={S.cardHead}>
-          研究方法库
+          {t('community.title')}
           <span style={{ flex: '1 1 auto' }} />
-          <Badge tone="warn">尚未开放</Badge>
+          <Badge tone="warn">{t('community.unavailable')}</Badge>
         </div>
         <div style={S.cardBody}>
-          <div style={S.hint}>
-            汇集其他研究者分享的研究方法，可直接套用，也可在此基础上继续定制。
-          </div>
+          <div style={S.hint}>{t('community.intro')}</div>
           <div style={S.row}>
             <div style={S.field}>
-              <div style={S.label}>社区开放方法</div>
-              <div style={S.hint}>免费，登录后可浏览与套用</div>
+              <div style={S.label}>{t('community.open.title')}</div>
+              <div style={S.hint}>{t('community.open.description')}</div>
             </div>
             <div style={S.field}>
-              <div style={S.label}>作者分享的方法库</div>
-              <div style={S.hint}>由作者提供，可含付费内容。本期不实现</div>
+              <div style={S.label}>{t('community.author.title')}</div>
+              <div style={S.hint}>{t('community.author.description')}</div>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={S.label}>开放方法</div>
+            <div style={S.label}>{t('community.methods')}</div>
             <span style={{ flex: '1 1 auto' }} />
             {/* 服务未开通：列表内容必须带上"演示数据"，不能让它看起来像真的 */}
-            <Badge tone="neutral">演示数据</Badge>
+            <Badge tone="neutral">{t('community.demo')}</Badge>
           </div>
           <div style={S.list}>
             {COMMUNITY_DEMO_METHODS.map((m, i) => (
               <div
-                key={m.name}
+                key={m.nameKey}
                 style={i === 0 ? S.listRow : { ...S.listRow, borderTop: '1px solid var(--dsw-alias-border-l1)' }}
               >
                 <div style={{ minWidth: 0, flex: '1 1 auto' }}>
-                  <div style={S.listTitle}>{m.name}</div>
+                  <div style={S.listTitle}>{t(m.nameKey)}</div>
                   <div style={S.hint}>
-                    {m.discipline} · {m.count} 项能力 · {m.author}
+                    {t('community.itemMeta', {
+                      discipline: t(m.disciplineKey),
+                      count: m.count,
+                      author: m.authorKey ? t(m.authorKey) : m.author,
+                    })}
                   </div>
                 </div>
                 <button type="button" style={{ ...S.ghostBtn, opacity: 0.55 }} disabled>
-                  套用
+                  {t('community.apply')}
                 </button>
               </div>
             ))}
           </div>
-          <div style={S.hint}>以上为界面演示，服务尚未开通，暂不可套用。</div>
+          <div style={S.hint}>{t('community.demoFootnote')}</div>
         </div>
       </div>
 
       <div style={S.card}>
         <div style={S.cardBody}>
           <div style={{ ...S.label, color: 'var(--dsw-alias-label-primary)' }}>
-            登录 ConvFusion.com 可获得更多研究方法
+            {t('community.signInTitle')}
           </div>
-          <div style={S.hint}>
-            登录后还可将你在「本地研究方法」里定制好的研究方法发布给其他研究者。
-          </div>
+          <div style={S.hint}>{t('community.signInDescription')}</div>
           <div style={S.footer}>
             <button type="button" style={{ ...S.primaryBtn, opacity: 0.55 }} disabled>
-              登录 ConvFusion.com
+              {t('community.signIn')}
             </button>
-            <span style={S.hint}>服务尚未开通</span>
+            <span style={S.hint}>{t('community.serviceUnavailable')}</span>
           </div>
         </div>
       </div>
@@ -1061,6 +1145,7 @@ function SystemTab({
   onRecheck,
   scope,
   onNotice,
+  t,
 }: {
   configured: boolean
   source: 'settings' | 'env' | 'none'
@@ -1069,6 +1154,7 @@ function SystemTab({
   onRecheck: () => Promise<HostDependency | null>
   scope: SettingsScopeLike
   onNotice: (n: { tone: 'success' | 'error'; text: string } | null) => void
+  t: Translate
 }): JSX.Element {
   const [draft, setDraft] = React.useState('')
   const [busy, setBusy] = React.useState(false)
@@ -1085,9 +1171,12 @@ function SystemTab({
     try {
       await scope.set('openalexApiKey', draft.trim())
       setDraft('') // 明文不留在界面状态里
-      onNotice({ tone: 'success', text: '已保存 OpenAlex API Key' })
+      onNotice({ tone: 'success', text: t('system.retrieval.saved') })
     } catch (e) {
-      onNotice({ tone: 'error', text: `保存失败：${e instanceof Error ? e.message : String(e)}` })
+      onNotice({
+        tone: 'error',
+        text: t('system.retrieval.saveFailed', { detail: e instanceof Error ? e.message : String(e) }),
+      })
     } finally {
       setBusy(false)
     }
@@ -1098,9 +1187,12 @@ function SystemTab({
     try {
       await scope.unset('openalexApiKey')
       setDraft('')
-      onNotice({ tone: 'success', text: '已清除 OpenAlex API Key' })
+      onNotice({ tone: 'success', text: t('system.retrieval.cleared') })
     } catch (e) {
-      onNotice({ tone: 'error', text: `清除失败：${e instanceof Error ? e.message : String(e)}` })
+      onNotice({
+        tone: 'error',
+        text: t('system.retrieval.clearFailed', { detail: e instanceof Error ? e.message : String(e) }),
+      })
     } finally {
       setBusy(false)
     }
@@ -1112,9 +1204,12 @@ function SystemTab({
       const next = await onRecheck()
       setDep(next)
       if (next?.available) {
-        onNotice({ tone: 'success', text: `tectonic 可用${next.version ? `：${next.version}` : ''}` })
+        onNotice({
+          tone: 'success',
+          text: t('system.dependency.available', { version: next.version ? `: ${next.version}` : '' }),
+        })
       } else {
-        onNotice({ tone: 'error', text: '未找到 tectonic，请按下方说明安装后重新检查' })
+        onNotice({ tone: 'error', text: t('system.dependency.missing') })
       }
     } finally {
       setChecking(false)
@@ -1126,14 +1221,14 @@ function SystemTab({
       {/* ── 本地依赖：tectonic ─────────────────────────────────────── */}
       <div style={S.card}>
         <div style={S.cardHead}>
-          🧩 本地依赖
+          🧩 {t('system.dependency.title')}
           <span style={{ flex: '1 1 auto' }} />
           {dep === null ? (
-            <Badge tone="neutral">未知</Badge>
+            <Badge tone="neutral">{t('system.status.unknown')}</Badge>
           ) : dep.available ? (
-            <Badge tone="success">已安装</Badge>
+            <Badge tone="success">{t('system.status.installed')}</Badge>
           ) : (
-            <Badge tone="warn">未安装</Badge>
+            <Badge tone="warn">{t('system.status.notInstalled')}</Badge>
           )}
         </div>
         <div style={S.cardBody}>
@@ -1142,7 +1237,9 @@ function SystemTab({
             <span style={S.mono}>tectonic</span>
             {dep?.version ? <span style={S.hint}>{dep.version}</span> : null}
             {dep?.path ? <span style={{ ...S.hint, opacity: 0.7 }}>{dep.path}</span> : null}
-            {dep?.viaEnv ? <span style={S.hint}>（由 {dep.envVar} 指定）</span> : null}
+            {dep?.viaEnv ? (
+              <span style={S.hint}>{t('system.dependency.viaEnv', { envVar: dep.envVar })}</span>
+            ) : null}
             <span style={{ flex: '1 1 auto' }} />
             <button
               type="button"
@@ -1150,14 +1247,14 @@ function SystemTab({
               disabled={checking}
               onClick={() => void recheck()}
             >
-              {checking ? '检查中…' : '重新检查'}
+              {checking ? t('system.dependency.checking') : t('system.dependency.recheck')}
             </button>
           </div>
 
           {/* 未安装才展开：这时那些字才是用户真正需要的 */}
           {dep && !dep.available ? (
             <div style={{ ...S.hint, lineHeight: 2, marginTop: 8 }}>
-              论文编译成 PDF 需要本机的 <span style={S.mono}>tectonic</span>（不是 npm 依赖）。安装任一即可：
+              {t('system.dependency.installIntro')}
               <br />
               <span style={S.mono}>brew install tectonic</span>
               <br />
@@ -1165,8 +1262,7 @@ function SystemTab({
               <br />
               <span style={S.mono}>cargo install tectonic</span>
               <br />
-              装在别处就设 <span style={S.mono}>{dep.envVar || 'CONVFUSION_TECTONIC'}</span>{' '}
-              指向它，再点「重新检查」。首次编译会下载宏包（约 40 MB），之后复用。
+              {t('system.dependency.installOutro', { envVar: dep.envVar || 'CONVFUSION_TECTONIC' })}
             </div>
           ) : null}
         </div>
@@ -1175,15 +1271,16 @@ function SystemTab({
       {/* ── 文献检索凭据：OpenAlex ─────────────────────────────────── */}
       <div style={S.card}>
         <div style={S.cardHead}>
-          ⌕ 文献检索
+          ⌕ {t('system.retrieval.title')}
           <span style={{ flex: '1 1 auto' }} />
-          {configured ? <Badge tone="success">已配置</Badge> : <Badge tone="warn">未配置</Badge>}
+          {configured ? (
+            <Badge tone="success">{t('system.status.configured')}</Badge>
+          ) : (
+            <Badge tone="warn">{t('system.status.notConfigured')}</Badge>
+          )}
         </div>
         <div style={S.cardBody}>
-          <div style={S.hint}>
-            文献检索使用 OpenAlex。请前往 <span style={S.mono}>openalex.org</span> 免费注册并复制 API Key。
-            未配置时仍可通过公共池检索，但速率较低。
-          </div>
+          <div style={S.hint}>{t('system.retrieval.description')}</div>
 
           <div style={S.field}>
             <div style={S.label}>OpenAlex API Key</div>
@@ -1193,12 +1290,16 @@ function SystemTab({
               autoComplete="off"
               spellCheck={false}
               value={draft}
-              placeholder={configured ? '已设置，输入新值可覆盖' : '粘贴 API Key'}
+              placeholder={
+                configured
+                  ? t('system.retrieval.placeholderReplace')
+                  : t('system.retrieval.placeholderPaste')
+              }
               onChange={(e) => setDraft(e.target.value)}
             />
             <div style={S.hint}>
-              留空则不修改。密钥仅保存在本机，不会发送到浏览器。
-              {source === 'env' ? ` 当前使用环境变量 ${envVar}。` : ''}
+              {t('system.retrieval.secretHint')}
+              {source === 'env' ? t('system.retrieval.envHint', { envVar }) : ''}
             </div>
           </div>
 
@@ -1210,7 +1311,7 @@ function SystemTab({
                 disabled={busy}
                 onClick={() => void clear()}
               >
-                清除
+                {t('system.retrieval.clear')}
               </button>
             ) : null}
             <button
@@ -1219,7 +1320,7 @@ function SystemTab({
               disabled={!draft.trim() || busy}
               onClick={() => void save()}
             >
-              {busy ? '保存中…' : '保存'}
+              {busy ? t('settings.editor.saving') : t('settings.editor.save')}
             </button>
           </div>
         </div>
