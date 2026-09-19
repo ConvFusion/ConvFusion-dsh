@@ -182,6 +182,18 @@ if (probe.status !== 0) {
   skip(`dev.python（${PYTHON}）缺少 fastapi/uvicorn/sqlalchemy/alembic`)
 }
 
+/* 直接打服务器原始 API 的助手（live.6 / live.7 共用）。 */
+async function api(path, init = {}) {
+  const res = await fetch(`${BASE}/api/v1${path}`, {
+    ...init,
+    headers: {
+      ...(init.body ? { 'content-type': 'application/json' } : {}),
+      ...(init.headers ?? {}),
+    },
+  })
+  return { status: res.status, body: await res.json().catch(() => undefined) }
+}
+
 /* 一个指向**真实隔离实例**的 host 面夹具（用于研究工作那一节）。 */
 function makeHostFor(apiKey) {
   let config = CFG.resolveConfig({
@@ -212,6 +224,11 @@ const env = {
   LOG_LEVEL: 'WARNING',
   SECRET_KEY: 'live-verify-secret',
   WEB_DIST_DIR: join(TMP, 'no-such-dist'), // 不要落地页，只要 API
+  // ⚠️ 附件字节的落盘位置也要在临时目录里。
+  // 默认值 `data/storage` 相对**服务器仓库**，而本进程可能跑在受限沙箱里
+  // （DSH 的文件沙箱只允许写会话工作区）—— 那样上传会在服务端 500
+  // （PermissionError: data/storage/projects/...）。隔离实例必须自带可写目录。
+  STORAGE_ROOT: join(TMP, 'storage'),
 }
 
 let server = null
@@ -409,7 +426,10 @@ console.log('\n[live.5] 本插件 account/* 端点 × 真实服务器')
     assertEq(register.value.account.email, INVITEE_EMAIL, '注册后的账号邮箱正确')
     assertEq(register.value.account.displayName, 'Live Researcher', '注册后的显示名正确')
     assertEq(register.value.account.roles.includes('RESEARCHER'), true, '新账号拿到 RESEARCHER 角色')
-    assertEq(register.value.tokens?.available, 0, '新账号余额 0（来自服务器的 /tokens）')
+    assert(
+      typeof register.value.tokens?.available === 'number',
+      `新账号余额来自服务器（${register.value.tokens?.available}；服务器现在有注册赠币 SIGNUP_TOKEN_GRANT）`,
+    )
     assert(!JSON.stringify(register.value).includes('cf_live_'), '注册响应里没有任何 Key 明文')
   }
   researcherKey = config.convfusionApiKey
@@ -486,16 +506,6 @@ console.log('\n[live.5] 本插件 account/* 端点 × 真实服务器')
  * ─────────────────────────────────────────────────────────────────────── */
 console.log('\n[live.6] 研究工作：发布 → 发现 → 摘要 → 简报（含 402 → 充值 → 同 Key 重试）')
 {
-  const api = async (path, init = {}) => {
-    const res = await fetch(`${BASE}/api/v1${path}`, {
-      ...init,
-      headers: {
-        ...(init.body ? { 'content-type': 'application/json' } : {}),
-        ...(init.headers ?? {}),
-      },
-    })
-    return { status: res.status, body: await res.json().catch(() => undefined) }
-  }
 
   // ⑥-1 研究者（上一步注册的账号）建项目并发布
   const created = await api('/projects', {
@@ -527,12 +537,51 @@ console.log('\n[live.6] 研究工作：发布 → 发现 → 摘要 → 简报�
   })
   assertEq(uploaded.status, 201, '上传研究状态成功（201）')
 
-  const published = await api(`/projects/${projectId}/publish`, {
+  // ⚠️ 发布**要花 Token**（服务器对每个项目收一次，按已付费项目数阶梯计价）。
+  // 研究者账号刚注册、余额 0 → 不充值必然 402。这也是界面**必须先显示成本**的原因。
+  const researcherUid = (
+    await api('/auth/me', { headers: { authorization: `Bearer ${researcherKey}` } })
+  ).body?.id
+  // ⚠️ 发布**要花 Token**（每项目收一次，按已付费项目数阶梯）。服务器现在给新账号
+  // 注册赠币（`SIGNUP_TOKEN_GRANT`），所以"余额 0 → 402"不是必然路径 —— 两种情况都要能走。
+  const balanceBefore = (
+    await api('/tokens', { headers: { authorization: `Bearer ${researcherKey}` } })
+  ).body?.available_balance
+  const publishIntent = `publish-${projectId}-v1`
+  let first = await api(`/projects/${projectId}/publish`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${researcherKey}`, 'idempotency-key': publishIntent },
+  })
+  if (balanceBefore === 0) {
+    assertEq(first.status, 402, '余额为 0 时发布会 402（不是免费）')
+    assertEq(first.body?.error?.code, 'INSUFFICIENT_TOKENS', '402 的错误码是 INSUFFICIENT_TOKENS')
+    const topUp = await api(`/admin/users/${researcherUid}/tokens/grant`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${adminKey}` },
+      body: JSON.stringify({ amount: 20, reason: 'live verify publish cost' }),
+    })
+    assert([200, 201].includes(topUp.status), `充值成功（HTTP ${topUp.status}）`)
+    // 充值后**用同一个幂等键**重试（服务器语义：402 完整回滚，Key 没被消耗）
+    first = await api(`/projects/${projectId}/publish`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${researcherKey}`, 'idempotency-key': publishIntent },
+    })
+  } else {
+    console.log(`  · 研究者余额 ${balanceBefore}（服务器有注册赠币），直接验证扣费语义`)
+  }
+  assertEq(first.status, 200, '发布成功（200）')
+  assertEq(first.body?.visibility, 'PUBLISHED', '可见性变为 PUBLISHED')
+  assert(
+    typeof first.body?.charged_tokens === 'number' && first.body.charged_tokens > 0,
+    `首次发布真实扣费（charged_tokens=${first.body?.charged_tokens}）`,
+  )
+  // 已付费的项目重复发布**免费**（服务器语义），这也是"更新"能随便点的依据
+  const republished = await api(`/projects/${projectId}/publish`, {
     method: 'POST',
     headers: { authorization: `Bearer ${researcherKey}` },
   })
-  assertEq(published.status, 200, '发布成功（200）')
-  assertEq(published.body?.visibility, 'PUBLISHED', '可见性变为 PUBLISHED')
+  assertEq(republished.status, 200, '重复发布仍是 200（幂等）')
+  assertEq(republished.body?.charged_tokens, 0, '重复发布不重复扣费（charged_tokens=0）')
 
   // ⑥-2 管理员（另一个账号）从发现网络看到它 —— 随机发现**排除自己**，所以必须换账号
   const mined = makeHostFor(adminKey)
@@ -610,6 +659,233 @@ console.log('\n[live.6] 研究工作：发布 → 发现 → 摘要 → 简报�
   const hiddenId = hidden.body?.id
   const hiddenSummary = await mined.handler('work/summary', { projectId: hiddenId })
   assertEq(hiddenSummary.error?.code, 'not-found', '未发布的研究工作对他人 → not-found')
+}
+
+/* ── ⑦ 「寻找指导」：把**本机研究项目**发布到真实服务器 ──────────────────
+ *
+ * 这一节走的是产品里真正的那条链路：本机工作区 → 建项目 → 传 Research State
+ * → 发布 → 另一个账号能在发现网络里看到它（并可读摘要与简报）。
+ * 用的是临时工作区（真实 project.md / research-state.md），不碰任何真实研究数据。
+ * ─────────────────────────────────────────────────────────────────────── */
+console.log('\n[live.7] 寻找指导：本机研究 → 发布 → 被另一个账号发现')
+{
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const os = await import('node:os')
+  const PUB = await import(pathToFileURL(join(PKG, 'lib', 'research', 'published-store.js')).href)
+
+  // 造一个真实布局的小研究项目（会真实落盘、被 captureProgress 读取）
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-live-pub-'))
+  const wsDir = path.join(home, 'proj-live')
+  const researchRoot = path.join(wsDir, 'workspace')
+  fs.mkdirSync(path.join(researchRoot, 'research', 'evidence'), { recursive: true })
+  fs.writeFileSync(
+    path.join(researchRoot, 'project.md'),
+    [
+      '---',
+      'type: research-project',
+      'topic: 现场验证：裁剪证据与失败判定',
+      'domain: 多模态, 机器人学习',
+      '---',
+      '',
+      '# Research Project',
+      '',
+      '## Research Questions',
+      '',
+      '- 裁剪证据能否改善失败判定？',
+      '',
+      '## Motivation',
+      '',
+      '数据过滤需要可信的失败判定。',
+      '',
+    ].join('\n'),
+  )
+  fs.writeFileSync(
+    path.join(researchRoot, 'research-state.md'),
+    ['---', 'type: research-state', 'version: 2', 'maturity_problem: Established', '---', '', '# Research State', '', '## Hypotheses', '', 'H1：收益是样本条件性的。', ''].join('\n'),
+  )
+  fs.writeFileSync(
+    path.join(researchRoot, 'research', 'evidence', 'E001.md'),
+    ['---', 'name: 现场验证证据', 'status: supported', '---', '', '# Evidence', ''].join('\n'),
+  )
+
+  const store = PUB.createMemoryPublishedStore()
+  const publisher = RPC.createSettingsRpcHandler({
+    getConfig: () =>
+      CFG.resolveConfig({
+        customizationFile: 'live.json',
+        customizationDir: join(home, 'cf'),
+        serverUrl: BASE,
+        convfusionApiKey: adminKey,
+      }),
+    store: CUST.createMemoryCustomizationStore(),
+    listLocalWorkspaces: async () => ({
+      available: true,
+      items: [{ id: 'ws-live', title: '现场验证项目', path: wsDir, updatedAt: '' }],
+    }),
+    publishedStore: store,
+    fetchImpl: fetch,
+    serverTimeoutMs: 15000,
+  })
+
+  // ① 我的列表里能看到它（未发布）
+  const mine1 = await publisher('work/mine', {})
+  assertEq(mine1.value.items.length, 1, '「我的」能列出这个本机研究项目')
+  assertEq(mine1.value.items[0].published, null, '发布前：没有已发布记录')
+
+  // ② 点「寻找指导」= 发布
+  const pub = await publisher('work/publish', { id: 'ws-live' })
+  if (!pub.ok) console.log('  [diag] work/publish 失败：', JSON.stringify(pub).slice(0, 400))
+  assertEq(pub.ok, true, '发布成功（建项目 → 传状态 → 发布）')
+  const serverProjectId = pub.value?.published?.projectId
+  assert(typeof serverProjectId === 'string' && serverProjectId.length > 0, '拿到服务器 project_id')
+  assertEq(pub.value?.published?.visibility, 'PUBLISHED', '可见性 PUBLISHED')
+  assertEq(pub.value?.published?.created, true, '首次发布 = 新建项目')
+
+  // ②b 附件真的落到服务器了吗？读目录树核对（这是"传了什么"的直接证据）
+  {
+    const tree = await api(`/projects/${serverProjectId}/files/tree`, {
+      headers: { authorization: `Bearer ${adminKey}` },
+    })
+    assertEq(tree.status, 200, '能读到附件目录树')
+    const paths = []
+    const walk = (node) => {
+      for (const f of node.files ?? []) paths.push(f.relative_path)
+      for (const d of node.directories ?? []) walk(d)
+    }
+    walk(tree.body.root)
+    assert(paths.includes('project.md'), `附件里有 project.md（实收：${paths.join(', ') || '空'}）`)
+    assert(paths.includes('research/evidence/E001.md'), '附件保留了 research/ 的目录层次')
+    assert(
+      !paths.some((x) => x.includes('.tectonic-cache')),
+      '机器产物（构建缓存）没有被上传',
+    )
+    assertEq(tree.body.total_files, paths.length, '目录树的 total_files 与遍历一致')
+  }
+
+  // ③ 映射落盘：再点一次不新建项目（同一工作区只对应一个服务器项目）
+  const mine2 = await publisher('work/mine', {})
+  assertEq(mine2.value.items[0].published?.projectId, serverProjectId, '列表带出已发布的 project_id')
+  const again = await publisher('work/publish', { id: 'ws-live' })
+  assertEq(again.value?.published?.created, false, '再点一次复用同一个项目（不是新建）')
+  assertEq(again.value?.published?.projectId, serverProjectId, 'project_id 不变')
+  assertEq(again.value?.published?.version, 2, '第二次发布 → 研究状态 v2')
+
+  // ④ 另一个账号（研究者）在发现网络里能看到它，并能读摘要/简报
+  //    研究者账号是新建的（余额 0），先由管理员充值 —— 否则读简报必然 402
+  const researcherMe = await fetch(`${BASE}/api/v1/auth/me`, {
+    headers: { authorization: `Bearer ${researcherKey}` },
+  }).then((r) => r.json())
+  await fetch(`${BASE}/api/v1/admin/users/${researcherMe.id}/tokens/grant`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${adminKey}` },
+    body: JSON.stringify({ amount: 5, reason: 'live verify publish' }),
+  })
+  const finder = makeHostFor(researcherKey)
+  const list = await finder.handler('work/list', {})
+  const found = (list.value?.items ?? []).find((it) => it.projectId === serverProjectId)
+  assert(Boolean(found), '另一个账号能在发现网络里发现这个刚发布的研究')
+  if (found) {
+    assertEq(found.title, '现场验证项目', '网络里的标题 = 本机工作区标题')
+    assertEq(found.researchQuestion, '裁剪证据能否改善失败判定？', '研究问题来自本机 project.md')
+    assertEq(found.researchFields, ['多模态', '机器人学习'], '研究领域来自本机 project.md')
+  }
+  const sum = await finder.handler('work/summary', { projectId: serverProjectId })
+  assertEq(sum.ok, true, '另一个账号能读摘要（免费）')
+  assertEq(sum.value?.work?.summary, '现场验证：裁剪证据与失败判定', '摘要 = 本机主题句')
+  const brief = await finder.handler('work/brief', { projectId: serverProjectId, intentKey: `live7-${Date.now()}` })
+  assertEq(brief.ok, true, '另一个账号能读简报（花 1 Token）')
+  assertEq(brief.value?.brief?.hypothesis, 'H1：收益是样本条件性的。', '简报里的假设来自本机 research-state.md')
+  assertEq(brief.value?.brief?.motivation, '数据过滤需要可信的失败判定。', '简报里的动机来自本机 project.md')
+
+  // ⑤ 发布后继续更新：上传新状态即可，**不需要重新发布**（已验证可见性仍是 PUBLISHED）
+  const updated = await publisher('work/publish', { id: 'ws-live' })
+  assertEq(updated.value?.published?.version, 3, '第三次发布 → v3')
+  const stillThere = await finder.handler('work/summary', { projectId: serverProjectId })
+  assertEq(stillThere.ok, true, '更新后仍然可见（服务器文档：已发布项目上传状态会自动同步）')
+
+  fs.rmSync(home, { recursive: true, force: true })
+}
+
+console.log('\n[live.8] 「已在网络中」跟着服务器走（取消发布 / 服务器删除项目）')
+{
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const os = await import('node:os')
+  const PUB = await import(pathToFileURL(join(PKG, 'lib', 'research', 'published-store.js')).href)
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-live-sync-'))
+  const wsDir = path.join(home, 'proj-sync')
+  const researchRoot = path.join(wsDir, 'workspace')
+  fs.mkdirSync(researchRoot, { recursive: true })
+  fs.writeFileSync(
+    path.join(researchRoot, 'project.md'),
+    ['---', 'type: research-project', 'topic: 服务器状态核对', '---', '', '# Research Project', '', '## Research Questions', '', '- q', ''].join('\n'),
+  )
+  fs.writeFileSync(
+    path.join(researchRoot, 'research-state.md'),
+    ['---', 'type: research-state', 'version: 1', '---', '', '# Research State', ''].join('\n'),
+  )
+
+  const store = PUB.createMemoryPublishedStore()
+  const publisher = RPC.createSettingsRpcHandler({
+    getConfig: () =>
+      CFG.resolveConfig({
+        customizationFile: 'live.json',
+        customizationDir: join(home, 'cf'),
+        serverUrl: BASE,
+        convfusionApiKey: adminKey,
+      }),
+    store: CUST.createMemoryCustomizationStore(),
+    listLocalWorkspaces: async () => ({
+      available: true,
+      items: [{ id: 'ws-sync', title: '服务器状态核对', path: wsDir, updatedAt: '' }],
+    }),
+    publishedStore: store,
+    fetchImpl: fetch,
+    serverTimeoutMs: 15000,
+  })
+  const recordOf = () => store.all()[fs.realpathSync(researchRoot)]
+
+  // ① 发布 → 刷新「我的」时从服务器核对，并把服务器的可见性回写进本地记录
+  const pub = await publisher('work/publish', { id: 'ws-sync' })
+  if (!pub.ok) console.log('  [diag] work/publish 失败：', JSON.stringify(pub).slice(0, 400))
+  assertEq(pub.ok, true, '发布成功')
+  const projectId = pub.value?.published?.projectId
+  const mine1 = await publisher('work/mine', {})
+  assertEq(mine1.value?.items?.[0]?.published?.projectId, projectId, '服务器说可见 → 显示「已在网络中」')
+  assertEq(recordOf()?.serverVisibility, 'PUBLISHED', '本地记录回写了服务器的可见性')
+  assertEq(recordOf()?.files?.['project.md']?.startsWith('sha256:'), true, '回写不动附件指纹（"我传过什么"仍保留）')
+
+  // ② 服务器侧「取消发布」→ 标记必须消失（本地记录还在，下次发布复用同一项目）
+  const un = await api(`/projects/${projectId}/unpublish`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${adminKey}` },
+  })
+  assert(un.status < 300, `服务器取消发布成功（HTTP ${un.status}）`)
+  const mine2 = await publisher('work/mine', {})
+  assertEq(mine2.value?.items?.[0]?.published, null, '取消发布后不再显示「已在网络中」')
+  assertEq(recordOf()?.serverVisibility, 'PRIVATE', '本地记录被刷新为 PRIVATE')
+  assert(Boolean(recordOf()), '记录保留（项目还在，点发布仍复用同一个）')
+  const repub = await publisher('work/publish', { id: 'ws-sync' })
+  assertEq(repub.value?.published?.created, false, '重新发布复用同一个项目（不是新建）')
+  assertEq(repub.value?.published?.projectId, projectId, 'project_id 不变')
+  assertEq(repub.value?.published?.visibility, 'PUBLISHED', '重新发布后可见性回到 PUBLISHED')
+
+  // ③ 服务器**删除项目**（用户的真实场景）→ 标记消失，本地映射被丢弃，下次发布新建项目
+  const del = await api(`/projects/${projectId}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${adminKey}` },
+  })
+  assert(del.status < 300, `服务器删除项目成功（HTTP ${del.status}）`)
+  const mine3 = await publisher('work/mine', {})
+  assertEq(mine3.value?.items?.[0]?.published, null, '服务器删了项目 → 不再显示「已在网络中」')
+  assertEq(recordOf(), undefined, '死掉的本地映射被删掉（否则会一直撞这个 project_id）')
+  const fresh = await publisher('work/publish', { id: 'ws-sync' })
+  assertEq(fresh.value?.published?.created, true, '再发布 = 新建项目（不是写一个已删除的 id）')
+  assert(fresh.value?.published?.projectId !== projectId, '新的 project_id 与已删除的不同')
+
+  fs.rmSync(home, { recursive: true, force: true })
 }
 
 await shutdown()

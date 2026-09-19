@@ -102,6 +102,7 @@ import {
 } from './config.js'
 import {
   acceptInvitation,
+  createProject,
   fetchAccount,
   fetchWorkBrief,
   fetchTokenBalance,
@@ -109,7 +110,13 @@ import {
   fetchWorkSummary,
   normalizeApiKey,
   normalizeBaseUrl,
+  fetchUsage,
+  fetchProject,
+  publishProject,
+  readStateVersion,
   ServerError,
+  uploadProjectFiles,
+  uploadResearchState,
   type FetchLike,
   type ServerAccount,
   type TokenBalance,
@@ -120,6 +127,18 @@ import { isResearchWorkspace, researchWorkspaceOf } from './research/workspace.j
 import { latestTurnReport } from './research/progress-bridge.js'
 import { buildWorkspaceProgress, captureProgress } from './research/progress.js'
 import type { ProgressCountRow } from './research/progress.js'
+import { buildPublishContent } from './research/publish-content.js'
+import {
+  buildUploadPlan,
+  planUploadBatches,
+  type UploadPlan,
+} from './research/upload-selection.js'
+import {
+  createMemoryPublishedStore,
+  type PublishedRecord,
+  type PublishedStore,
+} from './research/published-store.js'
+import type { WorkspaceProgress } from './research/progress.js'
 import { findTectonic, tectonicVersion, TECTONIC_ENV } from './research/latex-compile.js'
 
 /**
@@ -266,6 +285,22 @@ export interface LocalWorkItem {
   clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown'
   /** 注册表最近一次变更时刻（ISO）。 */
   updatedAt: string
+  /**
+   * 是否**在网络上可见**（`visibility = PUBLISHED`）。
+   *
+   * ⚠️ 判据是**服务器**（`GET /projects/{id}`），不是本地映射：本地记录只说明"我传过"，
+   * 服务器删项目或取消发布时它不会自己更新。核对不通（离线/未登录）时退回本地记录，
+   * 因为"读不到"不等于"服务器上没有"。
+   */
+  published: {
+    projectId: string
+    version: number
+    updatedAt: string
+    /** 记录属于哪台服务器（与当前生效地址不一致时界面要提示）。 */
+    serverUrl: string
+    /** 记录属于哪个账号。 */
+    accountId: string
+  } | null
 }
 
 /** 服务器上的账号（`GET /api/v1/auth/me`）。**不含任何凭据。** */
@@ -522,6 +557,14 @@ export function buildSettingsState(
  * 分发
  * ════════════════════════════════════════════════════════════════════════ */
 
+/** 文件内容指纹（与服务器 `FileMetadata.sha256` 同格式）。 */
+async function fileDigest(absPath: string): Promise<string> {
+  const { createHash } = await import('node:crypto')
+  const { readFile } = await import('node:fs/promises')
+  const buf = await readFile(absPath)
+  return `sha256:${createHash('sha256').update(buf).digest('hex')}`
+}
+
 /** 设置面依赖（由插件入口注入，便于离线测试）。 */
 export interface SettingsRpcDeps {
   /** 当前生效配置（每次调用重新取，文件改名后立即生效）。 */
@@ -556,6 +599,12 @@ export interface SettingsRpcDeps {
   env?: NodeJS.ProcessEnv
   /** 服务器请求超时（测试用小值）。 */
   serverTimeoutMs?: number
+  /**
+   * 「本机研究工作 ↔ 服务器项目」的映射存储。
+   *
+   * 缺省 = 内存表（重启即失，只用于精简环境/测试）——真正的落盘由插件入口注入。
+   */
+  publishedStore?: PublishedStore
   /**
    * 本机**工作区注册表**里的条目（DSH `ctx.workspaceRegistry.list()` 的投影）。
    *
@@ -596,6 +645,8 @@ function asString(v: unknown): string {
  * | `account/logout` | `{}` | 清除凭据（账号信息随之消失） |
  * | `account/tokens` | `{}` | 重新读 Token 余额（登录后显示 / 花完 Token 后刷新） |
  * | `work/mine` | `{}` | **本机**研究工作（有效研究项目的工作区；不联网、不需登录） |
+ * | `work/uploadPlan` | `{ id }` | 发布前的**上传计划**（分类/体积/默认选择）+ 用量与配额 |
+ * | `work/publish` | `{ id, selection?, remember? }` | 发布：建项目 → 传状态 → **传附件** → 发布 |
  * | `work/list` | `{}` | 研究网络里已公开的研究工作（需登录；条数由服务器定） |
  * | `work/summary` | `{ projectId }` | 一项研究工作的摘要（免费） |
  * | `work/brief` | `{ projectId, intentKey }` | 一项研究工作的简报（非 owner 花 1 Token） |
@@ -687,6 +738,195 @@ export function createSettingsRpcHandler(
     const given = typeof raw === 'string' ? raw.trim() : ''
     if (given) return normalizeBaseUrl(given)
     return normalizeBaseUrl(resolveServerUrl(deps.getConfig(), env()).url)
+  }
+
+  /**
+   * 本机研究工作的映射存储。
+   *
+   * 入口会注入**落盘**的实现；没注入时退回内存表（重启即失）——
+   * 这样精简 profile / 测试里插件仍能工作，只是不会记住"已发布"。
+   */
+  const publishedStore: PublishedStore =
+    deps.publishedStore ?? createMemoryPublishedStore()
+
+  /**
+   * 与"上次已上传的指纹"对比，算出**新增/变化**的文件。
+   *
+   * ⚠️ 服务器**不去重**（同路径重复上传 = 新行 + 新字节），所以「更新」只能靠
+   * 本地指纹做增量 —— 否则每点一次「更新」，185 个文件就在服务器上多一份。
+   */
+  const diffAgainstUploaded = async (
+    researchRoot: string,
+    record: PublishedRecord | undefined,
+  ): Promise<{ changed: string[]; unchanged: string[] }> => {
+    const known = record?.files ?? {}
+    const changed: string[] = []
+    const unchanged: string[] = []
+    for (const [relPath, digest] of Object.entries(known)) {
+      const abs = resolve(researchRoot, relPath)
+      if (!existsSync(abs)) continue // 本地已删除：这里不处理（服务器侧删除要显式 DELETE）
+      const now = await fileDigest(abs)
+      if (now === digest) unchanged.push(relPath)
+      else changed.push(relPath)
+    }
+    return { changed, unchanged }
+  }
+
+  /**
+   * 收集本机研究工作（注册表 → 有效研究项目 → 进展快照）。
+   *
+   * `work/mine` 与 `work/publish` 共用：**进度只算一次**（读盘不便宜），
+   * 发布时就地把同一份快照组装成服务器的内容 Envelope。
+   */
+  const collectLocalWorks = async (): Promise<{
+    available: boolean
+    reason?: string
+    items: LocalWorkItem[]
+    sources: Map<string, { root: string; title: string; progress: WorkspaceProgress }>
+  }> => {
+    const listed = deps.listLocalWorkspaces
+      ? await deps.listLocalWorkspaces()
+      : { available: false, reason: '宿主未提供工作区注册表读取接口', items: [] }
+    const skillContent = (id: string): string | undefined => effectiveSkillContentById(id, deps.store)
+    const items: LocalWorkItem[] = []
+    const sources = new Map<string, { root: string; title: string; progress: WorkspaceProgress }>()
+    for (const w of listed.items) {
+      /**
+       * 目录真身 + 是否存在。
+       *
+       * ⚠️ 用 `realpath` 而不是直接用注册表里的字符串：注册表存的是**登记时的路径**，
+       * 它可能是符号链接。Additive 的 `inspectWorkspaceDir` 就是同一语义 ——
+       * 列表显示登记值，**实际读写走真身**。
+       */
+      let canonical = resolve(w.path)
+      let isDir = false
+      try {
+        canonical = realpathSync(w.path)
+        isDir = statSync(canonical).isDirectory()
+      } catch {
+        isDir = false
+      }
+      const missingDir = !isDir
+      const root = researchWorkspaceOf(canonical)
+      // 只列**有效**研究项目：目录不在、或没有 project.md / research-state.md 的都跳过
+      if (missingDir || !isResearchWorkspace(root)) continue
+      let progress: WorkspaceProgress | null = null
+      try {
+        progress = buildWorkspaceProgress(captureProgress(root, skillContent))
+      } catch {
+        /* 读不动就当"未知"，不把这个工作区从列表里抹掉 */
+      }
+      const title = w.title.trim() || basename(canonical)
+      const record = publishedStore.get(root)
+      if (progress) sources.set(w.id, { root, title, progress })
+      items.push({
+        id: w.id,
+        // 缺省标题用**会话工作区**的目录名（`.../proj-b`），不是研究根
+        // —— 研究根永远叫 `workspace`，拿它当标题等于每个项目同名
+        title,
+        // path 保留注册表里的**登记值**；researchRoot 是真身路径上的研究根
+        path: w.path,
+        researchRoot: root,
+        missingDir,
+        stage: progress?.progress.stage ?? null,
+        overall: progress?.overall ?? 0,
+        counts: progress?.counts ?? [],
+        paper: progress?.paper ?? false,
+        clarity: progress?.need.clarity ?? 'unknown',
+        updatedAt: w.updatedAt,
+        published: record
+          ? {
+              projectId: record.projectId,
+              version: record.version,
+              updatedAt: record.updatedAt,
+              serverUrl: record.serverUrl,
+              accountId: record.accountId,
+            }
+          : null,
+      })
+    }
+    return {
+      available: listed.available,
+      ...(listed.reason ? { reason: listed.reason } : {}),
+      items,
+      sources,
+    }
+  }
+
+  /**
+   * 让「已在网络中」这个标记**以服务器为准**（本地记录只能说明"我传过"）。
+   *
+   * 服务器删了项目、或把项目取消发布，本地文件不会自己知道 —— 于是界面会一直挂着
+   * 一个已经不存在的项目，点「更新」还会去写一个死掉的 `project_id`。所以列
+   * 【研究工作 · 我的】时核一次（每个已记录的工作区一次 `GET /projects/{id}`）：
+   *
+   * | 服务器回答 | 显示标记 | 本地记录 |
+   * |---|---|---|
+   * | `visibility = PUBLISHED` | 是 | 回写 `serverVisibility` + `checkedAt` |
+   * | 其它 visibility（如 `PRIVATE`） | 否 | 回写（下次发布仍复用同一项目） |
+   * | `404`（项目已删） | 否 | **删掉**（否则永远撞死 id） |
+   * | 查不通（离线/未登录/超时） | 按本地记录 | 不动 —— "读不到"不等于"服务器上没有" |
+   */
+  const verifyPublished = async (
+    items: LocalWorkItem[],
+    apiKey: string | null,
+    base: string,
+  ): Promise<LocalWorkItem[]> => {
+    if (!apiKey) return items
+    const targets = items.filter((it) => it.published && it.published.serverUrl === base)
+    if (targets.length === 0) return items
+    const checkedAt = new Date().toISOString()
+    const checks = await Promise.all(
+      targets.map(async (it) => {
+        try {
+          const project = await fetchProject(base, apiKey, it.published!.projectId, netOptions())
+          return { id: it.id, root: it.researchRoot, visibility: project.visibility, gone: false }
+        } catch (e) {
+          // 只有"服务器明确说不存在"才算消失；网络/超时/其它错误一律不下结论
+          return {
+            id: it.id,
+            root: it.researchRoot,
+            visibility: null,
+            gone: e instanceof ServerError && e.code === 'not-found',
+          }
+        }
+      }),
+    )
+    const byId = new Map(checks.map((c) => [c.id, c]))
+    // 服务器说什么就写回什么（`serverVisibility` / `checkedAt`）—— 本地记录里的
+    // "我传过什么"（files / selection / version）在核对时不改
+    for (const c of checks) {
+      if (c.visibility === null && !c.gone) continue
+      const record = publishedStore.get(c.root)
+      if (!record) continue
+      if (c.gone) publishedStore.remove(c.root)
+      else publishedStore.set(c.root, { ...record, serverVisibility: c.visibility!, checkedAt })
+    }
+    return items.map((it) => {
+      const c = byId.get(it.id)
+      if (!c) return it
+      if (c.gone) return { ...it, published: null }
+      if (c.visibility && c.visibility !== 'PUBLISHED') return { ...it, published: null }
+      return it
+    })
+  }
+
+  /**
+   * 服务器的工作列表（【可指导】）也是**服务器**的状态；顺带把本地记录对齐。
+   *
+   * 列表里出现的项目必然是"在网络上可见"的，所以若它的 `project_id` 正好是本机
+   * 一条发布记录（自己的工作也出现在列表里），就把那条记录刷新为 `PUBLISHED`。
+   * 列表是抽样、不是全集，所以**只在命中时更新，绝不由"没出现"推断删除**。
+   */
+  const syncRecordsFromWorkList = (items: WorkItem[]): void => {
+    if (items.length === 0) return
+    const ids = new Set(items.map((it) => it.projectId))
+    const checkedAt = new Date().toISOString()
+    for (const [root, record] of Object.entries(publishedStore.all())) {
+      if (!ids.has(record.projectId)) continue
+      if (record.serverVisibility === 'PUBLISHED' && record.checkedAt) continue
+      publishedStore.set(root, { ...record, serverVisibility: 'PUBLISHED', checkedAt })
+    }
   }
 
   return async (endpoint: string, payload: unknown): Promise<SettingsRpcResult> => {
@@ -903,78 +1143,24 @@ export function createSettingsRpcHandler(
          * ⚠️ 这一条**不联网、不需要登录**：本机有哪几个研究项目是本地事实。
          * 服务器上"我发布了什么"是另一回事（需要先有上传 / 发布流程）。
          */
+        /* ── 研究工作 · 我的（**本机**）───────────────────────────────────
+         *
+         * 数据源是 DSH 的工作区注册表（`ctx.workspaceRegistry`），过滤条件是
+         * "该工作区里存在有效的 research workspace"（`project.md` 或
+         * `research/research-state.md`，见 `isResearchWorkspace`）。
+         *
+         * ⚠️ 这一条**不联网、不需要登录**：本机有哪几个研究项目是本地事实。
+         * 服务器上"我发布了什么"是另一回事（见 `work/publish`）。
+         */
         case 'work/mine': {
-          /**
-           * ⚠️ 三种"空列表"必须能区分（踩过：都显示成"本机还没有研究项目"）：
-           *
-           * ```text
-           * registry.available=false  → 这台 DSH 没提供工作区注册表（读不到，不是没有）
-           * registry.available=true   且 items 为空 → 真的没有研究项目
-           * 端点本身不存在（旧宿主）    → ok:false / unknown-endpoint，界面提示需重启
-           * ```
-           */
-          const listed = deps.listLocalWorkspaces
-            ? await deps.listLocalWorkspaces()
-            : { available: false, reason: '宿主未提供工作区注册表读取接口', items: [] }
-          const skillContent = (id: string): string | undefined =>
-            effectiveSkillContentById(id, deps.store)
-          const items: LocalWorkItem[] = []
-          for (const w of listed.items) {
-            /**
-             * 目录真身 + 是否存在。
-             *
-             * ⚠️ 用 `realpath` 而不是直接用注册表里的字符串：注册表存的是**登记时的路径**，
-             * 它可能是符号链接。Additive 的 `inspectWorkspaceDir`（instructions-store.ts）
-             * 就是这个语义 —— 列表显示登记值，**实际读写走真身**。我们读研究数据也走真身，
-             * 否则符号链接下的 `workspace/` 会找不到。
-             */
-            let canonical = resolve(w.path)
-            let isDir = false
-            try {
-              canonical = realpathSync(w.path)
-              isDir = statSync(canonical).isDirectory()
-            } catch {
-              isDir = false
-            }
-            const missingDir = !isDir
-            const root = researchWorkspaceOf(canonical)
-            // 只列**有效**研究项目：目录不在、或没有 project.md / research-state.md 的都跳过
-            if (missingDir || !isResearchWorkspace(root)) continue
-            // 进度与「研究进展」面板同源同口径；单个工作区读失败不影响其余
-            let stage: LocalWorkItem['stage'] = null
-            let overall = 0
-            let counts: ProgressCountRow[] = []
-            let paper = false
-            let clarity: LocalWorkItem['clarity'] = 'unknown'
-            try {
-              const snapshot = captureProgress(root, skillContent)
-              const progress = buildWorkspaceProgress(snapshot)
-              // 原样透传上游的结构（阶段对象 / ProgressCountRow），翻译留给客户端
-              stage = progress.progress.stage
-              overall = progress.overall
-              counts = progress.counts
-              paper = progress.paper
-              clarity = progress.need.clarity
-            } catch {
-              /* 读不动就当"未知"，不把这个工作区从列表里抹掉 */
-            }
-            items.push({
-              id: w.id,
-              // 缺省标题用**会话工作区**的目录名（`.../proj-b`），不是研究根
-              // —— 研究根永远叫 `workspace`，拿它当标题等于每个项目同名
-              title: w.title.trim() || basename(canonical),
-              // path 保留注册表里的**登记值**；researchRoot 是真身路径上的研究根
-              path: w.path,
-              researchRoot: root,
-              missingDir,
-              stage,
-              overall,
-              counts,
-              paper,
-              clarity,
-              updatedAt: w.updatedAt,
-            })
-          }
+          const listed = await collectLocalWorks()
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          const items = await verifyPublished(
+            listed.items,
+            apiKey,
+            resolveServerUrl(config, env()).url,
+          )
           return {
             ok: true,
             value: {
@@ -987,6 +1173,258 @@ export function createSettingsRpcHandler(
           }
         }
 
+        /* ── 发布本机研究到网络（「寻找指导」）──────────────────────────────
+         *
+         * 用户的点法：在【研究工作 · 我的】里点**这一项**的「寻找指导」——
+         * **只有这时**才把该项目的研究状态发到服务器（不是后台自动上传）。
+         *
+         * 顺序照 `docs/projects.md` §6：建项目 → 传状态 → 发布。
+         * 文档明确警告：**不要发布没有状态的项目**（网络里会出现空卡片），
+         * 所以这里把三件事当成一次操作，上传失败就绝不发布。
+         */
+        /* ── 发布前的上传计划（对话框的数据源）────────────────────────────
+         *
+         * 返回**体积核算 + 默认选择 + 记住的选择 + 用量/成本**，一次拿全 ——
+         * 对话框打开即可显示"这次传什么、多少、要花几个 Token、服务器还剩多少空间"。
+         *
+         * ⚠️ 计划里包含 `excluded` 分类（机器产物），但**界面不显示它们**
+         * （2026-09 用户要求：排除项直接不出现，不影响选择）。保留在数据里是为了
+         * 对账（"全部 = 推荐 + 可选 + 排除"）与将来做"高级模式"。
+         */
+        case 'work/uploadPlan': {
+          const id = asString(p.id)
+          if (!id) return fail('bad-request', '缺少研究工作 id。')
+          const listed = await collectLocalWorks()
+          const source = listed.sources.get(id)
+          if (!source) return fail('not-found', '找不到这个本机研究项目（或其研究状态读不出来）。')
+          const plan: UploadPlan = buildUploadPlan(source.root)
+          const record = publishedStore.get(source.root)
+          // 记住的选择 ∪ 规则推荐（新文件自动并入，否则新增证据会静默漏传）
+          const remembered = record?.selection ?? null
+          const recommended = plan.categories
+            .filter((c) => c.decision === 'recommended')
+            .flatMap((c) => c.files.filter((f) => !f.relPath.endsWith('/')).map((f) => f.relPath))
+          const exist = new Set([...recommended, ...plan.categories.filter((c) => c.decision === 'optional').flatMap((c) => c.files.map((f) => f.relPath))])
+          const effective =
+            remembered === null
+              ? recommended
+              : [...new Set([...remembered.filter((r) => exist.has(r)), ...recommended])]
+          const diff = await diffAgainstUploaded(source.root, record)
+          // "变化" = 已记录但内容变了 + 选择里从未上传过的（新增文件）
+          const knownFiles = record?.files ?? {}
+          const added = effective.filter((r) => !(r in knownFiles))
+          const changedAll = [...new Set([...diff.changed, ...added])]
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          const usage = apiKey
+            ? await fetchUsage(resolveServerUrl(config, env()).url, apiKey, netOptions())
+            : null
+          return {
+            ok: true,
+            value: {
+              projectId: id,
+              root: source.root,
+              title: source.title,
+              plan,
+              /** 对话框的初始勾选。 */
+              selection: effective,
+              remembered: remembered !== null,
+              /** 与"上次已上传"相比的变化（新增 + 内容变化）；空数组 = 无变化。 */
+              changed: changedAll,
+              unchangedCount: diff.unchanged.filter((r) => effective.includes(r)).length,
+              usage,
+            },
+          }
+        }
+
+        case 'work/publish': {
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          const id = asString(p.id)
+          if (!id) return fail('bad-request', '缺少研究工作 id。')
+          const listed = await collectLocalWorks()
+          const source = listed.sources.get(id)
+          if (!source) return fail('not-found', '找不到这个本机研究项目（或其研究状态读不出来）。')
+          const base = resolveServerUrl(config, env()).url
+          /**
+           * 附件选择：界面在对话框里确认后传进来。
+           *
+           * - 显式给了 `selection`（含空数组）→ 就用它；
+           * - 没给 → 沿用**记住的选择**；再没有 → 用规则推荐集（`work/uploadPlan` 的默认）。
+           *   （「更新」路径不弹窗时走的是这条，所以不能退化成"什么都不传"。）
+           */
+          const selectionProvided = Array.isArray(p.selection)
+          const remember = p.remember !== false
+          try {
+            const me = await fetchAccount(base, apiKey, netOptions())
+            const { content, missing } = buildPublishContent({
+              researchRoot: source.root,
+              workspaceTitle: source.title,
+              progress: source.progress,
+              generatedAt: new Date().toISOString(),
+            })
+            const previous = publishedStore.get(source.root)
+            // 只有同一台服务器 + 同一个账号才重用项目；否则新建
+            // （服务器 GET /projects/{id} 是 owner-only，重用别人的 id 只会 404）
+            const reusable = previous && previous.serverUrl === base && previous.accountId === me.id
+            let projectId = reusable ? previous.projectId : ''
+            let created = false
+            const create = async (): Promise<string> => {
+              const project = await createProject(
+                base,
+                apiKey,
+                {
+                  title: source.title,
+                  description: content.summary ? content.summary : undefined,
+                },
+                netOptions(),
+              )
+              created = true
+              return project.id
+            }
+            if (!projectId) projectId = await create()
+            // 一次保存意图一个幂等键；因 409 重基后 payload 变了 → 换新键
+            const saveState = async (baseVersion: number | null) =>
+              uploadResearchState(
+                base,
+                apiKey,
+                projectId,
+                {
+                  baseVersion,
+                  content: content as unknown as Record<string, unknown>,
+                  intentKey: crypto.randomUUID(),
+                },
+                netOptions(),
+              )
+            const saveStateWithRebase = async (version: number | null) => {
+              try {
+                return await saveState(version)
+              } catch (e) {
+                if (!(e instanceof ServerError) || e.code !== 'version-conflict') throw e
+                // 409：拉最新版本，基于它**重新上传**（换新 key —— payload 已变）
+                const latest =
+                  e.currentVersion ?? (await readStateVersion(base, apiKey, projectId, netOptions()))
+                return await saveState(latest)
+              }
+            }
+            // 以**服务器**的当前版本为准（本地记录可能过期：另一个客户端也传过）
+            let uploaded: { version: number; contentHash: string }
+            try {
+              uploaded = await saveStateWithRebase(
+                await readStateVersion(base, apiKey, projectId, netOptions()),
+              )
+            } catch (e) {
+              // 映射指向的项目已被服务器删除（本地记录不会自己知道）：忘掉它、新建项目重来一次
+              if (!reusable || !(e instanceof ServerError) || e.code !== 'not-found') throw e
+              publishedStore.remove(source.root)
+              projectId = await create()
+              uploaded = await saveStateWithRebase(
+                await readStateVersion(base, apiKey, projectId, netOptions()),
+              )
+            }
+            // ── 附件：状态传完再传（服务器要求 state_version 存在）──────────
+            const plan = buildUploadPlan(source.root)
+            const recommendedFiles = plan.categories
+              .filter((c) => c.decision === 'recommended')
+              .flatMap((c) => c.files.filter((f) => !f.relPath.endsWith('/')).map((f) => f.relPath))
+            const optionalFiles = plan.categories
+              .filter((c) => c.decision === 'optional')
+              .flatMap((c) => c.files.map((f) => f.relPath))
+            const selectable = new Set([...recommendedFiles, ...optionalFiles])
+            const selected = selectionProvided
+              ? (p.selection as unknown[]).filter((x): x is string => typeof x === 'string')
+              : (previous?.selection ?? []).length > 0
+                ? [...new Set([...(previous?.selection ?? []).filter((r) => selectable.has(r)), ...recommendedFiles])]
+                : recommendedFiles
+            // 增量：只传新增/变化的（服务器不去重，重复传会翻倍占空间）
+            const previousFiles = previous?.files ?? {}
+            const toUpload: string[] = []
+            const digests: Record<string, string> = { ...previousFiles }
+            for (const relPath of selected) {
+              const abs = resolve(source.root, relPath)
+              let digest: string
+              try {
+                digest = await fileDigest(abs)
+              } catch {
+                continue // 文件不存在/读不动：跳过，不阻塞发布
+              }
+              digests[relPath] = digest
+              if (previousFiles[relPath] !== digest) toUpload.push(relPath)
+            }
+            const { batches, skipped } = planUploadBatches(source.root, toUpload)
+            let uploadedFiles = 0
+            let uploadedBytes = 0
+            for (const batch of batches) {
+              const payload: Array<{ relPath: string; bytes: Uint8Array }> = []
+              for (const relPath of batch) {
+                try {
+                  const { readFile } = await import('node:fs/promises')
+                  payload.push({ relPath, bytes: await readFile(resolve(source.root, relPath)) })
+                } catch {
+                  /* 读不到就跳过该文件 */
+                }
+              }
+              if (payload.length === 0) continue
+              const results = await uploadProjectFiles(base, apiKey, projectId, payload, {
+                stateVersion: uploaded.version,
+                ...netOptions(),
+              })
+              uploadedFiles += results.length
+              uploadedBytes += results.reduce((n, r) => n + r.size, 0)
+            }
+
+            // 上传成功后才发布（顺序不能反：先发布会留下空卡片）。
+            // 幂等键由 (项目, 版本) 决定：同一次发布的重试不会重复扣费。
+            const { visibility, chargedTokens } = await publishProject(base, apiKey, projectId, {
+              intentKey: `convfusion-dsh-publish-${projectId}-v${uploaded.version}`,
+              ...netOptions(),
+            })
+            const now = new Date().toISOString()
+            const record: PublishedRecord = {
+              projectId,
+              serverUrl: base,
+              accountId: me.id,
+              version: uploaded.version,
+              contentHash: uploaded.contentHash,
+              publishedAt: reusable ? previous?.publishedAt || now : now,
+              updatedAt: now,
+              // 已上传附件的指纹（增量上传的依据）
+              files: digests,
+              // 「记住这次选择」：下次不弹窗时沿用它（新文件仍会按规则并入）
+              ...(remember ? { selection: selected } : {}),
+            }
+            publishedStore.set(source.root, record)
+            return {
+              ok: true,
+              value: {
+                published: {
+                  projectId,
+                  version: uploaded.version,
+                  visibility,
+                  created,
+                  updatedAt: now,
+                  /** 本次真实扣费（0 = 该项目此前已付费，重复发布免费）。 */
+                  chargedTokens,
+                },
+                /** 本次附件上传统计（增量：`skippedExisting` = 内容未变、跳过的）。 */
+                attachments: {
+                  selected: selected.length,
+                  uploaded: uploadedFiles,
+                  uploadedBytes,
+                  skippedExisting: selected.length - toUpload.length,
+                  /** 超过服务器单文件上限（100 MB）而没能上传的。 */
+                  oversize: skipped,
+                },
+                /** 本机没有的字段（界面据此如实说明"网络上只看得到哪几项"）。 */
+                missing,
+              },
+            }
+          } catch (e) {
+            return serverFail(e)
+          }
+        }
+
         case 'work/list': {
           const config = deps.getConfig()
           const apiKey = resolveConvFusionApiKey(config, env())
@@ -995,6 +1433,8 @@ export function createSettingsRpcHandler(
             const base = resolveServerUrl(config, env()).url
             // ⚠️ 不传 limit：列表条数与抽样策略由**服务器**决定（见 fetchWorkList 注释）
             const items: WorkItem[] = await fetchWorkList(base, apiKey, netOptions())
+            // 顺带把命中的本地发布记录对齐到服务器的可见性
+            syncRecordsFromWorkList(items)
             return { ok: true, value: { items } }
           } catch (e) {
             return serverFail(e)

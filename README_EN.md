@@ -100,6 +100,18 @@ feature; while signed out the research-work list shows clearly labelled **sample
 cannot be acted on. Once signed in, the account row shows the current **Token balance**
 (click to refresh; paid reads such as a brief refresh it automatically).
 
+### Publishing research to the network ("Find a mentor")
+
+**Research work → Mine** lists the research projects on this machine (those DSH workspaces that
+contain a valid research workspace). Clicking **Find a mentor** on one of them is what publishes
+*that* project's research state to ConvFusion.com (create project → upload research state →
+publish); clicking again only updates the content and never creates a duplicate project.
+Published projects show **In the network**, and that badge follows the **server**: refreshing a
+list re-checks the server, so deleting a project or unpublishing it on the server clears the
+badge immediately (the matching local mapping is dropped or marked unpublished).
+**Only research progress is uploaded**: prompts, skill customizations, workflows and personal
+expertise always stay on this machine.
+
 ### Research work and two-level disclosure
 
 What is published on the network is the Research State of **research projects**. The list

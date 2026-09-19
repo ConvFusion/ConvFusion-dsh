@@ -1057,6 +1057,765 @@ section('[6d] 研究工作 · 我的（本机）')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+ * 6e. 「寻找指导」= 发布本机研究（建项目 → 传状态 → 发布）
+ *
+ * 契约见 `ConvFusion-server/docs/projects.md`：顺序不能反（先发布会留空卡片）、
+ * 上传要带幂等键、409 要重基后换新键重传、同一个工作区只能对应一个服务器项目。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[6e] 发布本机研究（work/publish）')
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const PUB = await import(lib('research/published-store.js'))
+  const HOME3 = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-publish-'))
+
+  // 一个真实的小工作区：project.md（主题/领域/研究问题）+ research-state.md（各维度）
+  const ws = path.join(HOME3, 'proj-publish')
+  const root = path.join(ws, 'workspace')
+  fs.mkdirSync(path.join(root, 'research', 'evidence'), { recursive: true })
+  fs.writeFileSync(
+    path.join(root, 'project.md'),
+    [
+      '---',
+      'type: research-project',
+      'topic: 低算力视觉语言方向的可证伪问题',
+      'domain: 多模态, 机器人学习',
+      'created_at: 2026-09-19T00:00:00.000Z',
+      '---',
+      '',
+      '# Research Project',
+      '',
+      '## Research Questions',
+      '',
+      '- 裁剪证据能否改善失败判定？',
+      '- 校准缺口有多大？',
+      '',
+      '## Motivation',
+      '',
+      '给机器人策略做数据过滤时，失败判定不可靠。',
+      '',
+    ].join('\n'),
+  )
+  fs.writeFileSync(
+    path.join(root, 'research-state.md'),
+    [
+      '---',
+      'type: research-state',
+      'version: 3',
+      'maturity_problem: Established',
+      'maturity_knowledge: Emerging',
+      '---',
+      '',
+      '# Research State',
+      '',
+      '## Problem',
+      '',
+      '失败判定缺少可信的验证器。',
+      '',
+      '## Innovation',
+      '',
+      '把裁剪当作可证伪的干预来研究。',
+      '',
+      '## Hypotheses',
+      '',
+      'H1：收益是强样本条件性的。',
+      '',
+      '## Method',
+      '',
+      '三臂对照 + oracle 上界。',
+      '',
+      '## Open Questions',
+      '',
+      '- 定位失败还是读出失败？',
+      '',
+    ].join('\n'),
+  )
+  fs.writeFileSync(
+    path.join(root, 'research', 'evidence', 'E001.md'),
+    ['---', 'name: 裁剪干预的修复/弄坏计数', 'status: supported', '---', '', '# Evidence', ''].join('\n'),
+  )
+
+  const lister = async () => ({
+    available: true,
+    items: [{ id: 'ws-pub', title: '低算力 VL 方向', path: ws, updatedAt: '2026-09-19T00:00:00Z' }],
+  })
+  /**
+   * 映射的键是**真身**研究根（`realpath`，与列表里的 `researchRoot` 一致）。
+   * 测试也必须用它，否则 seed 的记录根本读不到 —— 第一版就是栽在这
+   * （macOS 的 `/var` → `/private/var`）。
+   */
+  const K = fs.realpathSync(root)
+
+  /** 一个记账用的假服务器：按顺序记下 create / state / publish。 */
+  const makePublisher = ({ conflictOnce = false, failPublish = false, serverVersion = null } = {}) => {
+    const calls = []
+    // `serverVersion` = 服务器上已有的版本（模拟"别的客户端已经传过"）
+    let stateVersion = serverVersion
+    const fetchImpl = async (url, init) => {
+      const method = init?.method ?? 'GET'
+      calls.push({ url, method, headers: init?.headers ?? {}, body: init?.body })
+      const json = (status, body) => ({
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => body,
+      })
+      if (url.endsWith('/api/v1/auth/me')) return json(200, { id: 'acc-1', email: 'me@example.com', display_name: 'Me', status: 'ACTIVE', roles: ['RESEARCHER'] })
+      if (url.endsWith('/api/v1/tokens')) return json(200, { available_balance: 5, frozen_balance: 0, total_balance: 5 })
+      if (url.endsWith('/api/v1/projects') && method === 'POST') {
+        return json(201, { id: 'srv-project-1', title: 'x', visibility: 'PRIVATE', status: 'ACTIVE', updated_at: '' })
+      }
+      if (url.endsWith('/projects/srv-project-1/state') && method === 'GET') {
+        return stateVersion === null ? json(404, err('RESOURCE_NOT_FOUND', 'no state')) : json(200, { version: stateVersion })
+      }
+      if (url.endsWith('/projects/srv-project-1/state') && method === 'POST') {
+        const payload = JSON.parse(init.body)
+        if (conflictOnce && payload.base_version === 1) {
+          return json(409, err('STATE_VERSION_CONFLICT', 'conflict', { current_version: 7, base_version: 1 }))
+        }
+        stateVersion = (payload.base_version ?? 0) + 1
+        return json(201, { project_id: 'srv-project-1', version: stateVersion, content_hash: 'sha256:abc', content: payload.content })
+      }
+      if (url.endsWith('/projects/srv-project-1/files') && method === 'POST') {
+        // 附件端点（发布现在也会传附件）；返回与请求对齐的元数据
+        const form = init.body instanceof FormData ? init.body : undefined
+        const relPaths = form ? form.getAll('relative_paths') : []
+        return json(201, relPaths.map((rp, i) => ({ id: `f${i}`, relative_path: rp, size: 4, sha256: `sha256:${i}` })))
+      }
+      if (url.endsWith('/projects/srv-project-1/publish')) {
+        return failPublish ? json(500, err('INTERNAL_ERROR', 'boom')) : json(200, { project_id: 'srv-project-1', visibility: 'PUBLISHED', charged_tokens: 1 })
+      }
+      return json(404, err('RESOURCE_NOT_FOUND', 'nope'))
+    }
+    return { fetchImpl, calls, state: () => stateVersion }
+  }
+
+  const makePubHost = (server, store = PUB.createMemoryPublishedStore(), config = {}) =>
+    RPC.createSettingsRpcHandler({
+      getConfig: () =>
+        CFG.resolveConfig({
+          customizationFile: 'x.json',
+          customizationDir: HOME3,
+          convfusionApiKey: KEY,
+          serverUrl: 'http://localhost:8000',
+          ...config,
+        }),
+      store: CUST.createMemoryCustomizationStore(),
+      listLocalWorkspaces: lister,
+      publishedStore: store,
+      fetchImpl: server.fetchImpl,
+    })
+
+  // ── 未登录：本地就拒 ──
+  {
+    const anon = RPC.createSettingsRpcHandler({
+      getConfig: () => CFG.resolveConfig({ customizationFile: 'x.json', customizationDir: HOME3 }),
+      store: CUST.createMemoryCustomizationStore(),
+      listLocalWorkspaces: lister,
+    })
+    assertEq((await anon('work/publish', { id: 'ws-pub' })).error.code, 'not-configured', '未登录不能发布')
+    const signedIn = makePubHost({ fetchImpl: async () => { throw new Error('不该联网') } })
+    assertEq((await signedIn('work/publish', {})).error.code, 'bad-request', '缺 id → bad-request')
+    assertEq((await signedIn('work/publish', { id: 'nope' })).error.code, 'not-found', '未知 id → not-found')
+  }
+
+  // ── 正常路径：建项目 → 传状态 → 发布（顺序不能反）──
+  {
+    const server = makePublisher()
+    const store = PUB.createMemoryPublishedStore()
+    const h = makePubHost(server, store)
+    const res = await h('work/publish', { id: 'ws-pub' })
+    assert(res.ok, '发布成功')
+    const kinds = server.calls.map((c) => `${c.method} ${c.url.replace('http://localhost:8000/api/v1', '')}`)
+    assertEq(
+      kinds.filter((k) => !k.includes('/files')),
+      [
+        'GET /auth/me',
+        'POST /projects',
+        'GET /projects/srv-project-1/state',
+        'POST /projects/srv-project-1/state',
+        'POST /projects/srv-project-1/publish',
+      ],
+      '顺序：身份 → 建项目 → 读当前版本 → 传状态 → 发布',
+    )
+    assert(
+      kinds.indexOf('POST /projects/srv-project-1/files') >
+        kinds.indexOf('POST /projects/srv-project-1/state') &&
+        kinds.indexOf('POST /projects/srv-project-1/files') <
+          kinds.indexOf('POST /projects/srv-project-1/publish'),
+      '附件在"传状态之后、发布之前"上传（服务器要求 state_version 存在）',
+    )
+    const stateCall = server.calls.find((c) => c.method === 'POST' && c.url.endsWith('/state'))
+    const payload = JSON.parse(stateCall.body)
+    assertEq(payload.base_version, null, '首传 base_version=null（服务器此时还没有状态）')
+    assert(typeof stateCall.headers['idempotency-key'] === 'string' && stateCall.headers['idempotency-key'].length > 0, '上传带 Idempotency-Key')
+    // 内容映射：从本机文件真实提取
+    assertEq(payload.content.research_question, '裁剪证据能否改善失败判定？；校准缺口有多大？', '研究问题取自 project.md 的 Research Questions')
+    assertEq(payload.content.summary, '低算力视觉语言方向的可证伪问题', '摘要 = 主题句')
+    assertEq(payload.content.hypothesis, 'H1：收益是强样本条件性的。', '假设取自 research-state.md 的 Hypotheses')
+    assertEq(payload.content.core_idea, '把裁剪当作可证伪的干预来研究。', '核心想法取自 Innovation')
+    assertEq(payload.content.method_overview, '三臂对照 + oracle 上界。', '方法概览取自 Method（**方法留在本机**指的是提示词/工作流，不是研究方法的表述）')
+    assertEq(payload.content.motivation, '给机器人策略做数据过滤时，失败判定不可靠。', '动机取自 project.md 的 Motivation')
+    assertEq(payload.content.research_fields, ['多模态', '机器人学习'], '研究领域按分隔符切分')
+    assertEq(payload.content.schema_version, 1, 'schema_version = 1')
+    assertEq(typeof payload.content.progress, 'number', '进度是数值 0..1')
+    assertEq(payload.content.evidence?.[0]?.id, 'E001', '证据清单带 id')
+    assert(payload.content.extensions?.convfusion, '带机器可读的 extensions（不含方法/提示词）')
+    assert(!JSON.stringify(payload.content).includes('prompt'), '内容里没有任何提示词字段')
+    assertEq(res.value.published.projectId, 'srv-project-1', '返回服务器项目 id')
+    assertEq(res.value.published.created, true, '首次是新建项目')
+    assertEq(res.value.published.visibility, 'PUBLISHED', '返回可见性')
+    // 映射落盘
+    assertEq(store.get(K)?.projectId, 'srv-project-1', '映射记录写入（工作区 → project_id）')
+    assertEq(store.get(K)?.version, 1, '映射记录版本号')
+  }
+
+  // ── 再点一次：复用同一个项目，上传 v2，**不再建项目** ──
+  {
+    const server = makePublisher()
+    const store = PUB.createMemoryPublishedStore()
+    const h = makePubHost(server, store)
+    await h('work/publish', { id: 'ws-pub' })
+    const second = await h('work/publish', { id: 'ws-pub' })
+    assert(second.ok, '第二次发布成功')
+    assertEq(
+      server.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/api/v1/projects')).length,
+      1,
+      '同一个工作区只建**一个**服务器项目',
+    )
+    const stateCalls = server.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/state'))
+    assertEq(stateCalls.length, 2, '两次上传（v1、v2）')
+    assertEq(JSON.parse(stateCalls[1].body).base_version, 1, '第二次上传基于服务端当前版本（1）')
+    assertEq(second.value.published.created, false, '第二次不是新建')
+    assertEq(store.get(K)?.version, 2, '映射里的版本跟着更新')
+  }
+
+  // ── 409：重基后**换新键**重传 ──
+  {
+    // 服务器上已经是 v1（映射里记的是本地过期的 3）；上传 v1 时撞上别人推到 v7
+    const server = makePublisher({ conflictOnce: true, serverVersion: 1 })
+    const store = PUB.createMemoryPublishedStore({
+      [K]: { projectId: 'srv-project-1', serverUrl: 'http://localhost:8000', accountId: 'acc-1', version: 3, publishedAt: 'x', updatedAt: 'x' },
+    })
+    const h = makePubHost(server, store)
+    const res = await h('work/publish', { id: 'ws-pub' })
+    assert(res.ok, '409 之后自动重基并成功')
+    const stateCalls = server.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/state'))
+    assertEq(stateCalls.length, 2, '上传尝试两次（第一次 409）')
+    assertEq(JSON.parse(stateCalls[0].body).base_version, 1, '第一次用服务端当前版本 1')
+    assertEq(JSON.parse(stateCalls[1].body).base_version, 7, '重基后用 details.current_version=7')
+    assert(
+      stateCalls[0].headers['idempotency-key'] !== stateCalls[1].headers['idempotency-key'],
+      'payload 变了必须换新幂等键（否则服务器 409 IDEMPOTENCY_KEY_REUSED）',
+    )
+  }
+
+  // ── 换账号 / 换服务器：**不重用**旧项目（否则只会 404）──
+  {
+    const server = makePublisher()
+    const store = PUB.createMemoryPublishedStore({
+      [K]: { projectId: 'other-account-project', serverUrl: 'http://localhost:8000', accountId: 'acc-OTHER', version: 9, publishedAt: 'x', updatedAt: 'x' },
+    })
+    const h = makePubHost(server, store)
+    const res = await h('work/publish', { id: 'ws-pub' })
+    assert(res.ok, '换账号后仍能发布')
+    assertEq(res.value.published.created, true, '换账号 → 新建项目（旧 id 属于别的账号，复用只会 404）')
+    assert(
+      server.calls.some((c) => c.url.endsWith('/api/v1/projects') && c.method === 'POST'),
+      '确实调了建项目',
+    )
+  }
+
+  // ── 发布失败：映射**不写**（下次重试仍按未发布处理）──
+  {
+    const server = makePublisher({ failPublish: true })
+    const store = PUB.createMemoryPublishedStore()
+    const h = makePubHost(server, store)
+    const res = await h('work/publish', { id: 'ws-pub' })
+    assertEq(res.ok, false, '发布失败如实报错')
+    assertEq(store.get(K), undefined, '发布失败不写映射（不会留下"已发布"的假记录）')
+  }
+
+  // ── work/mine 带出"已发布"标记（读本地映射，不联网）──
+  {
+    const store = PUB.createMemoryPublishedStore({
+      [K]: { projectId: 'srv-project-1', serverUrl: 'http://localhost:8000', accountId: 'acc-1', version: 4, publishedAt: 'x', updatedAt: 'y' },
+    })
+    const servers = { fetchImpl: async () => { throw new Error('work/mine 不该联网') } }
+    const h = makePubHost(servers, store)
+    const mine = await h('work/mine', {})
+    assertEq(mine.value.items[0].published?.projectId, 'srv-project-1', '列表项带出已发布的 project_id')
+    assertEq(mine.value.items[0].published?.version, 4, '带出版本号')
+  }
+
+  fs.rmSync(HOME3, { recursive: true, force: true })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 6f. 发布前该传哪些文件（上传计划）
+ *
+ * 真实工作区可达 657 MB（文献全文 PDF 543 MB + LaTeX 缓存 89 MB），
+ * 全传既浪费服务器空间也把该看的东西埋掉。这一节用**真实临时目录**钉规则：
+ * 推荐 / 可选 / 排除 三级、大文件降级、权重与缓存永不入选、批次与对账。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[6f] 上传计划（哪些文件值得传）')
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const UP = await import(lib('research/upload-selection.js'))
+  const HOME4 = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-plan-'))
+  const root = path.join(HOME4, 'workspace')
+  const mk = (rel, bytes) => {
+    const abs = path.join(root, rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.writeFileSync(abs, Buffer.alloc(bytes, 0x61))
+  }
+  // 研究资产（该传）
+  mk('project.md', 500)
+  mk('research-state.md', 300)
+  mk('plans/p1.md', 2000)
+  mk('papers/paper-001/paper.md', 4000)
+  mk('papers/paper-001/figures/fig1.pdf', 3000)
+  mk('experiments/e1/run.py', 1500)
+  mk('research/evidence/E001.md', 800)
+  mk('research/literature/notes.md', 900)
+  // 原始素材 / 大文件（默认不传，但可选）
+  mk('research/literature/fulltext/001_big paper.pdf', 20 * 1024 * 1024)
+  mk('research/literature/fulltext/002_another.pdf', 5 * 1024 * 1024)
+  mk('research/literature/raw_search.json', 4000)
+  mk('research/literature/extract.txt', 6000)
+  mk('experiments/dataset.bin', 2000) // 权重/数据集扩展名 → 排除
+  mk('experiments/huge-dump.log', 12 * 1024 * 1024) // 普通扩展名但超大 → 可选
+  // 机器产物（不可选）
+  mk('.tectonic-cache/formats/big.fmt', 30 * 1024 * 1024)
+  mk('harness/.tectonic-cache/bundles/x.tex', 1000)
+  mk('node_modules/pkg/index.js', 900)
+  mk('.git/objects/ab/cdef', 700)
+  mk('.DS_Store', 100)
+
+  const plan = UP.buildUploadPlan(root)
+  const cat = (id) => plan.categories.find((c) => c.id === id)
+  const has = (id, rel) => (cat(id)?.files ?? []).some((f) => f.relPath === rel)
+
+  assertEq(has('state', 'project.md'), true, 'project.md → 推荐')
+  assertEq(has('plans', 'plans/p1.md'), true, 'plans/** → 推荐')
+  assertEq(has('papers', 'papers/paper-001/paper.md'), true, 'papers/** → 推荐')
+  assertEq(has('papers', 'papers/paper-001/figures/fig1.pdf'), true, '论文里的图 → 推荐（小文件）')
+  assertEq(has('experiments', 'experiments/e1/run.py'), true, 'experiments/** → 推荐')
+  assertEq(has('research-assets', 'research/evidence/E001.md'), true, 'research 资产 → 推荐')
+  assertEq(has('research-assets', 'research/literature/notes.md'), true, '文献**笔记**（.md）→ 推荐')
+
+  assertEq(has('literature-fulltext', 'research/literature/fulltext/001_big paper.pdf'), true, '文献全文 PDF → 可选（默认不传）')
+  assertEq(has('literature-fulltext', 'research/literature/fulltext/002_another.pdf'), true, '文献全文 PDF（小）也归可选：它是原始素材')
+  assertEq(has('literature-raw', 'research/literature/raw_search.json'), true, '检索原始报文 → 可选')
+  assertEq(has('literature-raw', 'research/literature/extract.txt'), true, '抽取文本 → 可选')
+  assertEq(has('large-files', 'experiments/huge-dump.log'), true, '普通扩展名但 ≥10MB → 降级为可选')
+
+  assertEq(has('models-data', 'experiments/dataset.bin'), true, '权重/数据集扩展名 → 排除')
+  // ⚠️ 机器产物目录是**整枝排除**的：只列一条目录占位（附实测体积/项数），
+  // 不把里面几百个缓存文件逐条列出来（那是噪声，且不可选）。
+  assertEq(has('build-artifacts', '.tectonic-cache/'), true, '构建缓存整枝 → 排除（列目录占位 + 体积）')
+  assert(
+    (plan.categories.find((c) => c.id === 'build-artifacts')?.bytes ?? 0) >= 30 * 1024 * 1024,
+    '被整枝跳过的目录，其体积仍要计入分类（否则总账对不上）',
+  )
+  assertEq(has('runtime-artifacts', 'harness/'), true, 'harness/ 整枝 → 排除（列目录占位）')
+  assertEq(has('build-artifacts', 'node_modules/'), true, 'node_modules 整枝 → 排除')
+  assertEq(has('build-artifacts', '.git/'), true, '版本库整枝 → 排除')
+  // 单个垃圾文件（不在垃圾目录里）才逐条列
+  assertEq(has('build-artifacts', '.DS_Store'), true, '零散的 .DS_Store → 逐条列出并排除')
+
+  // 三级分类 + 只有 recommended 进默认勾选
+  assertEq(plan.defaultSelection.includes('project.md'), true, '默认勾选含研究状态')
+  assertEq(plan.defaultSelection.includes('research/literature/fulltext/002_another.pdf'), false, '默认**不**勾文献全文')
+  assertEq(plan.defaultSelection.includes('experiments/dataset.bin'), false, '默认**不**勾权重/数据集')
+  assertEq(plan.defaultSelection.includes('.tectonic-cache/formats/big.fmt'), false, '默认**不**勾构建缓存')
+  assertEq(UP.isSelectable('excluded'), false, '排除项不可勾选')
+  assertEq(UP.isSelectable('optional'), true, '可选项目可勾选（用户能调整）')
+
+  // 对账：全部 = 推荐 + 可选 + 排除；分类之和一致
+  const sumCats = plan.categories.reduce((n, c) => n + c.bytes, 0)
+  assertEq(sumCats, plan.totals.allBytes, '分类体积之和 = 全部（不含重复计数）')
+  assertEq(
+    plan.totals.recommendedBytes + plan.totals.optionalBytes + plan.totals.excludedBytes,
+    plan.totals.allBytes,
+    '三级体积之和 = 全部',
+  )
+  assert(plan.totals.recommendedBytes < plan.totals.allBytes / 10, '推荐集远小于全部（这里 < 10%）')
+  assertEq(plan.oversize.length, 0, '默认勾选里没有超单文件上限的（20MB < 100MB）')
+
+  // 批次：服务器 20 个/次
+  const batches = UP.planUploadBatches(root, plan.defaultSelection)
+  assert(batches.batches.length >= 1, '能切出上传批次')
+  assert(batches.batches.every((b) => b.length <= UP.UPLOAD_LIMITS.maxFilesPerRequest), '每批 ≤ 20 个文件')
+  assertEq(batches.skipped.length, 0, '没有因超限被跳过的')
+
+  // 大文件（>100MB）即使被勾选也只是 skipped（不能让服务器 413 才发现）
+  mk('experiments/way-too-big.bin', 0)
+  fs.truncateSync(path.join(root, 'experiments/way-too-big.bin'), 101 * 1024 * 1024)
+  const bigPlan = UP.buildUploadPlan(root)
+  const bigBatches = UP.planUploadBatches(root, ['experiments/way-too-big.bin'])
+  assertEq(bigBatches.skipped.length, 1, '>100MB 的文件被标为 skipped（不静默失败）')
+  assertEq(bigPlan.categories.find((c) => c.id === 'models-data') !== undefined, true, '超大 .bin 仍归"排除"（扩展名规则优先）')
+
+  fs.rmSync(HOME4, { recursive: true, force: true })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 6g. 发布对话框的数据 + 附件增量上传
+ *
+ * 覆盖：上传计划（推荐/可选/排除、记住的选择、用量与成本）、
+ * multipart 附件上传（relative_paths 对齐、state_version）、
+ * **增量**（内容没变就不重传 —— 服务器不去重，重复传会翻倍占空间）、
+ * 超单文件上限的如实上报、发布 402 的透传。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[6g] 上传计划 + 附件增量上传')
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const PUB = await import(lib('research/published-store.js'))
+  const HOME5 = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-dialog-'))
+  const ws = path.join(HOME5, 'proj-dialog')
+  const root = path.join(ws, 'workspace')
+  const mk = (rel, text) => {
+    const abs = path.join(root, rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.writeFileSync(abs, text)
+    return abs
+  }
+  mk('project.md', '---\ntype: research-project\ntopic: 对话框测试项目\n---\n\n# Research Project\n\n## Research Questions\n\n- q\n')
+  mk('research-state.md', '---\ntype: research-state\nversion: 1\n---\n\n# Research State\n')
+  mk('plans/p1.md', '# 计划\n')
+  mk('research/evidence/E001.md', '---\nname: 证据\nstatus: supported\n---\n')
+  mk('research/literature/fulltext/001_paper.pdf', 'PDF-BYTES')
+  mk('research/literature/notes.md', '# 文献笔记\n')
+  mk('experiments/run.py', 'print(1)\n')
+  fs.mkdirSync(path.join(root, '.tectonic-cache'), { recursive: true })
+  fs.writeFileSync(path.join(root, '.tectonic-cache', 'big.fmt'), 'x'.repeat(1000))
+
+  const lister = async () => ({
+    available: true,
+    items: [{ id: 'ws-dialog', title: '对话框测试项目', path: ws, updatedAt: '' }],
+  })
+
+  /** 记账用的假服务器（含 multipart 附件端点）。 */
+  const makeServer = ({ publishStatus = 200} = {}) => {
+    const calls = []
+    let stateVersion = null
+    const fetchImpl = async (url, init) => {
+      const method = init?.method ?? 'GET'
+      const body = init?.body
+      const form = typeof FormData !== 'undefined' && body instanceof FormData ? body : undefined
+      const relPaths = form ? form.getAll('relative_paths') : []
+      calls.push({ url, method, headers: init?.headers ?? {}, body, form, relPaths })
+      const json = (status, b) => ({ ok: status >= 200 && status < 300, status, json: async () => b })
+      if (url.endsWith('/api/v1/auth/me')) return json(200, { id: 'acc-9', email: 'me@example.com', display_name: 'Me', status: 'ACTIVE', roles: ['RESEARCHER'] })
+      if (url.endsWith('/api/v1/usage')) {
+        return json(200, {
+          projects: { alive: 1, paid_alive: 1, tier: 1, projects_per_tier: 3, next_publish_ordinal: 2, next_publish_cost: 1 },
+          storage: { used_bytes: 1000, capacity_bytes: 1073741824, available_bytes: 1073740824, purchased_gb: 0, bytes_per_token: 1073741824 },
+        })
+      }
+      if (url.endsWith('/api/v1/projects') && method === 'POST') return json(201, { id: 'srv-1', visibility: 'PRIVATE', status: 'ACTIVE', updated_at: '' })
+      if (url.endsWith('/projects/srv-1/state') && method === 'GET') return stateVersion === null ? json(404, err('RESOURCE_NOT_FOUND', 'none')) : json(200, { version: stateVersion })
+      if (url.endsWith('/projects/srv-1/state') && method === 'POST') {
+        stateVersion = (JSON.parse(body).base_version ?? 0) + 1
+        return json(201, { version: stateVersion, content_hash: 'sha256:h' })
+      }
+      if (url.endsWith('/projects/srv-1/files') && method === 'POST') {
+        if (stateVersion === null) return json(404, err('RESOURCE_NOT_FOUND', 'no state'))
+        return json(201, relPaths.map((rp, i) => ({ id: `f${i}`, relative_path: rp, size: 4, sha256: `sha256:${i}` })))
+      }
+      if (url.endsWith('/projects/srv-1/publish')) {
+        return publishStatus === 200
+          ? json(200, { project_id: 'srv-1', visibility: 'PUBLISHED', charged_tokens: 1 })
+          : json(publishStatus, err('INSUFFICIENT_TOKENS', 'Insufficient Token balance.', { required: 1, available: 0 }))
+      }
+      return json(404, err('RESOURCE_NOT_FOUND', 'nope'))
+    }
+    return { fetchImpl, calls, filesCalls: () => calls.filter((c) => c.url.endsWith('/files')) }
+  }
+
+  const makeHost5 = (server, store = PUB.createMemoryPublishedStore()) =>
+    RPC.createSettingsRpcHandler({
+      getConfig: () => CFG.resolveConfig({ customizationFile: 'x.json', customizationDir: HOME5, convfusionApiKey: KEY, serverUrl: 'http://localhost:8000' }),
+      store: CUST.createMemoryCustomizationStore(),
+      listLocalWorkspaces: lister,
+      publishedStore: store,
+      fetchImpl: server.fetchImpl,
+    })
+
+  // ── 上传计划 ──
+  {
+    const server = makeServer()
+    const plan = await makeHost5(server)('work/uploadPlan', { id: 'ws-dialog' })
+    assert(plan.ok, 'work/uploadPlan 可用')
+    const p = plan.value.plan
+    const catIds = p.categories.map((c) => c.id)
+    assert(catIds.includes('literature-fulltext'), '计划里有"文献原文"分类（可选）')
+    assert(catIds.includes('build-artifacts'), '计划里保留了"机器产物"分类（供对账；界面不显示）')
+    // 默认勾选 = 推荐集：含状态/计划/证据/笔记，不含文献 PDF
+    assert(plan.value.selection.includes('project.md'), '默认勾选含 project.md')
+    assert(plan.value.selection.includes('plans/p1.md'), '默认勾选含 plans/**')
+    assert(plan.value.selection.includes('research/evidence/E001.md'), '默认勾选含研究资产')
+    assertDeepSelection(plan.value.selection, 'research/literature/notes.md', true, '文献**笔记**默认上传（用户已拍板）')
+    assertDeepSelection(plan.value.selection, 'research/literature/fulltext/001_paper.pdf', false, '文献**原文**默认不上传')
+    assert(Array.isArray(plan.value.changed), '带上"与上次已上传相比的变化"')
+    assertEq(plan.value.usage?.nextPublishCost, 1, '带上发布成本（来自 /usage）')
+    assertEq(plan.value.usage?.storage.availableBytes, 1073740824, '带上存储余量（对话框要显示）')
+  }
+
+  function assertDeepSelection(list, item, expected, label) {
+    assertEq(list.includes(item), expected, label)
+  }
+
+  // ── 首次发布：按选择传附件（multipart、路径对齐、挂到 state_version）──
+  {
+    const server = makeServer()
+    const store = PUB.createMemoryPublishedStore()
+    const h = makeHost5(server, store)
+    const selection = ['project.md', 'plans/p1.md', 'research/evidence/E001.md', 'research/literature/fulltext/001_paper.pdf']
+    const res = await h('work/publish', { id: 'ws-dialog', selection })
+    assert(res.ok, '带选择的发布成功')
+    assertEq(res.value.attachments.selected, 4, '选择了 4 个文件')
+    assertEq(res.value.attachments.uploaded, 4, '4 个都上传了（首次）')
+    assertEq(res.value.attachments.skippedExisting, 0, '首次没有可跳过的')
+    assertEq(res.value.published.chargedTokens, 1, '发布扣费 1 Token（服务器说扣了多少就报多少）')
+    const filesCalls = server.filesCalls()
+    assertEq(filesCalls.length, 1, '附件一次请求传完（4 < 20）')
+    assertEq(filesCalls[0].relPaths.sort(), [...selection].sort(), 'relative_paths 与选择的文件一致（下标对齐）')
+    assertEq(filesCalls[0].form.get('state_version'), '1', '附件挂到刚上传的 state_version')
+    assertEq(String(filesCalls[0].headers['content-type'] ?? ''), '', '不自己设 content-type（multipart 边界由运行时生成）')
+    assertEq(String(filesCalls[0].headers.authorization).startsWith('Bearer '), true, '附件请求带凭据')
+    // 指纹与选择都记下来了
+    const rec = store.get(fs.realpathSync(root))
+    assertEq(Object.keys(rec.files).length, 4, '映射里记下 4 个文件的指纹')
+    assertEq(rec.selection.length, 4, '「记住这次选择」已落盘')
+  }
+
+  // ── 再发布：内容没变 → **不重传**（增量）──
+  {
+    const server = makeServer()
+    const store = PUB.createMemoryPublishedStore()
+    const h = makeHost5(server, store)
+    const selection = ['project.md', 'plans/p1.md']
+    await h('work/publish', { id: 'ws-dialog', selection })
+    const second = await h('work/publish', { id: 'ws-dialog', selection })
+    assert(second.ok, '第二次发布成功')
+    assertEq(second.value.attachments.uploaded, 0, '内容没变 → 一个都不重传')
+    assertEq(second.value.attachments.skippedExisting, 2, '如实报告"跳过了 2 个已是最新"')
+    assertEq(server.filesCalls().length, 1, '只发生过一次附件请求（第二次没有新请求）')
+  }
+
+  // ── 改了一个文件 → 只传那一个 ──
+  {
+    const server = makeServer()
+    const store = PUB.createMemoryPublishedStore()
+    const h = makeHost5(server, store)
+    const selection = ['project.md', 'plans/p1.md']
+    await h('work/publish', { id: 'ws-dialog', selection })
+    fs.writeFileSync(path.join(root, 'plans/p1.md'), '# 计划（已修改）\n')
+    const third = await h('work/publish', { id: 'ws-dialog', selection })
+    assertEq(third.value.attachments.uploaded, 1, '只传变化了的 1 个文件')
+    const last = server.filesCalls().at(-1)
+    assertEq(last.relPaths, ['plans/p1.md'], '传的正是被改的那个')
+  }
+
+  // ── 没给 selection 时：沿用「记住的选择」，并把新的推荐文件并进来 ──
+  {
+    const server = makeServer()
+    const store = PUB.createMemoryPublishedStore()
+    const h = makeHost5(server, store)
+    await h('work/publish', { id: 'ws-dialog', selection: ['research/literature/fulltext/001_paper.pdf'], remember: true })
+    // 新增一个推荐类文件（例如新的证据）→ 下次不弹窗也必须带上
+    mk('research/evidence/E002.md', '---\nname: 新证据\n---\n')
+    const again = await h('work/publish', { id: 'ws-dialog' })
+    assert(again.ok, '未给选择时仍能发布（沿用记住的选择）')
+    assertEq(again.value.attachments.selected >= 3, true, '记住的 PDF + 新的推荐文件都在选择里')
+    const uploadedPaths = server.filesCalls().flatMap((c) => c.relPaths)
+    assert(uploadedPaths.includes('research/evidence/E002.md'), '新增的推荐文件被自动并入（不会静默漏传）')
+  }
+
+  // ── 超单文件上限：如实报出来，而不是等服务器 413 ──
+  {
+    const server = makeServer()
+    const store = PUB.createMemoryPublishedStore()
+    const h = makeHost5(server, store)
+    const huge = path.join(root, 'experiments', 'huge.bin')
+    fs.mkdirSync(path.dirname(huge), { recursive: true })
+    fs.writeFileSync(huge, '')
+    fs.truncateSync(huge, 101 * 1024 * 1024)
+    // 注意：.bin 被规则判为 excluded，但用户可以通过 selection 显式指定（服务器侧仍会拒）
+    const res = await h('work/publish', { id: 'ws-dialog', selection: ['project.md', 'experiments/huge.bin'] })
+    assert(res.ok, '含超大文件的发布仍然成功（其它文件照传）')
+    assertEq(res.value.attachments.oversize.length, 1, '超大文件被列为 oversize')
+    assertEq(res.value.attachments.uploaded, 1, '只有合法的那 1 个被上传')
+    fs.rmSync(huge, { force: true })
+  }
+
+  // ── 发布 402（余额不足）：错误码透传，界面据此提示"先拿 Token" ──
+  {
+    const server = makeServer({ publishStatus: 402 })
+    const h = makeHost5(server)
+    const res = await h('work/publish', { id: 'ws-dialog', selection: ['project.md'] })
+    assertEq(res.ok, false, '余额不足时发布失败')
+    assertEq(res.error.code, 'insufficient-tokens', '错误码是 insufficient-tokens（界面提示去拿 Token）')
+    assertEq(makeServer().filesCalls().length, 0, '（对照）假服务器默认没有附件调用')
+  }
+
+  fs.rmSync(HOME5, { recursive: true, force: true })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 6h. 「已在网络中」以**服务器**为准（本地记录只说明"我传过"）
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[6h] 「已在网络中」以服务器为准')
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const PUB = await import(lib('research/published-store.js'))
+  const HOME6 = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-verified-'))
+  const ws = path.join(HOME6, 'proj-verified')
+  const root = path.join(ws, 'workspace')
+  fs.mkdirSync(root, { recursive: true })
+  fs.writeFileSync(path.join(root, 'project.md'), '# 服务器核对\n')
+  fs.writeFileSync(path.join(root, 'research-state.md'), '---\ntype: research-state\n---\n')
+
+  const lister = async () => ({
+    available: true,
+    items: [{ id: 'ws-v', title: '服务器核对', path: ws, updatedAt: '' }],
+  })
+  const SERVER = 'http://localhost:8000'
+  const seededRecord = (over = {}) => ({
+    projectId: 'srv-9',
+    serverUrl: SERVER,
+    accountId: 'acc-9',
+    version: 3,
+    publishedAt: '2026-09-18T00:00:00Z',
+    updatedAt: '2026-09-19T00:00:00Z',
+    files: { 'project.md': 'sha256:aa' },
+    selection: ['project.md'],
+    ...over,
+  })
+
+  /** `project`：PUBLISHED / PRIVATE / 404 / 'offline'（抛错）。 */
+  const makeServer6 = ({ project, listItems = [] }) => {
+    const calls = []
+    const fetchImpl = async (url, init) => {
+      calls.push(url.replace(`${SERVER}/api/v1`, ''))
+      const json = (status, b) => ({ ok: status >= 200 && status < 300, status, json: async () => b })
+      if (url.endsWith('/auth/me')) {
+        return json(200, { id: 'acc-9', email: 'me@example.com', status: 'ACTIVE', roles: ['RESEARCHER'] })
+      }
+      if (url.endsWith('/discovery/random')) return json(200, { items: listItems })
+      if (url.endsWith('/projects/srv-9')) {
+        if (project === 'offline') throw new Error('ECONNREFUSED')
+        if (project === 404) return json(404, err('PROJECT_NOT_FOUND', 'Project not found.'))
+        return json(200, { id: 'srv-9', title: '核对项目', visibility: project, status: 'ACTIVE', updated_at: '' })
+      }
+      return json(404, err('RESOURCE_NOT_FOUND', 'nope'))
+    }
+    return { fetchImpl, calls, projectCalls: () => calls.filter((u) => u === '/projects/srv-9') }
+  }
+
+  const makeHost6 = (server, store, { withKey = true } = {}) =>
+    RPC.createSettingsRpcHandler({
+      getConfig: () =>
+        CFG.resolveConfig({
+          customizationFile: 'x.json',
+          customizationDir: HOME6,
+          ...(withKey ? { convfusionApiKey: KEY } : {}),
+          serverUrl: SERVER,
+        }),
+      store: CUST.createMemoryCustomizationStore(),
+      listLocalWorkspaces: lister,
+      publishedStore: store,
+      fetchImpl: server.fetchImpl,
+    })
+
+  // ── 服务器说 PUBLISHED：保留标记，并把服务器的状态回写进本地记录 ──
+  {
+    const store = PUB.createMemoryPublishedStore({ [fs.realpathSync(root)]: seededRecord() })
+    const server = makeServer6({ project: 'PUBLISHED' })
+    const res = await makeHost6(server, store)('work/mine', {})
+    assert(res.ok, 'work/mine 可用')
+    assertEq(res.value.items[0].published?.projectId, 'srv-9', '服务器说可见 → 保留「已在网络中」')
+    const rec = store.all()[fs.realpathSync(root)]
+    assertEq(rec.serverVisibility, 'PUBLISHED', '本地记录回写了服务器状态（PUBLISHED）')
+    assert(typeof rec.checkedAt === 'string' && rec.checkedAt.length > 0, '本地记录记下核对时刻')
+    assertEq(rec.files['project.md'], 'sha256:aa', '核对**不动**"我传过什么"（files 指纹保留）')
+    assertEq(server.projectCalls().length, 1, '每个已记录的工作区核一次 GET /projects/{id}')
+  }
+
+  // ── 服务器说 PRIVATE（取消发布）：不显示标记，但**保留**记录（下次发布复用项目） ──
+  {
+    const store = PUB.createMemoryPublishedStore({ [fs.realpathSync(root)]: seededRecord() })
+    const res = await makeHost6(makeServer6({ project: 'PRIVATE' }), store)('work/mine', {})
+    assertEq(res.value.items[0].published, null, '服务器说不可见 → 不显示标记')
+    const rec = store.all()[fs.realpathSync(root)]
+    assert(rec, '记录保留（项目还在，下次发布仍复用同一个）')
+    assertEq(rec.serverVisibility, 'PRIVATE', '回写 PRIVATE')
+  }
+
+  // ── 服务器 404（项目已删）：不显示标记，并删掉本地映射 ──
+  {
+    const store = PUB.createMemoryPublishedStore({ [fs.realpathSync(root)]: seededRecord() })
+    const res = await makeHost6(makeServer6({ project: 404 }), store)('work/mine', {})
+    assertEq(res.value.items[0].published, null, '项目已删 → 不显示标记')
+    assertEq(store.all()[fs.realpathSync(root)], undefined, '死掉的映射被删掉（否则永远撞死 project_id）')
+  }
+
+  // ── 查不通（离线）：不下结论 —— 保留本地记录，界面照旧显示 ──
+  {
+    const store = PUB.createMemoryPublishedStore({ [fs.realpathSync(root)]: seededRecord() })
+    const res = await makeHost6(makeServer6({ project: 'offline' }), store)('work/mine', {})
+    assertEq(res.value.items[0].published?.projectId, 'srv-9', '读不到 ≠ 服务器上没有：保留标记')
+    assertEq(store.all()[fs.realpathSync(root)].checkedAt, undefined, '核对失败不回写任何状态')
+  }
+
+  // ── 未登录 / 记录属于别的服务器：一个请求都不发 ──
+  {
+    const store = PUB.createMemoryPublishedStore({ [fs.realpathSync(root)]: seededRecord() })
+    const server = makeServer6({ project: 'PUBLISHED' })
+    const res = await makeHost6(server, store, { withKey: false })('work/mine', {})
+    assertEq(res.value.items[0].published?.projectId, 'srv-9', '没有凭据时按本地记录显示')
+    assertEq(server.calls.length, 0, '没有凭据就不联网（离线也不会更慢）')
+
+    const other = PUB.createMemoryPublishedStore({
+      [fs.realpathSync(root)]: seededRecord({ serverUrl: 'https://convfusion.com' }),
+    })
+    const server2 = makeServer6({ project: 'PUBLISHED' })
+    await makeHost6(server2, other)('work/mine', {})
+    assertEq(server2.calls.length, 0, '记录属于别的服务器 → 不去当前服务器上核对')
+  }
+
+  // ── 【可指导】列表里出现的项目：命中的本地记录刷新为 PUBLISHED ──
+  {
+    const store = PUB.createMemoryPublishedStore({ [fs.realpathSync(root)]: seededRecord() })
+    const server = makeServer6({
+      project: 'PUBLISHED',
+      listItems: [
+        { project_id: 'srv-9', title: '核对项目', stage: 'ANALYSIS', progress: 0.4, updated_at: '' },
+        { project_id: 'other', title: '别人的', stage: 'IDEA', progress: 0.1, updated_at: '' },
+      ],
+    })
+    const res = await makeHost6(server, store)('work/list', {})
+    assert(res.ok, 'work/list 可用')
+    assertEq(res.value.items.length, 2, '列表来自服务器')
+    assertEq(
+      store.all()[fs.realpathSync(root)].serverVisibility,
+      'PUBLISHED',
+      '命中的本地记录被服务器的可见性刷新',
+    )
+  }
+
+  fs.rmSync(HOME6, { recursive: true, force: true })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
  * 7. 凭据纪律：把**所有**端点的返回值扫一遍
  * ════════════════════════════════════════════════════════════════════════ */
 section('[7] 凭据纪律：任何端点的返回值都不含明文 Key')

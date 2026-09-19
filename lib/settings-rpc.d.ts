@@ -77,6 +77,7 @@ import type { Config } from './config.js';
 import { type SecretField } from './config.js';
 import { type FetchLike, type TokenBalance } from './server-client.js';
 import type { ProgressCountRow } from './research/progress.js';
+import { type PublishedStore } from './research/published-store.js';
 /**
  * 设置面的 HTTP 路由前缀（客户端必须用同一个）。
  *
@@ -206,6 +207,22 @@ export interface LocalWorkItem {
     clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown';
     /** 注册表最近一次变更时刻（ISO）。 */
     updatedAt: string;
+    /**
+     * 是否**在网络上可见**（`visibility = PUBLISHED`）。
+     *
+     * ⚠️ 判据是**服务器**（`GET /projects/{id}`），不是本地映射：本地记录只说明"我传过"，
+     * 服务器删项目或取消发布时它不会自己更新。核对不通（离线/未登录）时退回本地记录，
+     * 因为"读不到"不等于"服务器上没有"。
+     */
+    published: {
+        projectId: string;
+        version: number;
+        updatedAt: string;
+        /** 记录属于哪台服务器（与当前生效地址不一致时界面要提示）。 */
+        serverUrl: string;
+        /** 记录属于哪个账号。 */
+        accountId: string;
+    } | null;
 }
 /** 服务器上的账号（`GET /api/v1/auth/me`）。**不含任何凭据。** */
 export interface AccountWire {
@@ -383,6 +400,12 @@ export interface SettingsRpcDeps {
     /** 服务器请求超时（测试用小值）。 */
     serverTimeoutMs?: number;
     /**
+     * 「本机研究工作 ↔ 服务器项目」的映射存储。
+     *
+     * 缺省 = 内存表（重启即失，只用于精简环境/测试）——真正的落盘由插件入口注入。
+     */
+    publishedStore?: PublishedStore;
+    /**
      * 本机**工作区注册表**里的条目（DSH `ctx.workspaceRegistry.list()` 的投影）。
      *
      * 用于【研究工作 · 我的】：只列**含有效 research workspace** 的工作区
@@ -422,6 +445,8 @@ export interface SettingsRpcDeps {
  * | `account/logout` | `{}` | 清除凭据（账号信息随之消失） |
  * | `account/tokens` | `{}` | 重新读 Token 余额（登录后显示 / 花完 Token 后刷新） |
  * | `work/mine` | `{}` | **本机**研究工作（有效研究项目的工作区；不联网、不需登录） |
+ * | `work/uploadPlan` | `{ id }` | 发布前的**上传计划**（分类/体积/默认选择）+ 用量与配额 |
+ * | `work/publish` | `{ id, selection?, remember? }` | 发布：建项目 → 传状态 → **传附件** → 发布 |
  * | `work/list` | `{}` | 研究网络里已公开的研究工作（需登录；条数由服务器定） |
  * | `work/summary` | `{ projectId }` | 一项研究工作的摘要（免费） |
  * | `work/brief` | `{ projectId, intentKey }` | 一项研究工作的简报（非 owner 花 1 Token） |

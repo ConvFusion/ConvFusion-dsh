@@ -43,7 +43,11 @@ export type FetchLike = (
   init?: {
     method?: string
     headers?: Record<string, string>
-    body?: string
+    /**
+     * 请求体。`FormData` 用于附件上传（multipart）——那时**不能**自己设
+     * `content-type`，边界串由运行时生成。
+     */
+    body?: string | FormData
     signal?: AbortSignal
   },
 ) => Promise<{
@@ -160,6 +164,8 @@ export type ServerErrorCode =
   | 'no-relationship'
   | 'not-found'
   | 'idempotency-reused'
+  /** 409：研究状态乐观锁冲突（`details.current_version` 是服务端最新版本）。 */
+  | 'version-conflict'
 
 /** 带分类的服务器错误。`message` **已经是可直接展示的中文**。 */
 export class ServerError extends Error {
@@ -174,6 +180,8 @@ export class ServerError extends Error {
   readonly requiredTokens?: number
   /** 402 的 `details.available`（当前可用多少 Token）。 */
   readonly availableTokens?: number
+  /** 409 STATE_VERSION_CONFLICT 的 `details.current_version`（重基时用它）。 */
+  readonly currentVersion?: number
 
   constructor(
     code: ServerErrorCode,
@@ -184,6 +192,7 @@ export class ServerError extends Error {
       retryAfterSeconds?: number
       requiredTokens?: number
       availableTokens?: number
+      currentVersion?: number
     } = {},
   ) {
     super(message)
@@ -194,6 +203,7 @@ export class ServerError extends Error {
     this.retryAfterSeconds = extra.retryAfterSeconds
     this.requiredTokens = extra.requiredTokens
     this.availableTokens = extra.availableTokens
+    this.currentVersion = extra.currentVersion
   }
 }
 
@@ -236,6 +246,10 @@ export function normalizeBaseUrl(raw: string): string {
   path = path.replace(/\/api\/v1$/, '').replace(/\/api$/, '').replace(/\/docs$/, '')
   path = path.replace(/\/+$/, '')
   return `${url.origin}${path}`
+}
+
+function apiBase(base: string): string {
+  return `${normalizeBaseUrl(base)}${SERVER_API_PREFIX}`
 }
 
 /** 拼一个 API 路径（`/auth/me` → `http://host/api/v1/auth/me`）。 */
@@ -375,6 +389,15 @@ function mapHttpError(status: number, body: unknown): ServerError {
         ...withCode,
         serverCode,
       })
+    }
+    if (serverCode === 'STATE_VERSION_CONFLICT') {
+      const details = errorBodyDetails(body)
+      const current = typeof details.current_version === 'number' ? details.current_version : undefined
+      return new ServerError(
+        'version-conflict',
+        '研究状态已被更新（版本冲突）。请基于最新版本重试。',
+        { ...withCode, ...(current === undefined ? {} : { currentVersion: current }) },
+      )
     }
     if (serverCode === 'IDEMPOTENCY_KEY_REUSED') {
       return new ServerError(
@@ -581,6 +604,344 @@ export async function fetchTokenBalance(
     frozen,
     // 服务器会给 total；真缺了就自己加，但服务器给的值优先
     total: b.total_balance === undefined ? available + frozen : asNumber(b.total_balance),
+  }
+}
+
+/**
+ * 用量与配额（`GET /api/v1/usage`）。
+ *
+ * 发布前要同时回答两个问题：**这次要花多少 Token**、**还装得下多少字节**。
+ * 服务器一次调用就都给出来（`services/quota.py` 的 `UsageService.snapshot`）。
+ */
+export interface ServerUsage {
+  /** 下一个项目发布要花的 Token（1–3 个=1、4–6 个=2…，已付费项目重复发布免费）。 */
+  nextPublishCost: number
+  /** 已付费（曾经发布过）的项目数。 */
+  paidProjects: number
+  /** 项目层级（阶梯号）。 */
+  tier: number
+  storage: {
+    usedBytes: number
+    capacityBytes: number
+    availableBytes: number
+    /** 每 N 字节 1 Token（扩容单价的分母）。 */
+    bytesPerToken: number
+  }
+}
+
+/** 读用量与配额。**失败时返回 null**（调用方按"未知"展示，不阻塞发布）。 */
+export async function fetchUsage(
+  base: string,
+  apiKey: string,
+  options: ServerRequestOptions = {},
+): Promise<ServerUsage | null> {
+  const key = requireKey(apiKey)
+  try {
+    const body = await requestJson(base, '/usage', { method: 'GET', apiKey: key }, options, '用量与配额')
+    const root = asObject(body, '用量与配额')
+    const projects = asObject(root.projects, '项目用量')
+    const storage = asObject(root.storage, '存储用量')
+    return {
+      nextPublishCost: asNumber(projects.next_publish_cost, 0),
+      paidProjects: asNumber(projects.paid_alive, 0),
+      tier: asNumber(projects.tier, 1),
+      storage: {
+        usedBytes: asNumber(storage.used_bytes, 0),
+        capacityBytes: asNumber(storage.capacity_bytes, 0),
+        availableBytes: asNumber(storage.available_bytes, 0),
+        bytesPerToken: asNumber(storage.bytes_per_token, 0),
+      },
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 上传附件（`POST /projects/{id}/files`，multipart）。
+ *
+ * ⚠️ 三条服务器事实决定了这里的写法：
+ *
+ * 1. **不去重**：同一路径重复上传 = 新行 + 新字节。所以调用方必须先算好
+ *    "哪些文件变了"（内容 sha256），这里只管把给定文件传上去。
+ * 2. **一次 ≤20 个文件 / ≤200 MB**：批量切分由 `planUploadBatches` 负责。
+ * 3. `relative_paths` 与 `files` **按下标对齐**，是服务器还原目录树的依据。
+ *
+ * @returns 服务器为每个文件返回的元数据（含 `size` 与 `sha256`，可用于更新本地指纹）
+ */
+export interface UploadedFile {
+  id: string
+  relativePath: string
+  size: number
+  sha256: string
+}
+
+export async function uploadProjectFiles(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  files: ReadonlyArray<{ relPath: string; bytes: Uint8Array }>,
+  options: { stateVersion?: number } & ServerRequestOptions = {},
+): Promise<UploadedFile[]> {
+  const { stateVersion, fetchImpl: fetchOption, timeoutMs } = options
+  const key = requireKey(apiKey)
+  const id = (projectId ?? '').trim()
+  if (!id) throw new ServerError('bad-request', '缺少 projectId。')
+  if (files.length === 0) return []
+  const fetchImpl = fetchOption ?? (globalThis.fetch as unknown as FetchLike | undefined)
+  if (typeof fetchImpl !== 'function') throw new ServerError('unreachable', '当前运行环境没有可用的 fetch。')
+
+  const form = new FormData()
+  for (const f of files) {
+    const name = f.relPath.slice(f.relPath.lastIndexOf('/') + 1)
+    // ⚠️ 必须转成 `ArrayBuffer`：`Buffer`/`Uint8Array<ArrayBufferLike>` 在 TS 里
+    // 不能直接当 `BlobPart`（`SharedArrayBuffer` 的可能性），运行期也会被拒。
+    const view = f.bytes
+    const buf = view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength) as ArrayBuffer
+    form.append('files', new Blob([buf]), name)
+    form.append('relative_paths', f.relPath)
+  }
+  if (stateVersion !== undefined) form.append('state_version', String(stateVersion))
+
+  const timeout = timeoutMs ?? SERVER_TIMEOUT_MS
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new ServerError('unreachable', `上传附件到 ${base} 超时（${Math.round(timeout / 1000)} 秒）。`))
+    }, timeout)
+  })
+  let res: Awaited<ReturnType<FetchLike>>
+  try {
+    res = await Promise.race([
+      fetchImpl(`${apiBase(base)}/projects/${encodeURIComponent(id)}/files`, {
+        method: 'POST',
+        // ⚠️ 不设 content-type：multipart 的 boundary 由运行时生成
+        headers: { authorization: `Bearer ${key}` },
+        body: form,
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ])
+  } catch (e) {
+    if (e instanceof ServerError) throw e
+    throw new ServerError(
+      'unreachable',
+      `上传附件失败：${e instanceof Error ? e.message : String(e)}`,
+    )
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  if (!res.ok) throw mapHttpError(res.status, body)
+  if (!Array.isArray(body)) throw new ServerError('bad-response', '附件上传的响应不是数组。')
+  return body.map((raw) => {
+    const b = asObject(raw, '附件元数据')
+    return {
+      id: asString(b.id),
+      relativePath: asString(b.relative_path),
+      size: asNumber(b.size, 0),
+      sha256: asString(b.sha256),
+    }
+  })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 发布自己的研究（Create → Upload → Publish）
+ *
+ * 对应 `ConvFusion-server/docs/projects.md`：
+ *
+ * ```text
+ * ① POST /projects                     建项目（恒为 PRIVATE，不自动建 State）
+ * ② POST /projects/{id}/state          首传 base_version=null → v1（后续必须等于当前版本）
+ * ③ POST /projects/{id}/publish        visibility = PUBLISHED（幂等）
+ * ```
+ *
+ * ⚠️ 文档明确警告：**不要发布没有状态的项目**（会在网络里产生空卡片），
+ * 所以本模块把「上传 → 发布」当成一次操作，调用方不该只调 publish。
+ * ⚠️ 已发布项目再上传状态，发现页**自动**反映最新版本 —— 不需要重新发布。
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** 服务器上的 Research Project（元数据）。 */
+export interface ServerProject {
+  id: string
+  title: string
+  description: string | null
+  status: string
+  visibility: string
+  updatedAt: string
+}
+
+/** 上传研究状态的入参（`content` 是服务器的内容 Envelope，见 API.md §9.1）。 */
+export interface UploadStateInput {
+  /** `null` = 首传；否则必须等于服务端当前版本号。 */
+  baseVersion: number | null
+  content: Record<string, unknown>
+  /** 一次「保存意图」一个 key；重试复用，payload 变了必须换新 key。 */
+  intentKey: string
+}
+
+function parseProject(raw: unknown): ServerProject {
+  const b = asObject(raw, '研究项目')
+  const id = asString(b.id)
+  if (!id) throw new ServerError('bad-response', '研究项目缺少 id 字段。')
+  return {
+    id,
+    title: asString(b.title),
+    description: asString(b.description) || null,
+    status: asString(b.status) || 'ACTIVE',
+    visibility: asString(b.visibility) || 'PRIVATE',
+    updatedAt: asString(b.updated_at),
+  }
+}
+
+/** 建项目（恒为 PRIVATE；此时还没有 State）。 */
+export async function createProject(
+  base: string,
+  apiKey: string,
+  input: { title: string; description?: string },
+  options: ServerRequestOptions = {},
+): Promise<ServerProject> {
+  const key = requireKey(apiKey)
+  const title = (input.title ?? '').trim()
+  if (!title) throw new ServerError('bad-request', '项目标题不能为空。')
+  const body = await requestJson(
+    base,
+    '/projects',
+    {
+      method: 'POST',
+      apiKey: key,
+      body: { title, ...(input.description ? { description: input.description } : {}) },
+    },
+    options,
+    '建项目',
+  )
+  return parseProject(body)
+}
+
+/** 读一台自己的项目（owner-only；非 owner 或已删除 → 404 `not-found`）。 */
+export async function fetchProject(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  options: ServerRequestOptions = {},
+): Promise<ServerProject> {
+  const key = requireKey(apiKey)
+  const id = (projectId ?? '').trim()
+  if (!id) throw new ServerError('bad-request', '缺少 projectId。')
+  const body = await requestJson(
+    base,
+    `/projects/${encodeURIComponent(id)}`,
+    { method: 'GET', apiKey: key },
+    options,
+    '读取项目',
+  )
+  return parseProject(body)
+}
+
+/** 读当前研究状态的版本号；项目还没有状态时返回 `null`（服务器 404）。 */
+export async function readStateVersion(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  options: ServerRequestOptions = {},
+): Promise<number | null> {
+  const key = requireKey(apiKey)
+  const id = (projectId ?? '').trim()
+  if (!id) throw new ServerError('bad-request', '缺少 projectId。')
+  try {
+    const body = await requestJson(
+      base,
+      `/projects/${encodeURIComponent(id)}/state`,
+      { method: 'GET', apiKey: key },
+      options,
+      '读取研究状态',
+    )
+    const version = asObject(body, '研究状态').version
+    return typeof version === 'number' ? version : null
+  } catch (e) {
+    // 还没有状态 → 服务器 404；这不是错误，而是"该用 base_version=null 首传"
+    if (e instanceof ServerError && e.code === 'not-found') return null
+    throw e
+  }
+}
+
+/**
+ * 上传研究状态（新建一个不可变版本）。
+ *
+ * @returns 新版本号与内容哈希（哈希可用于判断"内容没变，不必再传"）
+ * @throws {ServerError} `version-conflict`（含 `currentVersion`，据此重基再传）
+ */
+export async function uploadResearchState(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  input: UploadStateInput,
+  options: ServerRequestOptions = {},
+): Promise<{ version: number; contentHash: string }> {
+  const key = requireKey(apiKey)
+  const id = (projectId ?? '').trim()
+  if (!id) throw new ServerError('bad-request', '缺少 projectId。')
+  const intentKey = (input.intentKey ?? '').trim()
+  if (!intentKey) throw new ServerError('bad-request', '缺少幂等键（intentKey）。')
+  const body = await requestJson(
+    base,
+    `/projects/${encodeURIComponent(id)}/state`,
+    {
+      method: 'POST',
+      apiKey: key,
+      idempotencyKey: intentKey,
+      body: { base_version: input.baseVersion, content: input.content },
+    },
+    options,
+    '上传研究状态',
+  )
+  const b = asObject(body, '研究状态')
+  const version = typeof b.version === 'number' ? b.version : null
+  if (version === null) throw new ServerError('bad-response', '上传研究状态后没有返回版本号。')
+  return { version, contentHash: asString(b.content_hash) }
+}
+
+/**
+ * 发布项目。
+ *
+ * ⚠️ **发布是要花钱的**：服务器对每个项目**收一次** Token，按"已付费项目数"阶梯计价
+ * （第 1–3 个各 1 Token、第 4–6 个各 2 …，见 `PROJECT_TIER_BASE_COST` / `PROJECTS_PER_TIER`），
+ * 已付费的项目**重复发布免费**。响应里的 `charged_tokens` 就是本次真实扣费。
+ *
+ * 因此必须带 `Idempotency-Key`（服务器文档明确要求）：同一次发布意图重试时复用同一个键，
+ * 响应丢失后的重试不会造成第二笔扣费。
+ *
+ * @returns `visibility` 与本次扣费（`chargedTokens`，0 = 该项目此前已付费）
+ */
+export async function publishProject(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  options: { intentKey?: string } & ServerRequestOptions = {},
+): Promise<{ visibility: string; chargedTokens: number }> {
+  const { intentKey, ...net } = options
+  const key = requireKey(apiKey)
+  const id = (projectId ?? '').trim()
+  if (!id) throw new ServerError('bad-request', '缺少 projectId。')
+  const body = await requestJson(
+    base,
+    `/projects/${encodeURIComponent(id)}/publish`,
+    { method: 'POST', apiKey: key, ...(intentKey ? { idempotencyKey: intentKey } : {}) },
+    net,
+    '发布项目',
+  )
+  const parsed = asObject(body, '发布结果')
+  return {
+    visibility: asString(parsed.visibility) || 'PUBLISHED',
+    chargedTokens: typeof parsed.charged_tokens === 'number' ? parsed.charged_tokens : 0,
   }
 }
 

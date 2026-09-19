@@ -35,7 +35,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import {
   Config,
   OPENALEX_API_KEY_ENV,
@@ -50,6 +50,7 @@ import {
   normalizeWorkspaceEntities,
 } from './settings-rpc.js'
 import { createFileCustomizationStore } from './research/skill-customization.js'
+import { createFilePublishedStore } from './research/published-store.js'
 import { systemLibraryStatus } from './research/skill-customization.js'
 import { ResearchContextService } from './research/context.js'
 import { mountEventBridge, type ResearchEventBridge } from './research/runtime-events.js'
@@ -187,6 +188,15 @@ export function apply(ctx: Context, rawConfig: Partial<ConfigShape> = {}): void 
   // store 的路径解析是**延迟求值**的：每次读写都按当时生效的文件名解析。
   const customizationStore = createFileCustomizationStore(() =>
     resolveCustomizationPath(currentConfig()),
+  )
+  /**
+   * 「本机研究工作 ↔ 服务器项目」映射（发布过一次才写一行）。
+   *
+   * 与 Skill 定制同一个目录（都由 `config.ts` 解析），文件名固定：它记录的是
+   * **(本机, 本账号, 哪台服务器)** 下的 project_id，不属于研究内容，故不进工作区。
+   */
+  const publishedStore = createFilePublishedStore(() =>
+    join(dirname(resolveCustomizationPath(currentConfig())), 'published-projects.json'),
   )
   ctx.logger?.info(
     `[convfusion] user customizations: ${customizationStore.description}` +
@@ -455,6 +465,8 @@ export function apply(ctx: Context, rawConfig: Partial<ConfigShape> = {}): void 
     const handler = createSettingsRouteHandler({
       getConfig: currentConfig,
       store: customizationStore,
+      // 发布映射（落盘）：同一工作区只建一个服务器项目
+      publishedStore,
       // 注册表读取放在这里（入口持有 ctx），过滤与进度计算在 settings-rpc 里
       /**
        * 读宿主的工作区注册表并归一成纯数据（**与 dsh-additive 的 `listWorkspaces` 同款做法**：

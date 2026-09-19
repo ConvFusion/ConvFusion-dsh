@@ -267,7 +267,11 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
     if (zhSnippet) assert(zhDict.includes(zhSnippet), `${label}：中文文案「${zhSnippet}」`)
     if (enSnippet) assert(enDict.includes(enSnippet), `${label}：英文文案`)
   }
-  const community = src.slice(src.indexOf('function CommunityTab('), src.indexOf('function SystemTab('))
+  // ⚠️ 切片从 `PublishDialog` 开始：对话框组件定义在 CommunityTab **之前**，
+  // 只切 CommunityTab 会让"对话框不显示排除项"这类断言看不到实现（第一版就漏了）。
+  const community = src.slice(src.indexOf('function PublishDialog('), src.indexOf('function SystemTab('))
+  /** Tab 本体（不含对话框）：版式类断言只看它。 */
+  const tabBody = src.slice(src.indexOf('function CommunityTab('), src.indexOf('function SystemTab('))
   // 登录的两条入口（次要入口折叠）
   dictHas('community.login.keyLabel', 'API Key 登录', 'Sign in with API key', 'API Key 登录入口')
   dictHas('community.action.inviteShow', '使用邀请码注册', 'Register with an invitation', '邀请码注册入口')
@@ -288,7 +292,7 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   //
   // 反馈原文：① API Key 登录 + ② 邀请码注册 各占一大片，"面积大、体验不好"。
   // 要求：未登录只显示必须的登录项；登录之后**同一张卡片**显示用户信息。
-  const cardHeads = (community.match(/S\.cardHead/g) ?? []).length
+  const cardHeads = (tabBody.match(/S\.cardHead/g) ?? []).length
   assert(cardHeads <= 2, `ConvFusion.com 最多两张卡片（用户信息卡 + 研究工作卡），实际 ${cardHeads}`)
   assert(/S\.miniTabs/.test(community) && /<MiniTab/.test(community), '用户信息区用内部 Tabs（账号 / 服务器设置）')
   dictHas('community.tab.server', '服务器设置', 'Server', '第二个内部 Tab')
@@ -297,9 +301,9 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   assert(/inviteOpen/.test(community) && /setInviteOpen/.test(community), '邀请码注册是折叠的次要入口')
   assert(/community\.action\.inviteHide/.test(community), '展开后可收起邀请码注册')
   // 已登录 / 未登录两个分支必须在**同一张卡片**里（以卡片边界判定，不靠字符串先后）
-  const firstHead = community.indexOf('S.cardHead')
-  const secondHead = community.indexOf('S.cardHead', firstHead + 1)
-  const firstCard = community.slice(firstHead, secondHead === -1 ? undefined : secondHead)
+  const firstHead = tabBody.indexOf('S.cardHead')
+  const secondHead = tabBody.indexOf('S.cardHead', firstHead + 1)
+  const firstCard = tabBody.slice(firstHead, secondHead === -1 ? undefined : secondHead)
   assert(/community\.login\.keyLabel/.test(firstCard), '登录表单在第一张卡片内')
   assert(/S\.accountName/.test(firstCard), '账号信息和登录表单在同一张卡片（登录后同一个位置）')
 
@@ -336,6 +340,72 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   // 未登录分支的示例行必须整行禁用
   const sampleIdx = community.indexOf('SAMPLE_WORKS.map')
   assert(sampleIdx > -1 && /disabled/.test(community.slice(sampleIdx, sampleIdx + 1200)), '示例行按钮禁用')
+
+  // ── 「寻找指导」= 发布本机研究（2026-09 用户定稿）────────────────────────
+  //
+  // 用户的点法：在【我的】列表里点**这一项**的「寻找指导」——**只有点了才上传**。
+  assert(/work\/publish/.test(community), '「寻找指导」走 work/publish（点了才发布）')
+  assert(/doPublish/.test(community) && /openPublish/.test(community), '有发布动作（openPublish → 对话框 → doPublish）')
+  dictHas('community.action.seekMentor', '寻找指导', 'Find a mentor', '「寻找指导」按钮')
+  dictHas('community.action.republish', '更新', 'Update', '已发布后按钮变「更新」')
+  dictHas('community.badge.inNetwork', '已在网络中', 'On the network', '已发布标记')
+  dictHas('community.notice.published', '{title} · 研究状态 v{version}', '{title} · state v{version}', '发布成功回执（一行式）')
+  // 「已发布」徽章保留（用户要求）：成功显示徽章，失败显示错误码
+  assert(
+    /publishNotice\.tone === 'success' \? 'success' : 'error'/.test(community) &&
+      /publishNotice\.tone === 'success'[\s\S]{0,120}community\.badge\.published/.test(community),
+    '成功回执保留「已发布」徽章（失败显示错误码）',
+  )
+  assert(
+    !/'community\.notice\.published', \{ title: w\.title, version[^}]*\}[^\n]*已发布/.test(community) &&
+      !/已发布 · \{title\}/.test(zhDict),
+    '文案里不重复写"已发布"（由徽章承载）',
+  )
+  dictHas('community.hint.publishMissing', '网络上暂时看不到', 'not visible on the network', '缺字段时如实说明')
+  // 未登录不能发布：按钮禁用 + 悬浮提示说明原因（不是点了没反应）
+  assert(/disabled=\{!account \|\| publishing !== null/.test(community), '未登录 / 发布中时按钮禁用')
+  dictHas('community.tip.publishNeedSignIn', '先登录 ConvFusion.com', 'Sign in to ConvFusion.com before publishing', '未登录时的提示')
+  dictHas('community.tip.publish', '研究方法不会被上传', 'never uploaded', '发布只上传研究进展（方法留在本机）')
+
+  // ── 发布确认对话框（2026-09 用户定稿）──────────────────────────────────
+  //
+  // 用户的两条要求：① 让用户看到"推荐传什么"并能调整；② **机器产物（排除项）直接不显示**。
+  assert(/PublishDialog/.test(community), '有发布确认对话框')
+  assert(/work\/uploadPlan/.test(community), '对话框的数据来自 work/uploadPlan')
+  assert(
+    /decision !== 'excluded'/.test(community),
+    '对话框**不显示** exclude 分类（机器产物不出现在界面上）',
+  )
+  assert(/onToggleCategory/.test(community) && /onToggleFile/.test(community), '可按分类勾选，也可逐文件调整')
+  assert(/indeterminate/.test(community), '分类半选状态正确（三态）')
+  assert(/formatBytes/.test(community), '显示人类可读的体积')
+  assert(/maxFilesPerRequest/.test(community) && /batches/.test(community), '显示批次数（服务器 20 个/次）')
+  assert(/sizing|oversizeSelected/.test(community) && /maxFileBytes/.test(community), '超单文件上限的文件标出来')
+  assert(/nextPublishCost/.test(community), '显示发布成本（发布要花 Token）')
+  assert(/\.storage/.test(community) && /availableBytes/.test(community), '显示存储余量（免费额度 1 GB）')
+  assert(/dialog\.remember/.test(community) && /onRemember/.test(community), '「记住这次选择」可选')
+  // 无变化 + 已记住选择 → 直接更新（不弹窗）
+  assert(/data\.changed\.length === 0/.test(community), '内容无变化时不打扰用户，直接更新')
+  // 标题栏直接带工作区名（不再重复 ConvFusion.com），标题下方那行已删除
+  dictHas('community.publish.title', '发布 {title}', 'Publish {title}', '对话框标题（带工作区名）')
+  assert(
+    /community\.publish\.title', \{ title: data\.title \}/.test(community),
+    '标题栏用工作区名渲染',
+  )
+  assert(
+    !/\{data\.title\}<\/div>/.test(community),
+    '标题下方不再重复一行工作区名（省界面空间）',
+  )
+  dictHas('community.publish.remember', '记住这次选择', 'Remember this selection', '记住选择')
+  dictHas('community.publish.cost', '花费 {tokens} Token : ConvFusion.com', 'Token : ConvFusion.com', '成本徽章文案')
+  dictHas('upload.category.literature-fulltext', '文献原文', 'Literature full texts', '分类标签（可选类）')
+  dictHas('upload.reason.literature-fulltext', '别人的论文原文', 'not uploaded by default', '分类理由（说清为什么默认不传）')
+  dictHas('upload.reason.research-assets', '证据', 'Evidence', '研究资产的理由')
+  // 回执一行说完：已发布 · <名称> · 研究状态 vN · N Token · N 附件（没有的不写）
+  dictHas('community.notice.published', '{title} · 研究状态 v{version}', '{title} · state v{version}', '发布回执（带名称与版本）')
+  dictHas('community.notice.tokens', '{tokens} Token', '{tokens} Token', '回执里的扣费片段')
+  dictHas('community.notice.files', '{count} 附件', 'attachment', '回执里的附件片段')
+  assert(/bits\.join\(' · '\)/.test(community), '回执由片段拼成一行（不是多句啰嗦话）')
 
   // ── 文案纪律：设置页**不放常驻的产品说明**（2026-09 用户要求）──────────────
   //

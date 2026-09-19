@@ -1241,9 +1241,59 @@ interface HostLocalWork {
   overall: number
   /** 可数资产：稳定 key + 计数 + 结构化 detail。 */
   counts: Array<{ key: string; value: number; detail?: { code: string; count: number } }>
+  /** 已发布到 ConvFusion.com 的本地记录（读本地映射；null = 还没发布过）。 */
+  published: {
+    projectId: string
+    version: number
+    updatedAt: string
+    serverUrl: string
+    accountId: string
+  } | null
   paper: boolean
   clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown'
   updatedAt: string
+}
+
+/**
+ * 发布对话框的数据（宿主 `work/uploadPlan` 的镜像）。
+ *
+ * ⚠️ `plan.categories` 里含 `excluded`（机器产物），但界面**不显示**它们
+ * （2026-09 用户拍板：排除项直接不出现，不影响选择）。保留在数据里是为了对账。
+ */
+interface HostUploadPlan {
+  projectId: string
+  root: string
+  title: string
+  plan: {
+    categories: Array<{
+      id: string
+      decision: 'recommended' | 'optional' | 'excluded'
+      files: Array<{ relPath: string; size: number }>
+      bytes: number
+    }>
+    totals: {
+      allBytes: number
+      allFiles: number
+      recommendedBytes: number
+      recommendedFiles: number
+      optionalBytes: number
+      optionalFiles: number
+      excludedBytes: number
+      excludedFiles: number
+    }
+    limits: { maxFileBytes: number; maxFilesPerRequest: number; maxRequestBytes: number }
+    defaultSelection: string[]
+    oversize: Array<{ relPath: string; size: number }>
+    requestCount: number
+  }
+  selection: string[]
+  remembered: boolean
+  changed: string[]
+  unchangedCount: number
+  usage: {
+    nextPublishCost: number
+    storage: { usedBytes: number; capacityBytes: number; availableBytes: number }
+  } | null
 }
 
 /** 简报（宿主 `WorkBrief` 的镜像）：第二层，非 owner 花 1 Token。 */
@@ -1424,6 +1474,229 @@ function WorkDetail({
   )
 }
 
+/** 人类可读的体积（对话框里到处在用）。 */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+/**
+ * 发布确认对话框。
+ *
+ * ## 为什么必须有这一步
+ *
+ * 上传是**外部可见**的动作、**占服务器配额**（免费 1 GB）、而且**发布要花 Token**；
+ * 一个真实工作区 757 MB，其中真正该传的只有 4 MB。默认全传既浪费空间也把该看的埋掉。
+ *
+ * ## 交互（2026-09 用户定稿）
+ *
+ * ```text
+ * ┌ 发布到 ConvFusion.com ───────────────────────────────────────┐
+ * │ 项目名                        发布成本 1 Token（余额 999）     │
+ * │ 存储 本次 4.01 MB · 服务器可用 624 MB                          │
+ * │ ✅ 研究状态与计划   0.23 MB   21 项   [展开]                    │
+ * │ ✅ 论文与图表       0.97 MB   20 项   [展开]                    │
+ * │ ⬜ 文献原文 (PDF) 561.34 MB  434 项   默认不传：别人的论文        │
+ * │ ⬜ 文献抽取文本     2.28 MB   49 项                             │
+ * │ ☑ 记住这次选择            [取消]  [发布]                       │
+ * └──────────────────────────────────────────────────────────────┘
+ * ```
+ *
+ * - **排除项（机器产物）完全不显示**（用户拍板）：不参与选择，也不制造噪声；
+ * - 分类可整体勾选，也可展开到**逐文件**勾选（"允许调整"落到文件级）；
+ * - 体积/项数/成本/余量/批次数全部实算并显示；
+ * - 超过服务器单文件上限（100 MB）的文件**标出来说明传不上去**。
+ */
+function PublishDialog({
+  t,
+  data,
+  selection,
+  remember,
+  expanded,
+  busy,
+  onToggleCategory,
+  onToggleFile,
+  onToggleExpand,
+  onRemember,
+  onCancel,
+  onConfirm,
+}: {
+  t: Translate
+  data: HostUploadPlan
+  selection: ReadonlySet<string>
+  remember: boolean
+  expanded: ReadonlySet<string>
+  busy: boolean
+  onToggleCategory: (categoryId: string, files: string[], next: boolean) => void
+  onToggleFile: (relPath: string, next: boolean) => void
+  onToggleExpand: (categoryId: string) => void
+  onRemember: (next: boolean) => void
+  onCancel: () => void
+  onConfirm: () => void
+}): JSX.Element {
+  // 只显示**可选的**分类（recommended / optional）；excluded 完全不出现
+  const visible = data.plan.categories.filter((c) => c.decision !== 'excluded' && c.files.length > 0)
+  const selectedFiles = visible
+    .flatMap((c) => c.files.map((f) => f.relPath))
+    .filter((r) => selection.has(r))
+  const selectedBytes = visible
+    .flatMap((c) => c.files)
+    .filter((f) => selection.has(f.relPath))
+    .reduce((n, f) => n + f.size, 0)
+  const batches = Math.max(1, Math.ceil(selectedFiles.length / data.plan.limits.maxFilesPerRequest))
+  const storage = data.usage?.storage
+  const oversizeSelected = visible
+    .flatMap((c) => c.files)
+    .filter((f) => selection.has(f.relPath) && f.size > data.plan.limits.maxFileBytes)
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,.45)',
+        display: 'grid',
+        placeItems: 'center',
+        zIndex: 1000,
+        padding: 20,
+      }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        style={{
+          ...S.card,
+          width: 'min(760px, 96vw)',
+          maxHeight: '88vh',
+          overflow: 'auto',
+          background: 'var(--dsw-alias-bg-layer-1)',
+        }}
+      >
+        <div style={S.cardHead}>
+          {/* 标题直接带工作区名：不再重复写 ConvFusion.com，也省掉下面那行标题 */}
+          {t('community.publish.title', { title: data.title })}
+          <span style={{ flex: '1 1 auto' }} />
+          {data.usage ? (
+            <Badge tone={data.usage.nextPublishCost > 0 ? 'brand' : 'neutral'}>
+              {t('community.publish.cost', { tokens: data.usage.nextPublishCost })}
+            </Badge>
+          ) : (
+            <Badge tone="neutral">{t('community.publish.costUnknown')}</Badge>
+          )}
+        </div>
+        <div style={{ ...S.cardBody, gap: 12 }}>
+          <div style={S.hint}>
+            {t('community.publish.storage', {
+              selected: formatBytes(selectedBytes),
+              available: storage ? formatBytes(storage.availableBytes) : t('community.publish.unknown'),
+            })}
+            {data.changed.length > 0
+              ? ` · ${t('community.publish.changed', { count: data.changed.length })}`
+              : data.remembered
+                ? ` · ${t('community.publish.unchanged')}`
+                : ''}
+          </div>
+
+          <div style={S.list}>
+            {visible.map((cat, i) => {
+              const files = cat.files
+              const all = files.every((f) => selection.has(f.relPath))
+              const some = !all && files.some((f) => selection.has(f.relPath))
+              const isOpen = expanded.has(cat.id)
+              return (
+                <div
+                  key={cat.id}
+                  style={i === 0 ? undefined : { borderTop: '1px solid var(--dsw-alias-border-l1)' }}
+                >
+                  <div style={{ ...S.listRow, alignItems: 'flex-start' }}>
+                    <input
+                      type="checkbox"
+                      checked={all}
+                      ref={(el) => {
+                        if (el) el.indeterminate = some
+                      }}
+                      onChange={(e) => onToggleCategory(cat.id, files.map((f) => f.relPath), e.target.checked)}
+                      style={{ marginTop: 3 }}
+                    />
+                    <div style={{ minWidth: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <div style={S.listTitle}>
+                        {t(`upload.category.${cat.id}`)}
+                        <span style={{ ...S.hint, marginLeft: 8 }}>
+                          {formatBytes(cat.bytes)} · {files.length}
+                        </span>
+                      </div>
+                      <div style={S.hint}>{t(`upload.reason.${cat.id}`)}</div>
+                    </div>
+                    <button type="button" style={S.linkBtn} onClick={() => onToggleExpand(cat.id)}>
+                      {isOpen ? t('community.publish.collapse') : t('community.publish.expand')}
+                    </button>
+                  </div>
+                  {isOpen ? (
+                    <div style={{ maxHeight: 200, overflow: 'auto', padding: '4px 12px 10px 34px' }}>
+                      {files.map((f) => (
+                        <label
+                          key={f.relPath}
+                          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selection.has(f.relPath)}
+                            onChange={(e) => onToggleFile(f.relPath, e.target.checked)}
+                          />
+                          <span style={{ ...S.mono, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {f.relPath}
+                          </span>
+                          <span style={{ ...S.hint, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+                            {formatBytes(f.size)}
+                            {f.size > data.plan.limits.maxFileBytes ? ` ⚠ ${t('community.publish.tooLarge')}` : ''}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+
+          {oversizeSelected.length > 0 ? (
+            <div style={{ fontSize: 11.5, color: 'var(--dsw-alias-state-warn-primary)', lineHeight: 1.6 }}>
+              {t('community.publish.oversizeWarning', { count: oversizeSelected.length })}
+            </div>
+          ) : null}
+
+          <div style={S.footer}>
+            <span style={{ ...S.hint, marginRight: 'auto' }}>
+              {t('community.publish.summary', {
+                files: selectedFiles.length,
+                size: formatBytes(selectedBytes),
+                batches,
+              })}
+            </span>
+            <label style={{ ...S.hint, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="checkbox" checked={remember} onChange={(e) => onRemember(e.target.checked)} />
+              {t('community.publish.remember')}
+            </label>
+            <button type="button" style={S.ghostBtn} disabled={busy} onClick={onCancel}>
+              {t('community.action.cancel')}
+            </button>
+            <button
+              type="button"
+              style={{ ...S.primaryBtn, opacity: busy ? 0.55 : 1 }}
+              disabled={busy}
+              onClick={onConfirm}
+            >
+              {busy ? t('community.action.publishing') : t('community.publish.confirm')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function CommunityTab({
   send,
   initial,
@@ -1464,6 +1737,21 @@ function CommunityTab({
   const [mineError, setMineError] = React.useState<{ code: string; message: string } | null>(null)
   /** 工作区注册表是否可用（不可用 = 读不到，而不是没有）。 */
   const [mineRegistry, setMineRegistry] = React.useState<{ available: boolean; reason?: string } | null>(null)
+  /** 正在发布的那一项（本机工作区 id）。 */
+  const [publishing, setPublishing] = React.useState<string | null>(null)
+  /** 发布结果 / 失败（只在业务发生时出现）。 */
+  const [publishNotice, setPublishNotice] = React.useState<
+    { tone: 'success' | 'error'; code?: string; text: string; missing?: string[] } | null
+  >(null)
+  /** 发布确认对话框（点「寻找指导」/「更新」时打开）。 */
+  const [dialog, setDialog] = React.useState<{
+    work: HostLocalWork
+    data: HostUploadPlan
+    selection: Set<string>
+    remember: boolean
+    expanded: Set<string>
+  } | null>(null)
+  const [dialogLoading, setDialogLoading] = React.useState<string | null>(null)
   const [works, setWorks] = React.useState<HostWork[] | null>(null)
   const [worksLoading, setWorksLoading] = React.useState(false)
   const [worksError, setWorksError] = React.useState<{ code: string; message: string } | null>(null)
@@ -1652,6 +1940,93 @@ function CommunityTab({
   React.useEffect(() => {
     void loadMine()
   }, [loadMine])
+
+  /**
+   * 点「寻找指导」/「更新」：**先取上传计划**，再决定是直接更新还是弹对话框。
+   *
+   * - 从未发布过 → 一定弹（用户要看到"传什么、多少、花几个 Token"）；
+   * - 已发布且**没有变化** → 直接更新（配置被记住时），只给一条回执；
+   * - 已发布但**有变化** → 弹，并标出本次会更新哪些文件。
+   */
+  const openPublish = async (w: HostLocalWork): Promise<void> => {
+    setDialogLoading(w.id)
+    setPublishNotice(null)
+    const res = await post('work/uploadPlan', { id: w.id })
+    setDialogLoading(null)
+    if (!res.ok) {
+      const staleHost = res.error?.code === 'unknown-endpoint'
+      setPublishNotice({
+        tone: 'error',
+        code: staleHost ? 'host-restart' : (res.error?.code ?? 'unknown'),
+        text: staleHost ? t('community.error.hostRestart') : (res.error?.message ?? t('community.error.publish')),
+      })
+      return
+    }
+    const data = res.value as HostUploadPlan
+    // 已发布 + 记住过选择 + 内容没有变化 → 不打扰用户，直接更新
+    if (w.published && data.remembered && data.changed.length === 0 && data.selection.length > 0) {
+      await doPublish(w, data.selection, true)
+      return
+    }
+    setDialog({
+      work: w,
+      data,
+      selection: new Set(data.selection),
+      remember: true,
+      expanded: new Set(),
+    })
+  }
+
+  /** 真正执行发布（对话框确认后 / 无变化直接更新时）。 */
+  const doPublish = async (w: HostLocalWork, selection: string[], remember: boolean): Promise<void> => {
+    setPublishing(w.id)
+    setPublishNotice(null)
+    const res = await post('work/publish', { id: w.id, selection, remember })
+    setPublishing(null)
+    if (!res.ok) {
+      const staleHost = res.error?.code === 'unknown-endpoint'
+      setPublishNotice({
+        tone: 'error',
+        code: staleHost ? 'host-restart' : (res.error?.code ?? 'unknown'),
+        text: staleHost ? t('community.error.hostRestart') : (res.error?.message ?? t('community.error.publish')),
+      })
+      return
+    }
+    const value = res.value as {
+      published: { version: number; created: boolean; chargedTokens: number }
+      attachments?: { selected: number; uploaded: number; uploadedBytes: number; skippedExisting: number; oversize: Array<{ relPath: string }> }
+      missing?: string[]
+    }
+    /**
+     * 回执**一行说完**（2026-09 用户要求：不要啰嗦）：
+     *
+     * ```text
+     * 已发布 · ConvFusion-dsh · 研究状态 v1 · 1 Token · 50 附件
+     * ```
+     *
+     * 只报**真实发生的事**：没扣费（重复发布免费）就不写 Token，没有新附件就不写附件；
+     * 超限未传是警告，必须写出来。
+     */
+    const bits: string[] = [
+      t('community.notice.published', { title: w.title, version: value.published.version }),
+    ]
+    if (value.published.chargedTokens > 0) {
+      bits.push(t('community.notice.tokens', { tokens: value.published.chargedTokens }))
+    }
+    if (value.attachments && value.attachments.uploaded > 0) {
+      bits.push(t('community.notice.files', { count: value.attachments.uploaded }))
+    }
+    if (value.attachments && value.attachments.oversize.length > 0) {
+      bits.push(t('community.notice.oversize', { count: value.attachments.oversize.length }))
+    }
+    setPublishNotice({
+      tone: 'success',
+      text: bits.join(' · '),
+      ...(value.missing && value.missing.length ? { missing: value.missing } : {}),
+    })
+    setDialog(null)
+    await loadMine()
+  }
 
   React.useEffect(() => {
     if (!account) {
@@ -2041,6 +2416,53 @@ function CommunityTab({
         </div>
       </div>
 
+      {/* ══ 发布确认对话框（点「寻找指导」/「更新」时出现）═════════════════ */}
+      {dialog ? (
+        <PublishDialog
+          t={t}
+          data={dialog.data}
+          selection={dialog.selection}
+          remember={dialog.remember}
+          expanded={dialog.expanded}
+          busy={publishing !== null}
+          onToggleCategory={(categoryId, files, next) =>
+            setDialog((d) => {
+              if (!d) return d
+              const sel = new Set(d.selection)
+              for (const f of files) {
+                if (next) sel.add(f)
+                else sel.delete(f)
+              }
+              return { ...d, selection: sel }
+            })
+          }
+          onToggleFile={(relPath, next) =>
+            setDialog((d) => {
+              if (!d) return d
+              const sel = new Set(d.selection)
+              if (next) sel.add(relPath)
+              else sel.delete(relPath)
+              return { ...d, selection: sel }
+            })
+          }
+          onToggleExpand={(categoryId) =>
+            setDialog((d) => {
+              if (!d) return d
+              const ex = new Set(d.expanded)
+              if (ex.has(categoryId)) ex.delete(categoryId)
+              else ex.add(categoryId)
+              return { ...d, expanded: ex }
+            })
+          }
+          onRemember={(next) => setDialog((d) => (d ? { ...d, remember: next } : d))}
+          onCancel={() => setDialog(null)}
+          onConfirm={() => {
+            if (!dialog) return
+            void doPublish(dialog.work, [...dialog.selection], dialog.remember)
+          }}
+        />
+      ) : null}
+
       {/*
        * ══ 研究工作（两个视图）══════════════════════════════════════════════
        *
@@ -2092,6 +2514,34 @@ function CommunityTab({
            * 现在**不加**入口：宁可先没有，也不要一个点了没反应的按钮。
            */}
           {/* 列表级失败（列表 / 摘要 / 简报共用一处提示，按 code 给出不同说法） */}
+          {publishNotice ? (
+            <div style={S.inlineRow}>
+              {/* 徽章保留（用户觉得效果好）：成功 = 「已发布」，失败 = 错误码。
+                  因此文案里不再重复写"已发布"，避免同一行说两遍。 */}
+              <Badge tone={publishNotice.tone === 'success' ? 'success' : 'error'}>
+                {publishNotice.tone === 'success'
+                  ? t('community.badge.published')
+                  : (publishNotice.code ?? t('community.badge.published'))}
+              </Badge>
+              <span
+                style={{
+                  color:
+                    publishNotice.tone === 'success'
+                      ? 'var(--dsw-alias-label-secondary)'
+                      : 'var(--dsw-alias-state-error-primary)',
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                  flex: '1 1 320px',
+                  minWidth: 0,
+                }}
+              >
+                {publishNotice.text}
+                {publishNotice.missing && publishNotice.missing.length
+                  ? ` ${t('community.hint.publishMissing', { fields: publishNotice.missing.join(' / ') })}`
+                  : ''}
+              </span>
+            </div>
+          ) : null}
           {chargeNotice ? (
             <div style={S.inlineRow}>
               <Badge tone="brand">{t('community.badge.charged')}</Badge>
@@ -2190,6 +2640,31 @@ function CommunityTab({
                         <div style={{ ...S.mono, color: 'var(--dsw-alias-label-tertiary)' }} title={w.researchRoot}>
                           {w.path}
                         </div>
+                      </div>
+                      {/*
+                       * 「寻找指导」= **发布**（建项目 → 传状态 → 发布到网络）。
+                       * 只有点它才上传；已发布过则复用同一个服务器项目，按钮变「更新」。
+                       */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 0 auto' }}>
+                        {w.published ? <Badge tone="success">{t('community.badge.inNetwork')}</Badge> : null}
+                        <button
+                          type="button"
+                          style={{
+                            ...S.ghostBtn,
+                            opacity: account && publishing !== w.id ? 1 : 0.55,
+                          }}
+                          disabled={!account || publishing !== null || dialogLoading !== null}
+                          title={account ? t('community.tip.publish') : t('community.tip.publishNeedSignIn')}
+                          onClick={() => void openPublish(w)}
+                        >
+                          {publishing === w.id
+                            ? t('community.action.publishing')
+                            : dialogLoading === w.id
+                              ? t('community.action.loading')
+                              : w.published
+                                ? t('community.action.republish')
+                                : t('community.action.seekMentor')}
+                        </button>
                       </div>
                     </div>
                   </div>

@@ -36,7 +36,11 @@ export declare const SERVER_TIMEOUT_MS = 8000;
 export type FetchLike = (input: string, init?: {
     method?: string;
     headers?: Record<string, string>;
-    body?: string;
+    /**
+     * 请求体。`FormData` 用于附件上传（multipart）——那时**不能**自己设
+     * `content-type`，边界串由运行时生成。
+     */
+    body?: string | FormData;
     signal?: AbortSignal;
 }) => Promise<{
     ok: boolean;
@@ -131,7 +135,9 @@ export interface WorkBrief {
  * | `not-found` | 404 不存在或不可见 | 刷新列表 |
  * | `idempotency-reused` | 409 同 Key 不同 payload | 客户端 bug（同一意图才能复用 Key） |
  */
-export type ServerErrorCode = 'invalid-key' | 'account-inactive' | 'invalid-invitation' | 'invitation-used' | 'email-taken' | 'rate-limited' | 'bad-request' | 'bad-url' | 'unreachable' | 'server-error' | 'bad-response' | 'insufficient-tokens' | 'no-relationship' | 'not-found' | 'idempotency-reused';
+export type ServerErrorCode = 'invalid-key' | 'account-inactive' | 'invalid-invitation' | 'invitation-used' | 'email-taken' | 'rate-limited' | 'bad-request' | 'bad-url' | 'unreachable' | 'server-error' | 'bad-response' | 'insufficient-tokens' | 'no-relationship' | 'not-found' | 'idempotency-reused'
+/** 409：研究状态乐观锁冲突（`details.current_version` 是服务端最新版本）。 */
+ | 'version-conflict';
 /** 带分类的服务器错误。`message` **已经是可直接展示的中文**。 */
 export declare class ServerError extends Error {
     readonly code: ServerErrorCode;
@@ -145,12 +151,15 @@ export declare class ServerError extends Error {
     readonly requiredTokens?: number;
     /** 402 的 `details.available`（当前可用多少 Token）。 */
     readonly availableTokens?: number;
+    /** 409 STATE_VERSION_CONFLICT 的 `details.current_version`（重基时用它）。 */
+    readonly currentVersion?: number;
     constructor(code: ServerErrorCode, message: string, extra?: {
         httpStatus?: number;
         serverCode?: string;
         retryAfterSeconds?: number;
         requiredTokens?: number;
         availableTokens?: number;
+        currentVersion?: number;
     });
 }
 /**
@@ -218,6 +227,107 @@ export declare function acceptInvitation(base: string, input: {
  * @throws {ServerError} `invalid-key` / `unreachable` / …
  */
 export declare function fetchTokenBalance(base: string, apiKey: string, options?: ServerRequestOptions): Promise<TokenBalance>;
+/**
+ * 用量与配额（`GET /api/v1/usage`）。
+ *
+ * 发布前要同时回答两个问题：**这次要花多少 Token**、**还装得下多少字节**。
+ * 服务器一次调用就都给出来（`services/quota.py` 的 `UsageService.snapshot`）。
+ */
+export interface ServerUsage {
+    /** 下一个项目发布要花的 Token（1–3 个=1、4–6 个=2…，已付费项目重复发布免费）。 */
+    nextPublishCost: number;
+    /** 已付费（曾经发布过）的项目数。 */
+    paidProjects: number;
+    /** 项目层级（阶梯号）。 */
+    tier: number;
+    storage: {
+        usedBytes: number;
+        capacityBytes: number;
+        availableBytes: number;
+        /** 每 N 字节 1 Token（扩容单价的分母）。 */
+        bytesPerToken: number;
+    };
+}
+/** 读用量与配额。**失败时返回 null**（调用方按"未知"展示，不阻塞发布）。 */
+export declare function fetchUsage(base: string, apiKey: string, options?: ServerRequestOptions): Promise<ServerUsage | null>;
+/**
+ * 上传附件（`POST /projects/{id}/files`，multipart）。
+ *
+ * ⚠️ 三条服务器事实决定了这里的写法：
+ *
+ * 1. **不去重**：同一路径重复上传 = 新行 + 新字节。所以调用方必须先算好
+ *    "哪些文件变了"（内容 sha256），这里只管把给定文件传上去。
+ * 2. **一次 ≤20 个文件 / ≤200 MB**：批量切分由 `planUploadBatches` 负责。
+ * 3. `relative_paths` 与 `files` **按下标对齐**，是服务器还原目录树的依据。
+ *
+ * @returns 服务器为每个文件返回的元数据（含 `size` 与 `sha256`，可用于更新本地指纹）
+ */
+export interface UploadedFile {
+    id: string;
+    relativePath: string;
+    size: number;
+    sha256: string;
+}
+export declare function uploadProjectFiles(base: string, apiKey: string, projectId: string, files: ReadonlyArray<{
+    relPath: string;
+    bytes: Uint8Array;
+}>, options?: {
+    stateVersion?: number;
+} & ServerRequestOptions): Promise<UploadedFile[]>;
+/** 服务器上的 Research Project（元数据）。 */
+export interface ServerProject {
+    id: string;
+    title: string;
+    description: string | null;
+    status: string;
+    visibility: string;
+    updatedAt: string;
+}
+/** 上传研究状态的入参（`content` 是服务器的内容 Envelope，见 API.md §9.1）。 */
+export interface UploadStateInput {
+    /** `null` = 首传；否则必须等于服务端当前版本号。 */
+    baseVersion: number | null;
+    content: Record<string, unknown>;
+    /** 一次「保存意图」一个 key；重试复用，payload 变了必须换新 key。 */
+    intentKey: string;
+}
+/** 建项目（恒为 PRIVATE；此时还没有 State）。 */
+export declare function createProject(base: string, apiKey: string, input: {
+    title: string;
+    description?: string;
+}, options?: ServerRequestOptions): Promise<ServerProject>;
+/** 读一台自己的项目（owner-only；非 owner 或已删除 → 404 `not-found`）。 */
+export declare function fetchProject(base: string, apiKey: string, projectId: string, options?: ServerRequestOptions): Promise<ServerProject>;
+/** 读当前研究状态的版本号；项目还没有状态时返回 `null`（服务器 404）。 */
+export declare function readStateVersion(base: string, apiKey: string, projectId: string, options?: ServerRequestOptions): Promise<number | null>;
+/**
+ * 上传研究状态（新建一个不可变版本）。
+ *
+ * @returns 新版本号与内容哈希（哈希可用于判断"内容没变，不必再传"）
+ * @throws {ServerError} `version-conflict`（含 `currentVersion`，据此重基再传）
+ */
+export declare function uploadResearchState(base: string, apiKey: string, projectId: string, input: UploadStateInput, options?: ServerRequestOptions): Promise<{
+    version: number;
+    contentHash: string;
+}>;
+/**
+ * 发布项目。
+ *
+ * ⚠️ **发布是要花钱的**：服务器对每个项目**收一次** Token，按"已付费项目数"阶梯计价
+ * （第 1–3 个各 1 Token、第 4–6 个各 2 …，见 `PROJECT_TIER_BASE_COST` / `PROJECTS_PER_TIER`），
+ * 已付费的项目**重复发布免费**。响应里的 `charged_tokens` 就是本次真实扣费。
+ *
+ * 因此必须带 `Idempotency-Key`（服务器文档明确要求）：同一次发布意图重试时复用同一个键，
+ * 响应丢失后的重试不会造成第二笔扣费。
+ *
+ * @returns `visibility` 与本次扣费（`chargedTokens`，0 = 该项目此前已付费）
+ */
+export declare function publishProject(base: string, apiKey: string, projectId: string, options?: {
+    intentKey?: string;
+} & ServerRequestOptions): Promise<{
+    visibility: string;
+    chargedTokens: number;
+}>;
 /**
  * 研究工作列表（**发现网络**：已公开的项目，随机抽取）。
  *
