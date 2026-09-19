@@ -128,6 +128,7 @@ function makeHost({
   lagging = true,
   withSetConfig = true,
   timeoutMs,
+  paidBriefStore,
 } = {}) {
   const initial = CFG.resolveConfig({
     customizationFile: 'x.json',
@@ -155,6 +156,7 @@ function makeHost({
     fetchImpl,
     env,
     ...(timeoutMs === undefined ? {} : { serverTimeoutMs: timeoutMs }),
+    ...(paidBriefStore === undefined ? {} : { paidBriefStore }),
   }
   return {
     handler: RPC.createSettingsRpcHandler(deps),
@@ -742,6 +744,123 @@ section('[6b] 研究工作：列表 / 摘要 / 简报')
   assertEq(briefRes.value.brief.coreIdea, BRIEF.core_idea, '简报带出核心想法（第二层字段）')
   assertEq(briefRes.value.brief.methodOverview, BRIEF.method_overview, '简报带出方法概览')
   keyLeak(briefRes.value, 'work/brief')
+
+  // ── `brief_paid`：服务器的**权威**判据（打开 Brief 还会不会再扣 Token）──
+  //
+  // 列表每一项与 /projects/{id}/summary 都带它：true = 已有支付记录或项目属于自己，
+  // false = 首次打开会扣 1。界面据此决定要不要弹确认框 —— 所以解析必须**如实**：
+  // 布尔照抄，缺字段是 null（不知道），绝不把"不知道"当成 false 或 true。
+  {
+    const withFlag = (v) => ({ ...ITEM, ...(v === undefined ? {} : { brief_paid: v }) })
+    const readPaid = async (item) => {
+      const h = makeHost({ config: LOGGED_IN, handler: async () => ({ status: 200, body: { items: [item] } }) })
+      const res = await h.handler('work/list', {})
+      return res.value.items[0].briefPaid
+    }
+    assertEq(await readPaid(withFlag(true)), true, 'brief_paid=true → true（已有支付记录 / owner）')
+    assertEq(await readPaid(withFlag(false)), false, 'brief_paid=false → false（首次打开会扣费）')
+    assertEq(await readPaid(withFlag(undefined)), null, '旧服务器没有该字段 → null（不知道，界面照常提醒）')
+    assertEq(await readPaid({ ...ITEM, brief_paid: 'true' }), null, '字段类型不对 → null（不采信字符串）')
+
+    // 摘要（免费那层）同样带这个字段 —— 界面点【摘要】后就该知道【简报】会不会扣费
+    const sumHost = makeHost({ config: LOGGED_IN, handler: async () => ({ status: 200, body: withFlag(true) }) })
+    const sumPaid = await sumHost.handler('work/summary', { projectId: ITEM.project_id })
+    assertEq(sumPaid.value.work.briefPaid, true, '/projects/{id}/summary 也带 brief_paid')
+
+    // 简报响应里它同样存在（与 charged_tokens 一致：已买过 → true + 0）
+    const briefFlag = makeHost({
+      config: LOGGED_IN,
+      handler: async () => ({ status: 200, body: { ...BRIEF, brief_paid: true, charged_tokens: 0 } }),
+    })
+    const briefPaidRes = await briefFlag.handler('work/brief', { projectId: ITEM.project_id, intentKey: 'k-paid' })
+    assertEq(briefPaidRes.value.brief.briefPaid, true, '简报响应也带 brief_paid')
+    assertEq(briefPaidRes.value.brief.chargedTokens, 0, '已买过 → 本次扣 0，与 brief_paid=true 一致')
+  }
+
+  // ── 简报的"已买过"记忆：决定界面还要不要弹扣费确认框 ──
+  //
+  // 服务器按 (viewer, project) 只收一次，但**只有 /brief 的 charged_tokens 说明这次花没花**；
+  // 列表与摘要都不带这个状态。于是"点之前要不要提醒"只能靠宿主这份本地记忆。
+  // 拿不准（没记录 / 账号解析失败 / 没注入 store）时必须**照常提醒** —— 宁可多问一次，
+  // 不可静默扣费。
+  {
+    const PB = await import(lib('research/paid-briefs.js'))
+    const store = PB.createMemoryPaidBriefStore()
+    const BASE = 'http://localhost:8000'
+    const routes = (call) => {
+      if (call.url.endsWith('/discovery/random')) return { status: 200, body: { items: [ITEM] } }
+      if (call.url.endsWith('/auth/me')) return { status: 200, body: ME }
+      return { status: 200, body: { ...BRIEF, charged_tokens: 1 } }
+    }
+
+    // ① 没有记录 → 明确标注 false（界面会提醒），而不是留空让人猜
+    const fresh = makeHost({ config: LOGGED_IN, paidBriefStore: store, handler: async (call) => routes(call) })
+    const freshList = await fresh.handler('work/list', {})
+    assertEq(freshList.value.items[0].briefOpened, false, '没买过 → briefOpened=false（界面照常提醒）')
+
+    // ② 成功读过一次（charged_tokens=1）→ 透出扣费 + 记进本地；列表立刻变成 true
+    const buyRes = await fresh.handler('work/brief', { projectId: ITEM.project_id, intentKey: 'k1' })
+    assert(buyRes.ok, 'work/brief 成功')
+    assertEq(buyRes.value.brief.chargedTokens, 1, 'charged_tokens 透出给界面（本次真扣 1）')
+    assert(store.has(BASE, ME.id, ITEM.project_id), '读过之后本地记住"已买过"')
+    const afterList = await fresh.handler('work/list', {})
+    assertEq(afterList.value.items[0].briefOpened, true, '买过之后列表标注 true（界面不再弹确认框）')
+
+    // ③ 已经买过时服务器回 charged_tokens=0 → 回执据此说"未扣费"（不硬编码 1）
+    const replay = makeHost({
+      config: LOGGED_IN,
+      paidBriefStore: store,
+      handler: async () => ({ status: 200, body: { ...BRIEF, charged_tokens: 0 } }),
+    })
+    const replayRes = await replay.handler('work/brief', { projectId: ITEM.project_id, intentKey: 'k2' })
+    assertEq(replayRes.value.brief.chargedTokens, 0, '已买过 → charged_tokens=0')
+
+    // ④ 响应里没有 charged_tokens（旧服务器）→ null，界面退回"按余额差值说话"
+    const noField = makeHost({ config: LOGGED_IN, handler: async () => ({ status: 200, body: BRIEF }) })
+    const noFieldRes = await noField.handler('work/brief', { projectId: ITEM.project_id, intentKey: 'k3' })
+    assertEq(noFieldRes.value.brief.chargedTokens, null, '缺 charged_tokens → null（不谎报 0）')
+
+    // ⑤ 换账号 / 换服务器**不共用**这条记忆：复用了就会静默扣费
+    const otherAccount = { ...ME, id: 'ffffffff-0000-0000-0000-000000000000' }
+    const other = makeHost({
+      config: { ...LOGGED_IN, convfusionApiKey: `${KEY}-other` },
+      paidBriefStore: store,
+      handler: async (call) =>
+        call.url.endsWith('/auth/me') ? { status: 200, body: otherAccount } : { status: 200, body: { items: [ITEM] } },
+    })
+    const otherList = await other.handler('work/list', {})
+    assertEq(otherList.value.items[0].briefOpened, false, '换账号不共用"已买过"（否则会静默扣费）')
+    const otherServer = makeHost({
+      config: { ...LOGGED_IN, serverUrl: 'https://convfusion.com' },
+      paidBriefStore: store,
+      handler: async (call) =>
+        call.url.endsWith('/auth/me') ? { status: 200, body: ME } : { status: 200, body: { items: [ITEM] } },
+    })
+    const otherServerList = await otherServer.handler('work/list', {})
+    assertEq(otherServerList.value.items[0].briefOpened, false, '换服务器不共用"已买过"')
+
+    // ⑥ 账号解析失败 → 不标注（拿不准就当没买过：界面照常提醒）
+    const noAccount = makeHost({
+      config: LOGGED_IN,
+      paidBriefStore: store,
+      handler: async (call) =>
+        call.url.endsWith('/auth/me')
+          ? { status: 500, body: { error: { code: 'INTERNAL', message: 'boom' } } }
+          : { status: 200, body: { items: [ITEM] } },
+    })
+    const noAccountList = await noAccount.handler('work/list', {})
+    assert(noAccountList.ok, '账号解析失败不影响列表本身')
+    assertEq(noAccountList.value.items[0].briefOpened, undefined, '账号未知 → 不标注（保守：界面仍提醒）')
+
+    // ⑦ 没注入 store（旧装配）→ 不标注，行为与从前一致
+    const noStore = makeHost({ config: LOGGED_IN, handler: async () => ({ status: 200, body: { items: [ITEM] } }) })
+    const noStoreList = await noStore.handler('work/list', {})
+    assertEq(noStoreList.value.items[0].briefOpened, undefined, '没有本地记忆 → 不标注')
+
+    // ⑧ 键的构成：服务器 + 账号 + 项目，三者任一不同都不算"买过"
+    assertEq(PB.paidBriefKey(BASE, ME.id, 'p1'), `${BASE}|${ME.id}|p1`, '键 = serverUrl|accountId|projectId')
+    assertEq(store.has(BASE, ME.id, 'another-project'), false, '换了项目不算买过')
+  }
 
   // ── 402：Token 不足 —— 具体的 code，且**不自动重试** ──
   const poor = makeHost({

@@ -41,6 +41,7 @@
 
 import React from 'react'
 import { ConvFusionMark } from './icon.js'
+import { Markdown } from './markdown-view.js'
 import {
   categoryText,
   sectionText,
@@ -1227,6 +1228,21 @@ interface HostWork {
   researchQuestion: string | null
   summary: string | null
   updatedAt: string
+  /**
+   * 打开这一项的简报**还会不会再扣 Token**（服务器的 `brief_paid`）。
+   *
+   * `true` = 不再扣（账本里有支付记录，或项目属于自己）；`false` = 首次打开会扣。
+   * `null`/`undefined` = 旧服务器没给这个字段。
+   */
+  briefPaid?: boolean | null
+  /**
+   * 宿主本地记忆：这一项的简报**已经买过**。
+   *
+   * 只在服务器没有 `brief_paid` 时兜底；服务器给了权威值就以 `briefPaid` 为准。
+   */
+  briefOpened?: boolean
+  /** 简报本次实际扣掉的 Token（`charged_tokens`）。 */
+  chargedTokens?: number
 }
 
 /** **本机**研究工作（宿主 `LocalWorkItem` 的镜像）—— 数据来自磁盘，不需要登录。 */
@@ -1368,6 +1384,32 @@ function ProgressBar({ value }: { value: number }): JSX.Element {
   )
 }
 
+/**
+ * 简报状态角标的最小宽度（px）。
+ *
+ * 两种状态的字数天生不同 —— '已支付'（3 个汉字）/ 'Paid' 与 '1 Token'（7 个字符）——
+ * 各自按内容撑宽的话，按钮会随状态变宽变窄，一行里两个按钮跟着抖。
+ * 64 是这些文案在 zh/en 下的**安全上界**：角标都比它窄，于是两种状态的按钮等宽。
+ */
+const BRIEF_BADGE_MIN_WIDTH = 64
+
+/**
+ * 打开这一项的简报**会不会再扣 Token**？—— 判据优先级只在这里定一份。
+ *
+ * 1. **服务器的 `briefPaid`**（权威）：`brief_paid` 由服务器的支付记录 / owner 判定，
+ *    换机器、清缓存都不会误判或漏判；
+ * 2. 服务器没给（旧版本）→ 退回宿主本地记忆 `briefOpened`；
+ * 3. 两者都拿不准 → `false`（= 照常弹确认框）。**宁可多问一次，不可静默扣费。**
+ */
+function briefFree(w: { briefPaid?: boolean | null; briefOpened?: boolean }): boolean {
+  // ① 权威：服务器说不会扣，就不会扣（支付记录 / owner）
+  if (typeof w.briefPaid === 'boolean') return w.briefPaid
+  // ② 兜底：旧服务器没有 brief_paid 时，才看宿主本地记忆
+  if (w.briefOpened === true) return true
+  // ③ 拿不准 → 当成"会扣费"（界面照常提醒）
+  return false
+}
+
 /** 研究工作列表的一行（登录后可用；未登录时整行禁用）。 */
 function WorkRow({
   t,
@@ -1379,6 +1421,7 @@ function WorkRow({
   disabled,
   busy,
   expanded,
+  briefFree,
   onSummary,
   onBrief,
 }: {
@@ -1391,6 +1434,8 @@ function WorkRow({
   disabled: boolean
   busy: 'summary' | 'brief' | null
   expanded: boolean
+  /** 打开这一项的简报不会再扣 Token（服务器 `brief_paid`，或本地记忆兜底）→ 不标价、不弹确认。 */
+  briefFree?: boolean
   onSummary: () => void
   onBrief: () => void
 }): JSX.Element {
@@ -1410,25 +1455,57 @@ function WorkRow({
           type="button"
           style={{ ...S.ghostBtn, opacity: disabled || busy ? 0.55 : 1 }}
           disabled={disabled || busy !== null}
+          title={t('community.tip.summary')}
           onClick={onSummary}
         >
           {busy === 'summary' ? t('community.action.loading') : expanded ? t('community.action.collapse') : t('community.action.summary')}
         </button>
         <button
           type="button"
-          style={{ ...S.ghostBtn, opacity: disabled || busy ? 0.55 : 1 }}
+          style={{
+            ...S.ghostBtn,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            opacity: disabled || busy ? 0.55 : 1,
+          }}
           disabled={disabled || busy !== null}
-          title={disabled ? t('community.tip.briefDisabled') : t('community.tip.briefCost')}
+          title={
+            disabled
+              ? t('community.tip.briefDisabled')
+              : briefFree
+                ? t('community.tip.briefUnlocked')
+                : t('community.tip.briefCost')
+          }
           onClick={onBrief}
         >
-          {busy === 'brief' ? t('community.action.loading') : t('community.action.brief')}
+          {busy === 'brief' ? (
+            t('community.action.loading')
+          ) : (
+            <>
+              {t('community.action.brief')}
+              {/* 状态角标：已支付 = success 色，1 Token = brand 色；外层定宽保证两种状态等宽 */}
+              <span
+                style={{ display: 'inline-flex', minWidth: BRIEF_BADGE_MIN_WIDTH, justifyContent: 'center' }}
+              >
+                <Badge tone={briefFree ? 'success' : 'brand'}>
+                  {briefFree ? t('community.briefState.paid') : t('community.briefState.cost')}
+                </Badge>
+              </span>
+            </>
+          )}
         </button>
       </div>
     </div>
   )
 }
 
-/** 展开区：显示摘要或简报内容（保持"一行一项"的紧凑感）。 */
+/**
+ * 展开区：显示**概览**（Level 1，免费）或**详情**（Level 2，1 Token）的内容。
+ *
+ * 界面上叫「概览 / 详情」（对齐业务：先免费判断相关性，再付费深入了解）；
+ * 接口层仍是 `summary` / `brief`（`community.detail.*` 是面板里的**字段**标签，不跟着改）。
+ */
 function WorkDetail({
   t,
   work,
@@ -1438,11 +1515,27 @@ function WorkDetail({
   work: HostWork
   brief?: HostWorkBrief | undefined
 }): JSX.Element {
+  /** 一行：标签 + **纯文本**（短标签类值，如证据名）。 */
   const line = (label: string, value: string | null | undefined): JSX.Element | null =>
     value ? (
       <div style={{ display: 'flex', gap: 8 }}>
         <span style={{ ...S.label, flex: '0 0 56px' }}>{label}</span>
         <span style={{ ...S.hint, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'pre-wrap' }}>{value}</span>
+      </div>
+    ) : null
+  /**
+   * 一行：标签 + **Markdown 正文**。
+   *
+   * 这些值直接来自研究者的 `.md` 文件（有 `**强调**`、表格、引用、代码），
+   * 按纯文本渲染时界面上是 Markdown **源码** —— 必须走 `Markdown` 渲染。
+   */
+  const block = (label: string, value: string | null | undefined): JSX.Element | null =>
+    value && value.trim() !== '' ? (
+      <div style={{ display: 'flex', gap: 8 }}>
+        <span style={{ ...S.label, flex: '0 0 56px' }}>{label}</span>
+        <div style={{ ...S.hint, minWidth: 0, flex: '1 1 auto', color: 'var(--dsw-alias-label-secondary)' }}>
+          <Markdown text={value} />
+        </div>
       </div>
     ) : null
   return (
@@ -1458,16 +1551,21 @@ function WorkDetail({
         gap: 6,
       }}
     >
-      {line(t('community.detail.researchQuestion'), brief ? brief.researchQuestion : work.researchQuestion)}
-      {line(t('community.detail.summary'), work.summary)}
+      {/* 正文类字段一律走 Markdown（简报内容是研究者的 .md 原文）；证据名是短标签，保持纯文本 */}
+      {block(t('community.detail.researchQuestion'), brief ? brief.researchQuestion : work.researchQuestion)}
+      {block(t('community.detail.summary'), work.summary)}
       {brief ? (
         <>
-          {line(t('community.detail.motivation'), brief.motivation)}
-          {line(t('community.detail.coreIdea'), brief.coreIdea)}
-          {line(t('community.detail.hypothesis'), brief.hypothesis)}
-          {line(t('community.detail.methodOverview'), brief.methodOverview)}
+          {block(t('community.detail.motivation'), brief.motivation)}
+          {block(t('community.detail.coreIdea'), brief.coreIdea)}
+          {block(t('community.detail.hypothesis'), brief.hypothesis)}
+          {block(t('community.detail.methodOverview'), brief.methodOverview)}
           {brief.keyEvidence.length ? line(t('community.detail.keyEvidence'), brief.keyEvidence.join('；')) : null}
-          {brief.openProblems.length ? line(t('community.detail.openProblems'), brief.openProblems.join('；')) : null}
+          {brief.openProblems.length
+            ? brief.openProblems
+                .map((p, i) => block(i === 0 ? t('community.detail.openProblems') : '', p))
+                .filter(Boolean)
+            : null}
         </>
       ) : null}
     </div>
@@ -1697,6 +1795,77 @@ function PublishDialog({
   )
 }
 
+/**
+ * 扣费确认对话框 —— 读取简报（1 Token）。
+ *
+ * ## 为什么必须有它
+ *
+ * 简报是这一层里**唯一"点一下就扣 Token"**的入口：点错=直接花钱，而且"读过了"
+ * 无法撤销（服务器已经扣费并把第二层内容发过来了）。所以动作必须拆成两步：
+ * 第一次点击只打开这个对话框，只有「确认读取」才真的发 `work/brief`。
+ *
+ * 费用与余额都摆在按钮上方 —— 用户按下去之前就应该知道自己按的是什么，
+ * 而不是事后从回执里推断。
+ */
+function BriefConfirmDialog({
+  t,
+  title,
+  balance,
+  onCancel,
+  onConfirm,
+}: {
+  t: Translate
+  title: string
+  balance: number | null
+  onCancel: () => void
+  onConfirm: () => void
+}): JSX.Element {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,.45)',
+        display: 'grid',
+        placeItems: 'center',
+        zIndex: 1000,
+        padding: 20,
+      }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div style={{ ...S.card, width: 'min(430px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
+        <div style={S.cardHead}>
+          {t('community.briefConfirm.title')}
+          <span style={{ flex: '1 1 auto' }} />
+          <Badge tone="brand">{t('community.briefState.cost')}</Badge>
+        </div>
+        <div style={{ ...S.cardBody, gap: 9 }}>
+          <div style={S.listTitle}>{title}</div>
+          <div style={S.hint}>{t('community.briefConfirm.scope')}</div>
+          <div style={S.hint}>
+            {t('community.briefConfirm.cost')}
+            {' · '}
+            {typeof balance === 'number'
+              ? t('community.briefConfirm.balance', { balance })
+              : t('community.briefConfirm.balanceUnknown')}
+          </div>
+          <div style={S.hint}>{t('community.briefConfirm.idempotent')}</div>
+          <div style={S.footer}>
+            <span style={{ flex: '1 1 auto' }} />
+            <button type="button" style={S.ghostBtn} onClick={onCancel}>
+              {t('community.action.cancel')}
+            </button>
+            <button type="button" style={S.primaryBtn} onClick={onConfirm}>
+              {t('community.briefConfirm.confirm')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function CommunityTab({
   send,
   initial,
@@ -1770,6 +1939,14 @@ function CommunityTab({
    * 不是常驻说明。
    */
   const [chargeNotice, setChargeNotice] = React.useState<string | null>(null)
+  /**
+   * 待确认的**扣费**操作：读取简报（1 Token）。
+   *
+   * ⚠️ 非空 = 确认对话框开着，此时**还没有**发出任何请求、也**没有**扣费。
+   * 不设这个中间态的话，"点一下简报"就直接花钱了（2026-09 用户要求：
+   * 扣费操作不能点击即生效）。
+   */
+  const [briefConfirm, setBriefConfirm] = React.useState<HostWork | null>(null)
   /**
    * 简报的**幂等键**（每项研究工作一个"查看意图"）。
    *
@@ -2084,28 +2261,71 @@ function CommunityTab({
     const brief = (res.value as { brief: HostWorkBrief }).brief
     setDetail({ projectId: w.projectId, work: brief, brief })
     setOpen({ projectId: w.projectId, kind: 'brief' })
+    // 读到了 ⇒ 这一项已经"解锁"（服务器按 (viewer, project) 只收一次）：
+    // 本会话立刻不再弹确认框；下次启动由宿主的本地记忆回答（`work/list` 的 briefOpened）。
+    setWorks((prev) =>
+      prev === null
+        ? prev
+        : prev.map((it) =>
+            it.projectId === w.projectId ? { ...it, briefPaid: true, briefOpened: true } : it,
+          ),
+    )
     // 成功之后这次意图已经完成，清掉 key（下次点是新的一次查看）
     setIntents((prev) => {
       const next = { ...prev }
       delete next[w.projectId]
       return next
     })
-    // 简报是**花钱**的：立刻把余额刷新（界面数字 = 服务器数字），并给出扣费回执。
-    // 自己的项目读简报免费 —— 服务器不扣，回执照余额差值说话，不硬编码"1"。
+    // 简报是**花钱**的：回执要说清这次到底扣了多少。
+    // 优先用服务器的 `charged_tokens`（权威，已买过时就是 0）；旧响应缺这个字段时
+    // 退回"按余额差值说话" —— 绝不硬编码"1"。
     const before = state?.tokens?.available
     const after = await refreshBalance()
     if (typeof after === 'number') {
-      setChargeNotice(
-        typeof before === 'number' && before !== after
-          ? t('community.notice.charged', { tokens: before - after, balance: after })
-          : t('community.notice.briefRead', { balance: after }),
-      )
+      const charged = brief.chargedTokens
+      if (typeof charged === 'number') {
+        setChargeNotice(
+          charged > 0
+            ? t('community.notice.charged', { tokens: charged, balance: after })
+            : t('community.notice.briefRead', { balance: after }),
+        )
+      } else {
+        setChargeNotice(
+          typeof before === 'number' && before !== after
+            ? t('community.notice.charged', { tokens: before - after, balance: after })
+            : t('community.notice.briefRead', { balance: after }),
+        )
+      }
     }
+  }
+
+  /**
+   * 点【简报】按钮的入口 —— **花钱的动作先确认**。
+   *
+   * 两种情形必须分开（否则会凭空多出一次确认、或者反而漏掉确认）：
+   *
+   * - 这一项**已经展开**：再点是**收起**，服务器不会再扣费 → 直接执行，不打断；
+   * - 其余情况（首次读取 / 换一项 / 上次失败后重试）：都会真的扣 Token
+   *   → 先弹确认，用户点「确认读取」才走 `toggleBrief`。
+   *
+   * 重试复用同一个 intentKey（在 `toggleBrief` 里维护），所以"失败后重试"
+   * 即使确认两次也不会重复扣费。
+   */
+  const requestBrief = (w: HostWork): void => {
+    if (open?.projectId === w.projectId && open.kind === 'brief') {
+      void toggleBrief(w)
+      return
+    }
+    // 已经买过（服务器保证同一项不再扣费）→ 不再打扰：直接读。
+    if (briefFree(w)) {
+      void toggleBrief(w)
+      return
+    }
+    setBriefConfirm(w)
   }
 
   /** 服务器地址（留空 = 用宿主当前的地址）。 */
   const serverUrl = serverDraft.trim() || state?.serverUrl || undefined
-
   /**
    * 地址是否被用户改过（且已登录）。
    *
@@ -2463,6 +2683,21 @@ function CommunityTab({
         />
       ) : null}
 
+      {/* ══ 详情扣费确认（点【详情】时出现；确认前不发请求、不扣费）══════════ */}
+      {briefConfirm ? (
+        <BriefConfirmDialog
+          t={t}
+          title={briefConfirm.title}
+          balance={state?.tokens?.available ?? null}
+          onCancel={() => setBriefConfirm(null)}
+          onConfirm={() => {
+            const target = briefConfirm
+            setBriefConfirm(null)
+            void toggleBrief(target)
+          }}
+        />
+      ) : null}
+
       {/*
        * ══ 研究工作（两个视图）══════════════════════════════════════════════
        *
@@ -2729,8 +2964,9 @@ function CommunityTab({
                       disabled={false}
                       busy={busyKind}
                       expanded={expanded}
+                      briefFree={briefFree(w)}
                       onSummary={() => void toggleSummary(w)}
-                      onBrief={() => void toggleBrief(w)}
+                      onBrief={() => requestBrief(w)}
                     />
                     {expanded && detail?.projectId === w.projectId ? (
                       <WorkDetail t={t} work={detail.work} brief={detail.brief} />

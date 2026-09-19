@@ -83,6 +83,7 @@ import {
 } from './config.js'
 import { HOST_PROTOCOL, HOST_PROTOCOL_FIELD } from './protocol.js'
 import type { SkillCustomizationStore } from './research/skill-customization.js'
+import type { PaidBriefStore } from './research/paid-briefs.js'
 import {
   CUSTOMIZABLE_SECTIONS,
   clearAllCustomizations,
@@ -597,6 +598,14 @@ export interface SettingsRpcDeps {
   fetchImpl?: FetchLike
   /** 环境变量（测试注入；缺省 `process.env`）。 */
   env?: NodeJS.ProcessEnv
+  /**
+   * 「这一项简报已经买过」的本地记录（`paid-briefs.ts`）。
+   *
+   * 服务器只在 `/brief` 的响应里给 `charged_tokens`，列表/摘要**不含**这个状态，
+   * 所以"点之前要不要提醒"只能靠这份本地记忆。缺省 = 没有记忆（每次都提醒，
+   * 行为保守但不静默扣费）。
+   */
+  paidBriefStore?: PaidBriefStore
   /** 服务器请求超时（测试用小值）。 */
   serverTimeoutMs?: number
   /**
@@ -673,6 +682,44 @@ export function createSettingsRpcHandler(
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     ...(deps.serverTimeoutMs === undefined ? {} : { timeoutMs: deps.serverTimeoutMs }),
   })
+
+  /**
+   * 当前凭据对应的账号 id（"这一项简报买过没有"要按**账号**分开记）。
+   *
+   * 缓存的键**含凭据**：同一台服务器换账号登录绝不会命中上一个人的记录 ——
+   * 复用别人的"已买过"会导致**静默扣费**，正是要避免的事。
+   *
+   * 解析失败一律返回 `null`（= 不知道）：界面照常弹确认框。宁可多问一次。
+   */
+  const accountIdCache = new Map<string, string>()
+  const resolveAccountId = async (base: string, apiKey: string): Promise<string | null> => {
+    const cacheKey = `${base}\u0000${apiKey}`
+    const cached = accountIdCache.get(cacheKey)
+    if (cached) return cached
+    try {
+      const me = await fetchAccount(base, apiKey, netOptions())
+      accountIdCache.set(cacheKey, me.id)
+      return me.id
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 给列表补上"这一项的简报已经买过"（本地记忆，见 `paid-briefs.ts`）。
+   *
+   * 拿不到账号时**不标注**（`briefOpened` 保持缺省）—— 界面会照常提醒，
+   * 只是多问一次，而不会漏问。
+   */
+  const annotateOpenedBriefs = async (base: string, apiKey: string, items: WorkItem[]): Promise<WorkItem[]> => {
+    if (!deps.paidBriefStore || items.length === 0) return items
+    const accountId = await resolveAccountId(base, apiKey)
+    if (!accountId) return items
+    return items.map((item) => ({
+      ...item,
+      briefOpened: deps.paidBriefStore!.has(base, accountId, item.projectId),
+    }))
+  }
 
   /**
    * 把凭据（以及可选的服务器地址）写回设置，并返回**写完之后**的登录状态。
@@ -1435,7 +1482,9 @@ export function createSettingsRpcHandler(
             const items: WorkItem[] = await fetchWorkList(base, apiKey, netOptions())
             // 顺带把命中的本地发布记录对齐到服务器的可见性
             syncRecordsFromWorkList(items)
-            return { ok: true, value: { items } }
+            // 「这一项简报买过没有」服务器列表里没有，补本地记忆 →
+            // 界面据此决定还要不要弹"要花 1 Token"的确认框
+            return { ok: true, value: { items: await annotateOpenedBriefs(base, apiKey, items) } }
           } catch (e) {
             return serverFail(e)
           }
@@ -1469,6 +1518,10 @@ export function createSettingsRpcHandler(
           try {
             const base = resolveServerUrl(config, env()).url
             const brief: WorkBrief = await fetchWorkBrief(base, apiKey, projectId, intentKey, netOptions())
+            // 成功读过 ⇒ 服务器已保证"同一项以后不再扣费"（`has_paid_brief`）。
+            // 记下来，下次直接读、不再弹确认框。
+            const accountId = await resolveAccountId(base, apiKey)
+            if (accountId) deps.paidBriefStore?.mark(base, accountId, projectId)
             return { ok: true, value: { brief } }
           } catch (e) {
             return serverFail(e)

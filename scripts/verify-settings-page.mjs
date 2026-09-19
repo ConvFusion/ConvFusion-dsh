@@ -334,8 +334,15 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   dictHas('community.badge.sample', '示例数据', 'Sample data', '示例数据徽章（不假装是真的）')
   assert(/work\/list/.test(community), '登录后走 work/list 拉真实列表')
   assert(/work\/summary/.test(community) && /work\/brief/.test(community), '列表项操作走 work/summary 与 work/brief')
-  assert(/intents/.test(community) && /crypto\.randomUUID/.test(community), '简报带幂等键（402 后重试不重复扣费）')
-  dictHas('community.action.brief', '简报 · 1 Token', 'Brief · 1 Token', '两级披露中的付费层')
+  assert(/intents/.test(community) && /crypto\.randomUUID/.test(community), '详情带幂等键（402 后重试不重复扣费）')
+  // 两级披露的界面术语要**对齐业务**（先免费判断相关性，再付费深入了解），
+  // 而不是照搬接口名（Summary / Brief 在界面上说不清各自是干什么的）
+  dictHas('community.action.summary', '概览', 'Overview', '第一级：免费判断相关性')
+  dictHas('community.action.brief', '详情', 'Details', '第二级：付费深入了解')
+  dictHas('community.tip.summary', '免费', 'Free', '概览的 tooltip 说明免费')
+  dictHas('community.tip.briefCost', '深入了解', 'Go deeper', '详情的 tooltip 说明给到什么')
+  dictHas('community.briefState.cost', '1 Token', '1 Token', '未支付的角标：1 Token')
+  dictHas('community.briefState.paid', '已支付', 'Paid', '已支付的角标：已支付')
   dictHas('community.hint.sampleFootnote', '示例数据，登录后可浏览并操作', 'Sample data', '未登录时的示例标注')
   // 未登录分支的示例行必须整行禁用
   const sampleIdx = community.indexOf('SAMPLE_WORKS.map')
@@ -427,8 +434,8 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   dictHas('community.hint.inviteRule', '邮箱必须与邀请码签发时指定的邮箱一致', 'must match', '邀请码的邮箱约束')
   dictHas('community.badge.addressChanged', '地址已改', 'Address changed', '地址真的改了才提示')
   // 花钱的那一刻要给出回执（用户会问"扣了没、扣了几次"）
-  dictHas('community.notice.charged', '已读取简报，消耗 {tokens} Token（余额 {balance}）', 'Token charged', '扣费回执')
-  assert(/chargeNotice/.test(community) && /refreshBalance\(\)/.test(community), '扣费回执 + 读简报后刷新余额')
+  dictHas('community.notice.charged', '已读取详情，消耗 {tokens} Token（余额 {balance}）', 'Token charged', '扣费回执')
+  assert(/chargeNotice/.test(community) && /refreshBalance\(\)/.test(community), '扣费回执 + 读详情后刷新余额')
   // Token 余额：登录后要显示"我还剩多少"（点了可刷新）
   assert(/state\?\.tokens \?/.test(community) && /community\.tip\.balance/.test(community), '登录后显示 Token 余额并可刷新')
   assert(/account\/tokens/.test(community), '余额刷新走 account/tokens')
@@ -983,6 +990,274 @@ console.log('\n[8] 自动选中优先级：优先落到已有定制的项')
 
 rmSync(HOME, { recursive: true, force: true })
 
+/* ════════════════════════════════════════════════════════════════════════
+ * 9. 简报/摘要的正文按 Markdown 渲染（而不是显示源码）
+ *
+ * 真实反馈：【可指导】点开简报后，界面上是 Markdown **源码**
+ * （`**分层结构**（D001 读法 B 之后）：| 层 | 假设 | …`）。
+ * 原因是这些字段直接来自研究者的 `.md` 文件，却按纯文本（pre-wrap）渲染。
+ *
+ * 解析器是纯函数（`src/client/markdown.ts`），这里用 esbuild 现场转译后**真执行**，
+ * 断言块级/行内 token —— 而不是只 grep 源码。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[9] 简报正文按 Markdown 渲染（不是源码）')
+{
+  const { build } = await import('esbuild')
+  const out = await build({
+    entryPoints: [join(PKG, 'src', 'client', 'markdown.ts')],
+    bundle: false,
+    format: 'esm',
+    target: 'es2022',
+    write: false,
+    logLevel: 'silent',
+  })
+  const mod = await import(
+    `data:text/javascript;base64,${Buffer.from(out.outputFiles[0].text).toString('base64')}`
+  )
+  const { parseMarkdownBlocks, parseInline } = mod
+
+  // 块级：段落 / 表格 / 列表 / 引用（全是真实简报文里出现过的形状）
+  const sample = [
+    '**分层结构**（D001 读法 B 之后）：',
+    '',
+    '| 层 | 假设 | 落盘 |',
+    '|---|---|---|',
+    '| **主假设** | 把残差作为显式约束 | `C003` |',
+    '',
+    '- I-a 把残差做成位姿层因子',
+    '- I-b 用局部性线索仲裁',
+    '',
+    '> 紧耦合在测量层融合，位姿级不一致**不作为约束**。',
+  ].join('\n')
+  const blocks = parseMarkdownBlocks(sample)
+  assertEq(
+    blocks.map((b) => b.kind),
+    ['paragraph', 'table', 'list', 'quote'],
+    '块级结构正确（段落 / 表格 / 列表 / 引用）',
+  )
+  assertEq(blocks[0].text, '**分层结构**（D001 读法 B 之后）：', '段落保留原文（行内再切 token）')
+  assertEq(blocks[1].head, ['层', '假设', '落盘'], '表格表头解析（去掉首尾竖线）')
+  assertEq(blocks[1].rows.length, 1, '表格数据行 1 行')
+  assertEq(blocks[2].ordered, false, '无序列表')
+  assertEq(blocks[2].items.length, 2, '列表两项')
+  assertEq(blocks[2].items[1], 'I-b 用局部性线索仲裁', '列表项去掉标记符')
+
+  // 代码块 / 标题 / 分隔线 / 单换行
+  const more = parseMarkdownBlocks('## 小标题\n\n```python\nprint(1)\n```\n\n---\n\n第一行\n第二行')
+  assertEq(
+    more.map((b) => b.kind),
+    ['heading', 'code', 'hr', 'paragraph'],
+    '标题 / 代码块 / 分隔线 / 段落',
+  )
+  assertEq(more[0].level, 2, '标题层级')
+  assertEq(more[1].text, 'print(1)', '代码块原样取出（含语言）')
+  assertEq(more[1].lang, 'python', '代码块语言')
+  assertEq(more[3].text, '第一行\n第二行', '段落里的单个换行保留（研究笔记按行断句）')
+
+  // 行内：**粗** / `代码` / [链接](url)；HTML 标签**保持文字**（无注入面）
+  const inl = parseInline('**粗** 与 `code` 与 [链接](https://x.y) 与 <b>raw</b>')
+  assertEq(
+    inl.map((t) => t.kind),
+    ['bold', 'text', 'code', 'text', 'link', 'text'],
+    '行内 token 切分正确',
+  )
+  assertEq(inl[4].href, 'https://x.y', '链接地址取出')
+  assertEq(inl[5].text, ' 与 <b>raw</b>', '源码里的 HTML 标签原样当文字（不会被当节点）')
+  assertEq(parseMarkdownBlocks(''), [], '空文本 → 无块')
+  assertEq(parseInline('没有标记').map((t) => t.kind), ['text'], '无标记 → 单个 text token')
+
+  // 接线：正文类字段走 Markdown 组件，短标签（证据名）保持纯文本
+  const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+  assert(src.includes("from './markdown-view.js'"), 'settings.tsx 引入 Markdown 渲染组件')
+  for (const key of [
+    'researchQuestion',
+    'summary',
+    'motivation',
+    'coreIdea',
+    'hypothesis',
+    'methodOverview',
+    'openProblems',
+  ]) {
+    assert(
+      src.includes(`block(t('community.detail.${key}')`) || src.includes(`t('community.detail.${key}')`),
+      `正文类字段走 Markdown：${key}`,
+    )
+  }
+  assert(
+    src.includes("line(t('community.detail.keyEvidence')"),
+    '证据名是短标签，保持纯文本一行',
+  )
+
+  // 安全：整个客户端不许用 HTML 注入
+  const clientDir = join(PKG, 'src', 'client')
+  const offenders = readdirSync(clientDir)
+    .filter((f) => f.endsWith('.tsx') || f.endsWith('.ts'))
+    .filter((f) => readFileSync(join(clientDir, f), 'utf8').includes('dangerouslySetInnerHTML'))
+  assertEq(offenders, [], 'src/client 无 dangerouslySetInnerHTML（Markdown 用 React 元素渲染）')
+  assert(
+    readFileSync(join(PKG, 'src', 'client', 'markdown-view.tsx'), 'utf8').includes('parseMarkdownBlocks'),
+    '渲染组件复用同一个解析器（解析与渲染不重复实现）',
+  )
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 10. 扣费操作必须二次确认（不能点击即生效）
+ *
+ * 真实要求（2026-09 用户）：【可指导】→【详情】（1 Token）点一下就直接扣钱了。
+ * 简报是这一层**唯一"点一下就扣 Token"**的入口，而"读过"无法撤销，所以动作必须
+ * 拆成两步：第一次点击只开确认框，只有「确认读取」才发 `work/brief`。
+ *
+ * 同时必须**只拦该拦的**：已经展开的简报再点是"收起"，服务器不会再扣费 ——
+ * 那条路径不能弹确认，否则多一次无意义打断。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[10] 扣费操作必须二次确认（简报 1 Token）')
+{
+  const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+
+  // ① 组件存在，且列表的【简报】不再直连扣费
+  assert(src.includes('function BriefConfirmDialog('), '存在简报扣费确认对话框组件')
+  assert(inlineCount(src, 'onBrief={() => requestBrief(w)}') === 1, '列表【简报】走 requestBrief（不是直接扣费）')
+  assert(!src.includes('onBrief={() => void toggleBrief('), '列表不再把【简报】直连到 toggleBrief')
+
+  // ② requestBrief 只对"会扣费"的情形弹确认；已展开的那一项直接收起
+  const rbStart = src.indexOf('const requestBrief =')
+  const rbEnd = src.indexOf('/** 服务器地址')
+  assert(rbStart > 0 && rbEnd > rbStart, 'requestBrief 函数体可定位')
+  const rb = src.slice(rbStart, rbEnd)
+  assert(rb.includes("open?.projectId === w.projectId && open.kind === 'brief'"), '已展开的简报再点 = 收起（不扣费）')
+  assert(rb.includes('void toggleBrief(w)'), '收起路径直接执行（不打断）')
+  assert(rb.includes('setBriefConfirm(w)'), '其余情形（首次 / 换项 / 重试）先开确认框')
+
+  // ③ 确认之前不可能有请求：`work/brief` 全仓库只有一处调用，且在 toggleBrief 内
+  assertEq(inlineCount(src, "post('work/brief'"), 1, 'work/brief 只有一处调用点')
+
+  // ④ 对话框自身不发请求，只回调（取消 / 确认）
+  const dlgStart = src.indexOf('function BriefConfirmDialog(')
+  const dlgEnd = src.indexOf('function CommunityTab(')
+  const dlg = src.slice(dlgStart, dlgEnd)
+  assert(dlg.includes('onClick={onCancel}'), '对话框有【取消】')
+  assert(dlg.includes('onClick={onConfirm}'), '对话框有【确认读取】')
+  assert(!dlg.includes('work/brief') && !dlg.includes('toggleBrief') && !dlg.includes('post('), '对话框自身不发请求')
+  assert(
+    dlg.includes("t('community.action.cancel')") && dlg.includes("t('community.briefConfirm.confirm')"),
+    '两个按钮的文案走 i18n',
+  )
+
+  // ⑤ 费用 / 余额 / 可读内容在按下之前就摆出来（不是事后从回执推断）
+  for (const key of [
+    'community.briefConfirm.title',
+    'community.briefConfirm.scope',
+    'community.briefConfirm.cost',
+    'community.briefConfirm.balance',
+    'community.briefConfirm.balanceUnknown',
+    'community.briefConfirm.idempotent',
+  ]) {
+    assert(dlg.includes(`t('${key}'`), `对话框展示 ${key}`)
+  }
+  assert(src.includes('balance={state?.tokens?.available ?? null}'), '渲染处把真实余额传进对话框')
+
+  // ⑥ 取消 = 只关框（不发请求、不扣费）；确认 = 才走 toggleBrief
+  assert(src.includes('onCancel={() => setBriefConfirm(null)}'), '取消只关掉对话框')
+  assert(src.includes('void toggleBrief(target)'), '确认后才调用 toggleBrief（发请求）')
+  assert(
+    /onConfirm=\{\(\) => \{\s*const target = briefConfirm\s*setBriefConfirm\(null\)\s*void toggleBrief\(target\)/.test(src),
+    '确认分支：先关框再发请求（顺序固定）',
+  )
+
+  // ⑦ 另一处扣费（发布）也必须是"确认后才生效"
+  assertEq(inlineCount(src, 'void doPublish('), 1, 'doPublish 只有一处调用点')
+  assert(
+    /onConfirm=\{\(\) => \{\s*if \(!dialog\) return\s*void doPublish\(/.test(src),
+    '发布由对话框的「确认」触发（点【寻找指导】只开框）',
+  )
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 11. 已经买过的简报**不再重复提醒**（只在真会扣费时才弹确认）
+ *
+ * 服务器按 (viewer, project) 只收一次钱，但只有 `/brief` 的 `charged_tokens`
+ * 说明"这次花了没有"，列表/摘要都不带这个状态。宿主于是把"读过一次"记进本地
+ * （`research/paid-briefs.ts`，按 serverUrl|accountId|projectId），
+ * `work/list` 用 `briefOpened` 标出来 —— 界面据此**跳过**确认框。
+ *
+ * 反过来的边界同样要守住：拿不准（没记忆 / 账号未知）时必须**照常提醒**，
+ * 因为漏提醒 = 静默扣费，比多问一次糟得多。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[11] 已买过的简报不再重复提醒')
+{
+  const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+
+  // ① requestBrief：已买过就直接读；且这条短路必须在"弹确认框"之前
+  const rbStart = src.indexOf('const requestBrief =')
+  const rbEnd = src.indexOf('/** 服务器地址')
+  const rb = src.slice(rbStart, rbEnd)
+  assert(rb.includes('if (briefFree(w))'), '已买过的简报不再弹确认（直接读）')
+  assert(
+    rb.indexOf('if (briefFree(w))') < rb.indexOf('setBriefConfirm(w)'),
+    '短路在前、弹框在后（顺序不能反，否则照样每次提醒）',
+  )
+  assert(rb.includes('void toggleBrief(w)'), '短路路径直接发请求')
+
+  // ② 判据优先级只在一处：服务器 brief_paid 权威 → 本地记忆兜底 → 不知道就提醒
+  const bfStart = src.indexOf('function briefFree(')
+  const bf = src.slice(bfStart, src.indexOf('/** 研究工作列表的一行'))
+  assert(bf.includes("typeof w.briefPaid === 'boolean'"), '服务器给了 brief_paid 就用它（权威）')
+  assert(bf.includes('if (w.briefOpened === true) return true'), '服务器没给才退回本地记忆')
+  assert(
+    bf.indexOf('w.briefPaid') < bf.indexOf('w.briefOpened'),
+    '服务器值优先于本地记忆（顺序反了会拿旧记忆压住权威判据）',
+  )
+  assert(bf.includes('return false'), '两者都不确定 → false（照常提醒，不静默扣费）')
+
+  // ③ 行的按钮：两种状态用**彩色角标**，且两者等宽（否则按钮宽度会随状态跳）
+  assert(src.includes('briefFree={briefFree(w)}'), '判据传进行组件')
+  assert(src.includes("t('community.briefState.paid')"), '已支付状态有独立文案')
+  assert(src.includes("t('community.briefState.cost')"), '未支付状态有独立文案')
+  assert(
+    /<Badge tone=\{briefFree \? 'success' : 'brand'\}>/.test(src),
+    '角标按状态着色（已支付 success / 1 Token brand）',
+  )
+  assert(
+    /const BRIEF_BADGE_MIN_WIDTH = 64/.test(src),
+    '角标定宽常量存在（两种状态等宽的安全上界）',
+  )
+  assert(
+    /minWidth: BRIEF_BADGE_MIN_WIDTH, justifyContent: 'center'/.test(src),
+    '角标外层用定宽常量 → 「已支付」与「1 Token」按钮同宽',
+  )
+  assert(
+    !src.includes("t('community.action.briefUnlocked')"),
+    '旧的"已解锁"按钮文案已移除（状态改由角标表达）',
+  )
+  assert(src.includes("t('community.tip.briefUnlocked')"), '已解锁的 tooltip 说明"重读免费"')
+
+  // ④ 读成功 ⇒ 本会话立刻标记（同一会话里再点不该又弹一次）。
+  //    ⚠️ 必须连 `briefPaid` 一起置 true：列表里那份是**付款前**抓的 `false`，
+  //    只改本地记忆会被权威值压住，于是刚读完又弹框。
+  assert(
+    /it\.projectId === w\.projectId \? \{ \.\.\.it, briefPaid: true, briefOpened: true \}/.test(src),
+    '读成功后把该行的 briefPaid / briefOpened 都置 true',
+  )
+
+  // ④ 回执公开：优先用服务器的 `charged_tokens`（权威），缺字段才退回余额差值
+  assert(src.includes('const charged = brief.chargedTokens'), '回执读 charged_tokens')
+  assert(
+    src.indexOf('typeof charged === \'number\'') < src.indexOf('before - after'),
+    'charged_tokens 优先，余额差值只作兜底',
+  )
+
+  // ⑤ 宿主的本地记忆：键必须含账号与服务器（漏掉任一项都会导致静默扣费）
+  const store = readFileSync(join(PKG, 'src', 'research', 'paid-briefs.ts'), 'utf8')
+  assert(store.includes('`${serverUrl.trim()}|${accountId.trim()}|${projectId.trim()}`'), '键 = serverUrl|accountId|projectId')
+  assert(store.includes('export function createFilePaidBriefStore'), '有落盘实现（重启后仍然记得）')
+  const rpc = readFileSync(join(PKG, 'src', 'settings-rpc.ts'), 'utf8')
+  assert(rpc.includes('paidBriefStore?.mark('), 'work/brief 成功后记账')
+  assert(
+    /annotateOpenedBriefs\(base, apiKey, items\)/.test(rpc),
+    'work/list 用本地记忆标注 briefOpened',
+  )
+  assert(rpc.includes('if (!accountId) return items'), '账号未知 → 不标注（保守：界面仍提醒）')
+}
 console.log(`\n${failed === 0 ? '✅' : '❌'} settings-page: ${passed} passed, ${failed} failed`)
 if (failed > 0) {
   console.log('failures:\n' + failures.map((f) => `  - ${f}`).join('\n'))

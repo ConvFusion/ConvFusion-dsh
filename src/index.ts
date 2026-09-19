@@ -51,6 +51,7 @@ import {
 } from './settings-rpc.js'
 import { createFileCustomizationStore } from './research/skill-customization.js'
 import { createFilePublishedStore } from './research/published-store.js'
+import { createFilePaidBriefStore } from './research/paid-briefs.js'
 import { systemLibraryStatus } from './research/skill-customization.js'
 import { ResearchContextService } from './research/context.js'
 import { mountEventBridge, type ResearchEventBridge } from './research/runtime-events.js'
@@ -197,6 +198,15 @@ export function apply(ctx: Context, rawConfig: Partial<ConfigShape> = {}): void 
    */
   const publishedStore = createFilePublishedStore(() =>
     join(dirname(resolveCustomizationPath(currentConfig())), 'published-projects.json'),
+  )
+  /**
+   * 「这一项简报已经买过」的本地记忆（与发布记录同目录）。
+   *
+   * 服务器按 `(viewer, project)` 只收一次钱，但**列表响应里不带这个状态**，
+   * 只有读过之后才知道 —— 没有这份记忆，界面会每次都弹"要花 1 Token"的确认框。
+   */
+  const paidBriefStore = createFilePaidBriefStore(() =>
+    join(dirname(resolveCustomizationPath(currentConfig())), 'paid-briefs.json'),
   )
   ctx.logger?.info(
     `[convfusion] user customizations: ${customizationStore.description}` +
@@ -467,6 +477,8 @@ export function apply(ctx: Context, rawConfig: Partial<ConfigShape> = {}): void 
       store: customizationStore,
       // 发布映射（落盘）：同一工作区只建一个服务器项目
       publishedStore,
+      // 「简报已经买过」的本地记忆：决定还要不要弹扣费确认框
+      paidBriefStore,
       // 注册表读取放在这里（入口持有 ctx），过滤与进度计算在 settings-rpc 里
       /**
        * 读宿主的工作区注册表并归一成纯数据（**与 dsh-additive 的 `listWorkspaces` 同款做法**：

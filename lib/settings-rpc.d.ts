@@ -73,6 +73,7 @@
  * `customizations[skillId][section]` —— 存储形态没变，变的只是键的语义。
  */
 import type { SkillCustomizationStore } from './research/skill-customization.js';
+import type { PaidBriefStore } from './research/paid-briefs.js';
 import type { Config } from './config.js';
 import { type SecretField } from './config.js';
 import { type FetchLike, type TokenBalance } from './server-client.js';
@@ -397,6 +398,14 @@ export interface SettingsRpcDeps {
     fetchImpl?: FetchLike;
     /** 环境变量（测试注入；缺省 `process.env`）。 */
     env?: NodeJS.ProcessEnv;
+    /**
+     * 「这一项简报已经买过」的本地记录（`paid-briefs.ts`）。
+     *
+     * 服务器只在 `/brief` 的响应里给 `charged_tokens`，列表/摘要**不含**这个状态，
+     * 所以"点之前要不要提醒"只能靠这份本地记忆。缺省 = 没有记忆（每次都提醒，
+     * 行为保守但不静默扣费）。
+     */
+    paidBriefStore?: PaidBriefStore;
     /** 服务器请求超时（测试用小值）。 */
     serverTimeoutMs?: number;
     /**

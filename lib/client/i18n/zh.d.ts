@@ -131,6 +131,8 @@ export declare const zh: {
     'community.action.summary': string;
     'community.action.collapse': string;
     'community.action.brief': string;
+    'community.briefState.cost': string;
+    'community.briefState.paid': string;
     'community.action.loading': string;
     'community.action.refresh': string;
     'community.action.retry': string;
@@ -144,8 +146,17 @@ export declare const zh: {
     'community.action.registering': string;
     'community.action.inviteShow': string;
     'community.action.inviteHide': string;
+    'community.tip.summary': string;
     'community.tip.briefDisabled': string;
     'community.tip.briefCost': string;
+    'community.tip.briefUnlocked': string;
+    'community.briefConfirm.title': string;
+    'community.briefConfirm.scope': string;
+    'community.briefConfirm.cost': string;
+    'community.briefConfirm.balance': string;
+    'community.briefConfirm.balanceUnknown': string;
+    'community.briefConfirm.idempotent': string;
+    'community.briefConfirm.confirm': string;
     'community.tip.balance': string;
     'community.tip.balanceDetail': string;
     'community.tip.keyPrivacy': string;

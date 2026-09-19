@@ -101,6 +101,23 @@ export interface WorkItem {
   summary: string | null
   /** 与 owner 的关系（部分响应带）。 */
   updatedAt: string
+  /**
+   * **服务器的权威判据**：打开这一项的简报**还会不会再扣 Token**（`brief_paid`）。
+   *
+   * `true` = 不再扣（账本里有该 viewer 对该项目的 `BRIEF_VIEW` 支付记录，或项目属于自己）；
+   * `false` = 首次打开会扣 `BRIEF_TOKEN_COST`（默认 1）。
+   *
+   * `null` = 响应里没有这个字段（旧版服务器）—— 只有这时才退回本地记忆 `briefOpened`；
+   * 两者都拿不准就当"会扣费"（照常提醒，宁可多问一次）。
+   */
+  briefPaid?: boolean | null
+  /**
+   * **插件补的兜底**（不是服务器字段）：宿主本地记忆里这一项的简报已经买过。
+   *
+   * 只在服务器没有 `brief_paid` 时才需要它（`research/paid-briefs.ts`）；
+   * 服务器给了权威值时以 `briefPaid` 为准。
+   */
+  briefOpened?: boolean
 }
 
 /**
@@ -123,6 +140,17 @@ export interface WorkBrief {
   keyEvidence: string[]
   openProblems: string[]
   updatedAt: string
+  /**
+   * **这一次**调用花掉的 Token（服务器的 `charged_tokens`）。
+   *
+   * 服务器口径：自己的项目免费；否则**按 `(viewer, project)` 只收一次** ——
+   * 已经买过时这里就是 0。界面据此给出**准确**回执（不再靠余额差值反推），
+   * 并把"这一项已解锁"记进本地（下次不必再弹确认框）。
+   *
+   * `null` = 响应里没有这个字段（旧版服务器 / 异常响应）—— 界面这时退回
+   * "按余额差值说话"，而不是当成 0 谎报"没扣费"。
+   */
+  chargedTokens: number | null
 }
 
 /**
@@ -986,6 +1014,9 @@ function parseWorkItem(raw: unknown): WorkItem {
     researchQuestion: asString(b.research_question) || null,
     summary: asString(b.summary) || null,
     updatedAt: asString(b.updated_at),
+    // `brief_paid`：打开这项简报还会不会再扣 Token（服务器按支付记录 / owner 判定）。
+    // 只有真的是布尔才采信；字段缺失或类型不对 → null（= 不知道，界面会照常提醒）。
+    briefPaid: typeof b.brief_paid === 'boolean' ? b.brief_paid : null,
   }
 }
 
@@ -1001,6 +1032,12 @@ function parseWorkBrief(raw: unknown): WorkBrief {
     methodOverview: asString(b.method_overview) || null,
     keyEvidence: asStringArray(b.key_evidence),
     openProblems: asStringArray(b.open_problems),
+    // `charged_tokens`：本次调用花掉的 Token（0 = 自己的项目 / 已经买过）。
+    // 字段缺失/不是数字 → null（界面据此退回"按余额差值"），不谎报 0。
+    chargedTokens:
+      typeof b.charged_tokens === 'number' && Number.isFinite(b.charged_tokens) && b.charged_tokens >= 0
+        ? b.charged_tokens
+        : null,
   }
 }
 

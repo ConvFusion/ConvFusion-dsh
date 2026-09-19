@@ -503,6 +503,12 @@ console.log('\n[live.5] 本插件 account/* 端点 × 真实服务器')
  * 这一节走完 `INTEGRATION.md` §10 的 ②③④⑤⑥⑦：建项目 → 传状态 → 发布 →
  * 发现网络能看到 → 读摘要（免费）→ 读简报（非 owner 花 1 Token）。
  * 402 之后**用同一个 intentKey** 充值再试，验证"不会重复扣费"这条服务端承诺。
+ *
+ * ⚠️ 简报的计费口径（2026-09 服务器改定）：**按 `(viewer, project)` 买一次**
+ * （`token.py:has_paid_brief` 查不可变账本里的 `BRIEF_VIEW` 记录）。
+ * 所以"重复扣费"有**两层**都要验：同一 `intentKey` 回放不扣；换新 Key（甚至不传）
+ * 重新打开**同一项**研究也不扣。而读**另一个项目**必须照常扣 1 —— 否则
+ * "永远不扣费"的回归会悄悄通过。
  * ─────────────────────────────────────────────────────────────────────── */
 console.log('\n[live.6] 研究工作：发布 → 发现 → 摘要 → 简报（含 402 → 充值 → 同 Key 重试）')
 {
@@ -594,6 +600,8 @@ console.log('\n[live.6] 研究工作：发布 → 发现 → 摘要 → 简报�
     assertEq(found.stage, 'EXPERIMENT', '列表带出研究阶段')
     assertEq(found.researchFields, ['LLM'], '列表带出研究领域')
     assertEq(typeof found.progress, 'number', '列表带出进度')
+    // 权威判据：还没付过费 → false（界面据此**弹**确认框）
+    assertEq(found.briefPaid, false, '未付费 → brief_paid=false（界面会先确认）')
   }
   assert(!JSON.stringify(list).includes(adminKey), '列表响应里没有 Key 明文')
 
@@ -630,6 +638,14 @@ console.log('\n[live.6] 研究工作：发布 → 发现 → 摘要 → 简报�
   const available = balance.body?.available_balance ?? balance.body?.available
   assertEq(available, 4, `简报只扣了 1 个 Token（余额 ${available}，期望 4）`)
 
+  // ⑥-4a `brief_paid` 的**真实翻转**：付过费之后列表就该说"不用再花钱了"。
+  // 这条是"只在真会扣费时才提醒"的服务器依据 —— 界面靠它跳过确认框。
+  const listAfter = await mined.handler('work/list', {})
+  const foundAfter = (listAfter.value?.items ?? []).find((it) => it.projectId === projectId)
+  assertEq(foundAfter?.briefPaid, true, '付费后 → brief_paid=true（界面不再弹确认框）')
+  const sumAfter = await mined.handler('work/summary', { projectId })
+  assertEq(sumAfter.value?.work?.briefPaid, true, '同一判据在 /summary 也生效')
+
   // ⑥-4b 界面上的余额：走**插件端点**核对，确保"用户看到的数字"= 服务器扣完的真实数字
   const logged = await mined.handler('account/verify', {})
   assertEq(logged.ok, true, 'verify 成功（顺带取余额）')
@@ -644,11 +660,15 @@ console.log('\n[live.6] 研究工作：发布 → 发现 → 摘要 → 简报�
   const balance2 = await api('/tokens', { headers: { authorization: `Bearer ${adminKey}` } })
   assertEq(balance2.body?.available_balance ?? balance2.body?.available, 4, '重放**没有**再次扣费')
 
-  // ⑥-6 换新 Key（新意图）会正常扣费一次
+  // ⑥-6 同一项目**换新 Key**（新意图）也不再扣费。
+  //      服务器把简报改成"按 (viewer, project) 买一次"（`token.py:has_paid_brief`，
+  //      看不可变账本里的 BRIEF_VIEW 记录），与 Idempotency-Key 无关 —— 换 Key、
+  //      甚至不传 Key，重新打开同一项研究都不该再扣一次。
   const second = await mined.handler('work/brief', { projectId, intentKey: `${intentKey}-2` })
-  assertEq(second.ok, true, '新意图读简报成功')
+  assertEq(second.ok, true, '换新 Key 再读同一项目成功')
+  assertEq(second.value?.brief?.coreIdea, '把检索与注意力交错。', '换 Key 仍带出 Level 2 内容（不是命中回放）')
   const balance3 = await api('/tokens', { headers: { authorization: `Bearer ${adminKey}` } })
-  assertEq(balance3.body?.available_balance ?? balance3.body?.available, 3, '新意图扣费 1（余额 3）')
+  assertEq(balance3.body?.available_balance ?? balance3.body?.available, 4, '同一项目换新 Key 不再扣费（余额仍是 4）')
 
   // ⑥-7 未发布的项目对别人不可见（不存在性不泄漏）
   const hidden = await api('/projects', {
@@ -793,10 +813,27 @@ console.log('\n[live.7] 寻找指导：本机研究 → 发布 → 被另一个�
   const sum = await finder.handler('work/summary', { projectId: serverProjectId })
   assertEq(sum.ok, true, '另一个账号能读摘要（免费）')
   assertEq(sum.value?.work?.summary, '现场验证：裁剪证据与失败判定', '摘要 = 本机主题句')
+  // 「按 (viewer, project) 买一次」的正反两面都在**同一个账号**上验到：
+  //   换一个**新项目** → 真的扣 1；同一项目换 Key 再读 → 不扣。
+  // 只验"不扣"的话，"永远不扣费"这种回归也能通过。
+  const balanceOf = async () =>
+    (await api('/tokens', { headers: { authorization: `Bearer ${researcherKey}` } })).body?.available_balance
+  const paidBefore = await balanceOf()
   const brief = await finder.handler('work/brief', { projectId: serverProjectId, intentKey: `live7-${Date.now()}` })
   assertEq(brief.ok, true, '另一个账号能读简报（花 1 Token）')
   assertEq(brief.value?.brief?.hypothesis, 'H1：收益是样本条件性的。', '简报里的假设来自本机 research-state.md')
   assertEq(brief.value?.brief?.motivation, '数据过滤需要可信的失败判定。', '简报里的动机来自本机 project.md')
+  const paidAfter = await balanceOf()
+  assertEq(paidBefore - paidAfter, 1, `换一个新项目读简报真实扣 1 Token（${paidBefore} → ${paidAfter}）`)
+
+  const againBrief = await finder.handler('work/brief', {
+    projectId: serverProjectId,
+    intentKey: `live7-again-${Date.now()}`,
+  })
+  assertEq(againBrief.ok, true, '同一项目换新 Key 再读成功')
+  assertEq(againBrief.value?.brief?.hypothesis, 'H1：收益是样本条件性的。', '再读仍带出 Level 2 内容')
+  const paidFinal = await balanceOf()
+  assertEq(paidAfter - paidFinal, 0, '同一项目换新 Key 不再扣费（0 Token）')
 
   // ⑤ 发布后继续更新：上传新状态即可，**不需要重新发布**（已验证可见性仍是 PUBLISHED）
   const updated = await publisher('work/publish', { id: 'ws-live' })
