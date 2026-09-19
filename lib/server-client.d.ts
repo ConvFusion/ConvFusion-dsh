@@ -53,6 +53,13 @@ export type FetchLike = (input: string, init?: {
      * 而不是等到用户点下载才在运行期炸（测试夹具已经跟着补上了）。
      */
     arrayBuffer(): Promise<ArrayBuffer>;
+    /**
+     * 响应头。**可选**：只有要读 `Content-Disposition` 的下载路径需要它，
+     * 其余端点不看头，假 fetch 不必实现。
+     */
+    headers?: {
+        get(name: string): string | null;
+    };
 }>;
 /** 服务器上的账号（`GET /api/v1/auth/me` 的响应，字段名已转 camelCase）。 */
 export interface ServerAccount {
@@ -365,7 +372,10 @@ export declare function fetchProjectFiles(base: string, apiKey: string, projectI
  * 服务端行为：同一路径只导出**最新一次上传**（工作区快照，不重复），
  * 条目名是 workspace 相对路径（含目录层次）。
  */
-export declare function fetchProjectArchive(base: string, apiKey: string, projectId: string, options?: ServerRequestOptions): Promise<Uint8Array>;
+export declare function fetchProjectArchive(base: string, apiKey: string, projectId: string, options?: ServerRequestOptions): Promise<{
+    bytes: Uint8Array;
+    contentDisposition: string | null;
+}>;
 /**
  * 下载一个文件的**原始字节**（不是 JSON，所以不能走 `requestJson`）。
  *

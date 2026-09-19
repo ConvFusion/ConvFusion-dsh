@@ -288,6 +288,8 @@ section('[6] mentor/list 带出指导进展（reviewFiles）')
 section('[7] GET mentor/archive（同源代理，交给浏览器保存）')
 {
   const ARCHIVE = Buffer.from('PK\u0003\u0004 fake-zip-bytes')
+  /** 服务器给的文件名（`filename*` 是 RFC 5987 的 UTF-8 形态）。 */
+  const SERVER_CD = `attachment; filename="zengsn-project.zip"; filename*=UTF-8''${encodeURIComponent('曾老师-检索增强推理.zip')}`
   /** 假 res：记录 writeHead 的头与写入的字节。 */
   const makeRes = () => {
     const out = { status: 0, headers: {}, chunks: [] }
@@ -325,7 +327,18 @@ section('[7] GET mentor/archive（同源代理，交给浏览器保存）')
     store: CUST.createMemoryCustomizationStore(),
     fetchImpl: async (url) => {
       assert(String(url).endsWith(`/api/v1/projects/${PROJECT_ID}/files/archive`), '代理去取 /files/archive')
-      return { ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => ARCHIVE.buffer.slice(ARCHIVE.byteOffset, ARCHIVE.byteOffset + ARCHIVE.byteLength) }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+        arrayBuffer: async () =>
+          ARCHIVE.buffer.slice(ARCHIVE.byteOffset, ARCHIVE.byteOffset + ARCHIVE.byteLength),
+        // 服务器按 `<owner>-<project>.zip` 命名（`app/api/v1/files.py` 的 download_name）
+        headers: {
+          get: (name) =>
+            name.toLowerCase() === 'content-disposition' ? SERVER_CD : null,
+        },
+      }
     },
   })
 
@@ -335,15 +348,44 @@ section('[7] GET mentor/archive（同源代理，交给浏览器保存）')
   assertEq(res.out.status, 200, 'GET 代理返回 200')
   assertEq(res.out.headers['content-type'], 'application/zip', 'content-type 是 zip')
   assertEq(res.out.headers['content-length'], String(ARCHIVE.byteLength), 'content-length 与字节数一致')
-  assert(
-    String(res.out.headers['content-disposition'] ?? '').startsWith('attachment;'),
-    'Content-Disposition: attachment —— 浏览器据此走"保存文件"而不是打开',
-  )
-  assert(
-    String(res.out.headers['content-disposition'] ?? '').includes("filename*=UTF-8''"),
-    '中文文件名走 RFC 5987 编码（另有 ASCII 兜底）',
+  // ⚠️ 文件名必须**原样透传服务器**的 Content-Disposition。
+  // 自己按 title 拼的后果实测过：服务器改成 `<owner>-<title>.zip` 之后，
+  // 下载下来仍然是旧的 `<title>.zip`。
+  assertEq(
+    res.out.headers['content-disposition'],
+    SERVER_CD,
+    'Content-Disposition 原样透传（服务器才是文件名的唯一权威）',
   )
   assertEq(Buffer.concat(res.out.chunks).toString('latin1'), ARCHIVE.toString('latin1'), '响应体就是服务器给的原字节')
+
+  // ①b 服务器没给 Content-Disposition 时兜底（否则浏览器会拿 URL 末段当文件名：
+  //     `archive` —— 连扩展名都没有）
+  const noHeader = RPC.createSettingsRouteHandler({
+    getConfig: () =>
+      CFG.resolveConfig({
+        customizationFile: 'x.json',
+        customizationDir: work,
+        serverUrl: 'http://localhost:8000',
+        convfusionApiKey: KEY,
+      }),
+    store: CUST.createMemoryCustomizationStore(),
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+      arrayBuffer: async () =>
+        ARCHIVE.buffer.slice(ARCHIVE.byteOffset, ARCHIVE.byteOffset + ARCHIVE.byteLength),
+      headers: { get: () => null },
+    }),
+  })
+  const fallbackRes = makeRes()
+  await noHeader(
+    makeReq(`/dsh-convfusion/mentor/archive?projectId=${PROJECT_ID}&title=${encodeURIComponent('检索增强推理')}`),
+    fallbackRes,
+  )
+  const cd = String(fallbackRes.out.headers['content-disposition'] ?? '')
+  assert(cd.startsWith('attachment;'), '没有服务器头时仍给 attachment')
+  assert(cd.includes(encodeURIComponent('检索增强推理')), '兜底名字来自 title，且带 UTF-8 编码')
 
   // ② 缺 projectId → 400（而不是流一个空 zip 出去）
   const bad = makeRes()

@@ -61,6 +61,11 @@ export type FetchLike = (
    * 而不是等到用户点下载才在运行期炸（测试夹具已经跟着补上了）。
    */
   arrayBuffer(): Promise<ArrayBuffer>
+  /**
+   * 响应头。**可选**：只有要读 `Content-Disposition` 的下载路径需要它，
+   * 其余端点不看头，假 fetch 不必实现。
+   */
+  headers?: { get(name: string): string | null }
 }>
 
 /** 服务器上的账号（`GET /api/v1/auth/me` 的响应，字段名已转 camelCase）。 */
@@ -944,7 +949,7 @@ async function fetchBinary(
   apiKey: string,
   options: ServerRequestOptions,
   label: string,
-): Promise<Uint8Array> {
+): Promise<{ bytes: Uint8Array; contentDisposition: string | null }> {
   const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike | undefined)
   if (typeof fetchImpl !== 'function') throw new ServerError('unreachable', '当前运行环境没有可用的 fetch。')
   const timeoutMs = options.timeoutMs ?? SERVER_TIMEOUT_MS
@@ -981,7 +986,9 @@ async function fetchBinary(
     }
     throw mapHttpError(res.status, body)
   }
-  return new Uint8Array(await res.arrayBuffer())
+  // 文件名由**服务器**决定（`<owner>-<project>.zip`）——代理只透传，不自造
+  const contentDisposition = res.headers?.get('content-disposition') ?? null
+  return { bytes: new Uint8Array(await res.arrayBuffer()), contentDisposition }
 }
 
 /**
@@ -998,18 +1005,17 @@ export async function fetchProjectArchive(
   apiKey: string,
   projectId: string,
   options: ServerRequestOptions = {},
-): Promise<Uint8Array> {
+): Promise<{ bytes: Uint8Array; contentDisposition: string | null }> {
   const key = requireKey(apiKey)
   const id = (projectId ?? '').trim()
   if (!id) throw new ServerError('bad-request', '缺少 projectId。')
-  const bytes = await fetchBinary(
+  return await fetchBinary(
     base,
     `/projects/${encodeURIComponent(id)}/files/archive`,
     key,
     options,
     '下载工作区快照',
   )
-  return bytes
 }
 
 /**
@@ -1029,13 +1035,14 @@ export async function fetchProjectFileBytes(
   const id = (projectId ?? '').trim()
   const fid = (fileId ?? '').trim()
   if (!id || !fid) throw new ServerError('bad-request', '缺少 projectId / fileId。')
-  return await fetchBinary(
+  const { bytes } = await fetchBinary(
     base,
     `/projects/${encodeURIComponent(id)}/files/${encodeURIComponent(fid)}`,
     key,
     options,
     '下载文件',
   )
+  return bytes
 }
 
 /* ════════════════════════════════════════════════════════════════════════

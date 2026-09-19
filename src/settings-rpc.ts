@@ -1729,8 +1729,13 @@ export function createSettingsRpcHandler(
           if (!projectId) return fail('bad-request', '缺少 projectId。')
           try {
             const base = resolveServerUrl(config, env()).url
-            const archive = await fetchProjectArchive(base, apiKey, projectId, netOptions())
-            return { ok: true, value: { archive } }
+            const { bytes, contentDisposition } = await fetchProjectArchive(
+              base,
+              apiKey,
+              projectId,
+              netOptions(),
+            )
+            return { ok: true, value: { archive: bytes, contentDisposition } }
           } catch (e) {
             return serverFail(e)
           }
@@ -1938,13 +1943,22 @@ export function createSettingsRouteHandler(deps: SettingsRouteDeps): SettingsRou
         sendJson(res, 502, { ok: false, error: dispatchResult.error })
         return
       }
-      const archive = (dispatchResult.value as { archive: Uint8Array }).archive
-      const filename = `${title.replace(/[\\/:*?"<>|]/g, '_') || 'workspace'}.zip`
+      const value = dispatchResult.value as { archive: Uint8Array; contentDisposition: string | null }
+      const archive = value.archive
+      /*
+       * 文件名**原样透传服务器的 `Content-Disposition`**（`<owner>-<project>.zip`）。
+       *
+       * 代理不该自己拼名字：那样服务器改了命名规则，这边还在用旧规则 —— 表现就是
+       * "服务器改成 xxx.zip，下载下来却还是 yyy.zip"（2026-09 实测踩到）。
+       * 只有服务器没给这个头时才兜底，避免文件名退化成 URL 末段（`archive`，没有扩展名）。
+       */
+      const fallback = `${title.replace(/[\\/:*?"<>|]/g, '_') || 'workspace'}.zip`
       res.writeHead(200, {
         'content-type': 'application/zip',
         'content-length': String(archive.byteLength),
-        // 文件名同时给 ASCII 兜底，避免中文名在部分客户端变成乱码
-        'content-disposition': `attachment; filename="workspace.zip"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        'content-disposition':
+          value.contentDisposition ??
+          `attachment; filename="workspace.zip"; filename*=UTF-8''${encodeURIComponent(fallback)}`,
         'cache-control': 'no-store',
       })
       res.write(archive)

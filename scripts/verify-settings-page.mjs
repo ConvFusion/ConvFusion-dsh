@@ -1577,8 +1577,14 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     '走同源 GET 代理（凭据由宿主持有，不进浏览器）',
   )
   assert(
-    /a\.download = `\$\{title\}\.zip`/.test(src),
-    '用 <a download> 触发（window.location 会把设置页导航走）',
+    /document\.createElement\('a'\)/.test(src) && /a\.click\(\)/.test(src),
+    '用 <a> 触发（window.location 会把设置页导航走）',
+  )
+  // ⚠️ 不能设 `a.download`：同源下载里它会覆盖服务器的 Content-Disposition 文件名，
+  // 于是"服务器改成 <owner>-<project>.zip"就白改了（实测踩到）
+  assert(
+    !/a\.download\s*=/.test(src),
+    '不设 a.download —— 文件名只由服务器的 Content-Disposition 决定',
   )
   assert(src.includes("t('community.exchange.downloadStarted',"), '起下载后给一句回执（带文件数与体积）')
   assert(src.includes("t('community.exchange.uploadTitle')"), '上传对话框标题走 i18n')

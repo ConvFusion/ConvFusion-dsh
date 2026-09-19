@@ -2957,11 +2957,15 @@ function CommunityTab({
     }
     const title = p.projectTitle ?? t('community.mentor.untitledProject')
     const url = `${SETTINGS_ROUTE_PREFIX}/mentor/archive?projectId=${encodeURIComponent(p.projectId)}&title=${encodeURIComponent(title)}`
-    // 用 `<a download>` 而不是 `window.location=`：后者会把整个设置页导航走，
-    // 而 `window.open` 会被弹窗拦截（这里虽然来自点击，但多一层保险更省事）。
+    /*
+     * 用 `<a>` 而不是 `window.location=`：后者会把整个设置页导航走。
+     *
+     * ⚠️ **不设 `a.download`**：同源下载里它会覆盖服务器的 `Content-Disposition` 文件名，
+     * 于是"服务器按 `<owner>-<project>.zip` 命名"就白改了（2026-09 实测踩到）。
+     * 文件名只有一个权威来源 = 服务器。
+     */
     const a = document.createElement('a')
     a.href = url
-    a.download = `${title}.zip`
     document.body.appendChild(a)
     a.click()
     a.remove()

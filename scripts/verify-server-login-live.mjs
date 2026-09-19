@@ -1260,6 +1260,15 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
     'Content-Disposition: attachment —— 浏览器据此走"保存文件"',
   )
   assertEq(proxied.bytes.subarray(0, 2).toString('latin1'), 'PK', '回的是真 ZIP（PK 头）')
+  // ⚠️ 文件名必须**原样透传服务器**的（`<owner 的 display_name>-<项目 title>.zip`）。
+  // 代理曾经自己按 title 拼，结果服务器改了命名规则、下载下来还是旧名字（实测踩到）。
+  const cdHeader = String(proxied.headers['content-disposition'] ?? '')
+  assert(
+    cdHeader.includes("filename*=UTF-8''") &&
+      decodeURIComponent(cdHeader.split("filename*=UTF-8''")[1]) ===
+        `Live Researcher-Live Verify · 指导关系.zip`,
+    `文件名透传服务器的 <owner>-<title>.zip（实际 ${cdHeader}）`,
+  )
   const names = zipEntryNames(proxied.bytes)
   assert(
     names.includes(ATTACH),
