@@ -80,6 +80,7 @@ import {
   CONVFUSION_API_KEY_ENV,
   OPENALEX_API_KEY_ENV,
   defaultServerUrl,
+  serverUrlPresets,
 } from './config.js'
 import { HOST_PROTOCOL, HOST_PROTOCOL_FIELD } from './protocol.js'
 import type { SkillCustomizationStore } from './research/skill-customization.js'
@@ -91,7 +92,12 @@ import {
   systemLibraryStatus,
 } from './research/skill-customization.js'
 import { effectiveSkillContentById } from './research/library.js'
-import { readReviewFile, scanReviewFiles } from './research/workspace-sync.js'
+import {
+  readReviewFile,
+  safeDirName,
+  scanReviewFiles,
+  writeFileUnique,
+} from './research/workspace-sync.js'
 import type { Config } from './config.js'
 import {
   describeConvFusionKey,
@@ -108,6 +114,7 @@ import {
   fetchAcceptProposal,
   fetchAccount,
   fetchProjectArchive,
+  fetchProjectFileBytes,
   fetchProjectFiles,
   fetchFeeSuggestion,
   fetchProposals,
@@ -121,8 +128,10 @@ import {
   normalizeBaseUrl,
   fetchUsage,
   fetchProject,
+  probeServerHealth,
   publishProject,
   readStateVersion,
+  SERVER_TIMEOUT_MS,
   ServerError,
   uploadReviewFiles,
   uploadProjectFiles,
@@ -345,6 +354,13 @@ export interface AccountState {
   /** 这个地址是哪来的：设置文档 / 环境变量 / 环境配置文件 / 内置兜底。 */
   serverUrlSource: 'settings' | 'env' | 'config' | 'default'
   /**
+   * **两个环境的地址**（开发 / 生产），给设置页那两个快捷按钮用。
+   *
+   * ⚠️ 由宿主按配置文件解析（`serverUrlPresets`）—— 界面不自己写死域名，
+   * 否则部署把地址换成自有域名后按钮会指错地方。
+   */
+  serverPresets: Record<'development' | 'production', string>
+  /**
    * 当前环境（开发 / 生产）。
    *
    * ⚠️ **地址随环境而变**：开发是 `http://localhost:8000`、生产是
@@ -390,6 +406,7 @@ export function buildAccountState(
     serverUrl: server.url,
     defaultServerUrl: defaultServerUrl(env),
     serverUrlSource: server.source,
+    serverPresets: serverUrlPresets(env, options),
     environment: server.environment,
     serverUrlMismatch: server.mismatched,
     keyConfigured: key.configured,
@@ -689,6 +706,7 @@ function asRecordLike(v: unknown): Record<string, unknown> | null {
  * | `customization/resetSkill` | `{ skillId }` | 清除一个 Skill 的全部覆盖 |
  * | `customization/resetAll` | `{}` | 清除全部定制（回到全系统原文） |
  * | `account/state` | `{}` | 【ConvFusion.com】登录状态（**不联网**） |
+ * | `account/probe` | `{ serverUrl? }` | **只测连通性**（匿名 `/health`，最长 8 秒）；`reachable` 是结果不是错误 |
  * | `account/login` | `{ apiKey, serverUrl? }` | 用 API Key 登录（联网验证后落盘） |
  * | `account/register` | `{ invitationCode, email, displayName, serverUrl? }` | 凭邀请码注册并登录 |
  * | `account/verify` | `{}` | 用已保存的凭据重新验证身份（联网） |
@@ -706,7 +724,8 @@ function asRecordLike(v: unknown): Record<string, unknown> | null {
  * | `mentor/accept` | `{ proposalId, intentKey }` | 接受指导（研究者）→ **冻结押金**、建合同与关系 |
  * | `mentor/reject` | `{ proposalId }` | 拒绝指导（研究者） |
  * | `mentor/pickDirectory` | `{}` / `{ probe:true }` | 开系统目录选择器（`native` 才可用）；`probe` 只问能力不开窗 |
- * | `mentor/archiveInfo` | `{ projectId }` | 下载前的预检（文件数 / 体积）；真正的下载走 GET `mentor/archive` |
+ * | `mentor/downloadState` | `{ projectId, prefix }` | 【下载】对话框一次拿齐：预检（文件数 / 体积 / 预计文件名）+ **全部**可选工作区 |
+ * | `mentor/download` | `{ projectId, workspaceId, prefix }` | 只把 ZIP 存进所选工作区（**不解压、不覆盖**，同名加序号） |
  * | `mentor/scanReview` | `{ dir }` | 列出工作区 `review/` 下的文件（上传源） |
  * | `mentor/upload` | `{ projectId, dir, paths:[relPath] }` | 按原相对路径回传 `review/**` |
  *
@@ -1139,6 +1158,39 @@ export function createSettingsRpcHandler(
         case 'account/state':
           // 不联网：服务器挂了也要能打开设置页（因此也没有余额）
           return { ok: true, value: buildAccountState(deps.getConfig(), env(), null) }
+
+        case 'account/probe': {
+          /*
+           * **只测连通性**（设置页两个服务器快捷按钮上色用：通了=绿）。
+           *
+           * 与 `account/verify` 的区别：这里是**匿名**的 —— 一个字节的凭据都不带。
+           * 换地址发生在"还没登录 / 正要换账号"的时候，那时凭据可能根本不属于这台服务器；
+           * 而且把 Key 发到用户手输的地址上就是白送凭据。
+           *
+           * 返回 `ok: true` + `reachable`（"连不上"是**结果**，不是 RPC 失败）；只有地址
+           * 本身非法才是 `bad-request`。失败原因原样带回，界面放进悬浮提示。
+           */
+          let base: string
+          try {
+            base = requestBase(p.serverUrl)
+          } catch (e) {
+            return serverFail(e)
+          }
+          try {
+            const opts = netOptions() ?? {}
+            await probeServerHealth(base, {
+              ...opts,
+              // 探活是**按钮上的一次反馈**，不能让人等 30 秒：最长 8 秒就下结论
+              timeoutMs: Math.min(opts.timeoutMs ?? SERVER_TIMEOUT_MS, SERVER_TIMEOUT_MS),
+            })
+            return { ok: true, value: { reachable: true, url: base, reason: null } }
+          } catch (e) {
+            return {
+              ok: true,
+              value: { reachable: false, url: base, reason: e instanceof Error ? e.message : String(e) },
+            }
+          }
+        }
 
         case 'account/login': {
           const apiKey = normalizeApiKey(asString(p.apiKey))
@@ -1720,35 +1772,11 @@ export function createSettingsRpcHandler(
           }
         }
 
-        case 'mentor/archive': {
-          // 内部端点：只被上面的 GET 分支调用（浏览器不直接请求它）
-          const config = deps.getConfig()
-          const apiKey = resolveConvFusionApiKey(config, env())
-          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
-          const projectId = asString(p.projectId)
-          if (!projectId) return fail('bad-request', '缺少 projectId。')
-          try {
-            const base = resolveServerUrl(config, env()).url
-            const { bytes, contentDisposition } = await fetchProjectArchive(
-              base,
-              apiKey,
-              projectId,
-              netOptions(),
-            )
-            return { ok: true, value: { archive: bytes, contentDisposition } }
-          } catch (e) {
-            return serverFail(e)
-          }
-        }
-
-        case 'mentor/archiveInfo': {
+        case 'mentor/downloadState': {
           /*
-           * 【下载】的**预检**：先问服务器"这个项目有没有文件、多大"。
-           *
-           * 为什么要有它：文件最终由**浏览器原生下载**（GET 同源代理，见
-           * `createSettingsRouteHandler` 里的 `mentor/archive`）。浏览器下载失败时
-           * 只会把一个 JSON 错误当文件存下来，用户看到的是一个坏 zip —— 所以
-           * 失败必须在**导航之前**就说清楚。
+           * 【下载】对话框要的三样：可选工作区列表、预检（多少文件/多大）、
+           * 以及**预计保存成什么文件名**（服务器命名 `<owner>-<title>.zip`）。
+           * 合成一次调用：少一次往返，也少一处不一致。
            */
           const config = deps.getConfig()
           const apiKey = resolveConvFusionApiKey(config, env())
@@ -1758,10 +1786,57 @@ export function createSettingsRpcHandler(
           try {
             const base = resolveServerUrl(config, env()).url
             const files = await fetchProjectFiles(base, apiKey, projectId, netOptions())
+            const listed = deps.listLocalWorkspaces ? await deps.listLocalWorkspaces() : null
             return {
               ok: true,
-              value: { files: files.length, bytes: files.reduce((sum, f) => sum + f.size, 0) },
+              value: {
+                files: files.length,
+                bytes: files.reduce((sum, f) => sum + f.size, 0),
+                available: listed?.available ?? false,
+                reason: listed?.reason ?? null,
+                // 文件名只有**预检**能提前看到；真正的名字以服务器响应头为准
+                expectedName: `${safeDirName(asString(p.prefix), 'workspace')}.zip`,
+                items: (listed?.items ?? []).map((it) => ({
+                  id: it.id,
+                  title: it.title,
+                  path: it.path,
+                })),
+              },
             }
+          } catch (e) {
+            return serverFail(e)
+          }
+        }
+
+        case 'mentor/download': {
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          const projectId = asString(p.projectId)
+          if (!projectId) return fail('bad-request', '缺少 projectId。')
+          const workspaceId = asString(p.workspaceId)
+          if (!workspaceId) return fail('bad-request', '请先选择要保存到的工作区。')
+          /*
+           * **只把 ZIP 存下来，其余交给用户**（2026-09 用户拍板）。
+           *
+           * 因此这里没有解压、没有 scope、没有"这个工作区里有没有研究"的判断：
+           *   · 目标目录按**注册表 id 在宿主侧解析**（客户端递不进任意路径）；
+           *   · 文件写在**工作区根目录**（用户材料，不进 `<工作区>/workspace/` 研究数据区）；
+           *   · 同名**不覆盖**，自动加序号 → 所选工作区里原有的东西一个都不动，
+           *     所以任何工作区都能选，不需要禁用。
+           * 文件名用服务器给的（`<owner>-<title>.zip`）；服务器没给才用客户端传的前缀兜底。
+           */
+          const listed = deps.listLocalWorkspaces ? await deps.listLocalWorkspaces() : null
+          const target = listed?.items.find((it) => it.id === workspaceId)
+          if (!target) {
+            return fail('not-found', '找不到这个工作区（可能已被删除）。刷新后重试。')
+          }
+          try {
+            const base = resolveServerUrl(config, env()).url
+            const { bytes, filename } = await fetchProjectArchive(base, apiKey, projectId, netOptions())
+            const fallback = `${safeDirName(asString(p.prefix), 'workspace')}.zip`
+            const saved = writeFileUnique(target.path, filename ?? fallback, bytes)
+            return { ok: true, value: { dir: target.path, ...saved } }
           } catch (e) {
             return serverFail(e)
           }
@@ -1915,55 +1990,6 @@ export function createSettingsRouteHandler(deps: SettingsRouteDeps): SettingsRou
         })
         return
       }
-    }
-
-    /*
-     * `GET mentor/archive`：**同源代理**服务器的工作区快照，交给浏览器原生下载。
-     *
-     * 为什么必须由宿主代理：
-     *   1. 服务器要 `Authorization: Bearer cf_live_…`，浏览器直接点 URL 拿不到凭据
-     *      （凭据也绝不能进浏览器）；
-     *   2. 于是响应由宿主带着凭据取回，再以 `Content-Disposition: attachment` 回给
-     *      浏览器 —— 浏览器看到"这是个文件"就会走它自己的保存流程。
-     *
-     * 这是**唯一**一个非 POST 端点，所以单独分支、不读 JSON body。
-     */
-    if (method === 'GET' && endpoint === 'mentor/archive') {
-      const query = new URL(req.url ?? '/', 'http://dsh.internal').searchParams
-      const projectId = (query.get('projectId') ?? '').trim()
-      const title = (query.get('title') ?? '').trim() || 'workspace'
-      if (!projectId) {
-        sendJson(res, 400, { ok: false, error: { code: 'bad-request', message: '缺少 projectId。' } })
-        return
-      }
-      const dispatchResult = await dispatch('mentor/archive', { projectId })
-      if (!dispatchResult.ok) {
-        // 预检失败就不该走到这里（界面先问 archiveInfo），但守一手：
-        // 宁可回 JSON 让用户看到错误，也不要流一个坏 zip 出去
-        sendJson(res, 502, { ok: false, error: dispatchResult.error })
-        return
-      }
-      const value = dispatchResult.value as { archive: Uint8Array; contentDisposition: string | null }
-      const archive = value.archive
-      /*
-       * 文件名**原样透传服务器的 `Content-Disposition`**（`<owner>-<project>.zip`）。
-       *
-       * 代理不该自己拼名字：那样服务器改了命名规则，这边还在用旧规则 —— 表现就是
-       * "服务器改成 xxx.zip，下载下来却还是 yyy.zip"（2026-09 实测踩到）。
-       * 只有服务器没给这个头时才兜底，避免文件名退化成 URL 末段（`archive`，没有扩展名）。
-       */
-      const fallback = `${title.replace(/[\\/:*?"<>|]/g, '_') || 'workspace'}.zip`
-      res.writeHead(200, {
-        'content-type': 'application/zip',
-        'content-length': String(archive.byteLength),
-        'content-disposition':
-          value.contentDisposition ??
-          `attachment; filename="workspace.zip"; filename*=UTF-8''${encodeURIComponent(fallback)}`,
-        'cache-control': 'no-store',
-      })
-      res.write(archive)
-      res.end()
-      return
     }
 
     if (method !== 'POST') {

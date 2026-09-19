@@ -53,10 +53,7 @@ export type FetchLike = (input: string, init?: {
      * 而不是等到用户点下载才在运行期炸（测试夹具已经跟着补上了）。
      */
     arrayBuffer(): Promise<ArrayBuffer>;
-    /**
-     * 响应头。**可选**：只有要读 `Content-Disposition` 的下载路径需要它，
-     * 其余端点不看头，假 fetch 不必实现。
-     */
+    /** 响应头（可选）：下载要读服务器的 `Content-Disposition` 拿文件名。 */
     headers?: {
         get(name: string): string | null;
     };
@@ -249,6 +246,16 @@ export interface ServerRequestOptions {
     timeoutMs?: number;
 }
 /**
+ * **只问"这台服务器活着吗"**：`GET /api/v1/health`（存活探针，无需身份）。
+ *
+ * ⚠️ **一个字节的凭据都不带**。设置页用它给两个快捷按钮上色（通了=绿），而"服务器是否可达"
+ * 本来就不需要身份；带 Key 就等于把凭据发到（用户可能手输的）任意地址上，那是白送。
+ * 服务器那边 `/api/v1/health` 是公开探针（代理与 live 验证脚本都用它），所以这条路可行。
+ *
+ * 失败一律抛 {@link ServerError}，理由（超时 / 拒绝 / 4xx）由调用方决定怎么显示。
+ */
+export declare function probeServerHealth(base: string, options?: ServerRequestOptions): Promise<void>;
+/**
  * 用一份 API Key 做身份自检（连通性 + Key 有效性 + 账号状态 + 角色）。
  *
  * 对应 `INTEGRATION.md` §3 ①：「建议作为插件启动时的第一个调用」。
@@ -366,15 +373,13 @@ export declare function fetchProjectFiles(base: string, apiKey: string, projectI
 /**
  * 下载项目工作区的 **ZIP 快照**（`GET /projects/{id}/files/archive`）。
  *
- * 为什么用归档而不是逐文件：指导闭环要的是"和学生研究工作区内容一致的一份副本"，
- * 一个请求拿到整棵树最省事；逐文件会在几十个文件上放大往返与失败面。
- *
- * 服务端行为：同一路径只导出**最新一次上传**（工作区快照，不重复），
- * 条目名是 workspace 相对路径（含目录层次）。
+ * ⚠️ 只把 ZIP 取回来落盘，**不解压**（2026-09 用户拍板：下载只负责把 .zip 存下来，
+ * 其余交给用户处理）。文件名用服务器给的（`<owner>-<title>.zip`）—— 服务器才是
+ * 命名的权威，插件不自造。
  */
 export declare function fetchProjectArchive(base: string, apiKey: string, projectId: string, options?: ServerRequestOptions): Promise<{
     bytes: Uint8Array;
-    contentDisposition: string | null;
+    filename: string | null;
 }>;
 /**
  * 下载一个文件的**原始字节**（不是 JSON，所以不能走 `requestJson`）。

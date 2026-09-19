@@ -103,7 +103,7 @@ export declare function classify(relPath: string, size: number): {
     decision: UploadDecision;
 };
 /** 分类顺序（对话框里的显示顺序；推荐在前，排除在后）。 */
-export declare const CATEGORY_ORDER: readonly ["state", "plans", "papers", "experiments", "research-assets", "outputs", "literature-raw", "literature-fulltext", "large-files", "others", "runtime-artifacts", "build-artifacts", "models-data"];
+export declare const CATEGORY_ORDER: readonly ["state", "plans", "papers", "experiments", "research-assets", "review", "outputs", "literature-raw", "literature-fulltext", "large-files", "others", "runtime-artifacts", "build-artifacts", "models-data"];
 /** 是否可被用户勾选（`excluded` 不可选）。 */
 export declare function isSelectable(decision: UploadDecision): boolean;
 /** 扫描上限（防御性：某些工作区可能塞了几十万个文件）。 */

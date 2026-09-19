@@ -93,6 +93,7 @@ export declare const zh: {
     'upload.category.papers': string;
     'upload.category.experiments': string;
     'upload.category.research-assets': string;
+    'upload.category.review': string;
     'upload.category.outputs': string;
     'upload.category.literature-raw': string;
     'upload.category.literature-fulltext': string;
@@ -103,6 +104,7 @@ export declare const zh: {
     'upload.reason.papers': string;
     'upload.reason.experiments': string;
     'upload.reason.research-assets': string;
+    'upload.reason.review': string;
     'upload.reason.outputs': string;
     'upload.reason.literature-raw': string;
     'upload.reason.literature-fulltext': string;
@@ -127,6 +129,11 @@ export declare const zh: {
     'community.login.keyLabel': string;
     'community.server.address': string;
     'community.server.title': string;
+    'community.server.presetDev': string;
+    'community.server.presetProd': string;
+    'community.server.probing': string;
+    'community.server.probeOk': string;
+    'community.server.probeFail': string;
     'community.badge.production': string;
     'community.badge.development': string;
     'community.badge.envMismatch': string;
@@ -203,8 +210,12 @@ export declare const zh: {
     'community.mentor.acceptConfirm': string;
     'community.mentor.acceptFreezeNote': string;
     'community.mentor.acceptBalance': string;
-    'community.exchange.downloadStarted': string;
-    'community.exchange.noFilesYet': string;
+    'community.exchange.downloadTitle': string;
+    'community.exchange.sizeBadge': string;
+    'community.exchange.zipOnly': string;
+    'community.exchange.destHint': string;
+    'community.exchange.noWorkspaces': string;
+    'community.exchange.downloadDone': string;
     'community.exchange.dirLabel': string;
     'community.exchange.notScanned': string;
     'community.exchange.noReviewFiles': string;
@@ -421,6 +432,7 @@ export declare const zh: {
     'taxonomy.category.research-decision': string;
     'taxonomy.category.academic-writing': string;
     'taxonomy.category.research-management': string;
+    'taxonomy.category.review': string;
     'taxonomy.skill.topic-understanding': string;
     'taxonomy.skill.research-intent-assessment': string;
     'taxonomy.skill.problem-definition': string;
@@ -471,4 +483,9 @@ export declare const zh: {
     'taxonomy.skill.experiment-pipeline-design': string;
     'taxonomy.skill.resource-requirement-estimation': string;
     'taxonomy.skill.infrastructure-cost-selection': string;
+    'taxonomy.skill.research-direction-review': string;
+    'taxonomy.skill.research-quality-review': string;
+    'taxonomy.skill.experimental-evidence-review': string;
+    'taxonomy.skill.paper-claim-review': string;
+    'taxonomy.skill.pre-submission-review': string;
 };

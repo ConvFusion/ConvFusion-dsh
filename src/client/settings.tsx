@@ -179,6 +179,13 @@ interface HostAccountState {
   defaultServerUrl: string
   serverUrlSource: 'settings' | 'env' | 'config' | 'default'
   /**
+   * 两个环境的地址（开发 / 生产），给地址框右边那两个**快捷图标按钮**用。
+   *
+   * 由宿主解析（配置文件 > 内置兜底）→ 客户端**不写死任何域名**。旧宿主没有这个字段时
+   * 按钮**不显示**（拿不到 ≠ 没有，但不假装有）。
+   */
+  serverPresets?: { development: string; production: string }
+  /**
    * 当前环境（开发 / 生产）。
    *
    * ⚠️ **地址随环境而变**（开发 = 本机服务器，生产 = 线上）。界面必须把这件事说出来：
@@ -604,6 +611,23 @@ const S = {
     fontSize: 13,
     lineHeight: 1,
     cursor: 'pointer',
+  } as React.CSSProperties,
+  /** 快捷按钮的**当前生效态**（地址就是这一边）：与 `accentBtn` 同一套品牌色。 */
+  iconBtnActive: {
+    border: '1px solid var(--dsw-alias-state-business-primary)',
+    background: 'var(--dsw-alias-state-business-tertiary)',
+    color: 'var(--dsw-alias-state-business-primary)',
+  } as React.CSSProperties,
+  /**
+   * 快捷按钮的**连通成功态**：绿色。
+   *
+   * 用 `state-success` 那一组变量（与 `Badge tone="success"` 同一套），不自己调色 ——
+   * 否则"绿"会和页面上其它成功提示不是同一个绿。
+   */
+  iconBtnOk: {
+    border: '1px solid var(--dsw-alias-state-success-primary)',
+    background: 'var(--dsw-alias-state-success-tertiary)',
+    color: 'var(--dsw-alias-state-success-primary)',
   } as React.CSSProperties,
   /** 已登录时的账号名。 */
   accountName: {
@@ -2326,6 +2350,163 @@ function MentorProfileDialog({
 }
 
 /**
+ * 去掉地址末尾的斜杠 —— 只用于**比对**（同一个域名写成带不带末尾斜杠是同一台服务器）。
+ * 不做归一：归一规则归宿主（`normalizeBaseUrl`），界面不复制一份。
+ */
+function stripSlash(url: string): string {
+  return url.replace(/\/+$/, '')
+}
+
+/**
+ * 下载 ZIP 的**兜底文件名前缀**：`<项目所有者>-<项目标题>`，与服务器命名
+ * `<owner>-<title>.zip` 对齐。
+ *
+ * ⚠️ 只在服务器没回 `Content-Disposition` 时才用到；真名一律以服务器给的为准
+ * （客户端不自造命名规则）。宿主的 `safeDirName` 还会再做一次安全化。
+ */
+function downloadPrefix(p: HostProposal): string {
+  const owner = p.researcher?.displayName ?? p.mentor?.displayName ?? ''
+  const parts = [owner, p.projectTitle ?? ''].filter((s) => s.trim() !== '')
+  return parts.join('-')
+}
+
+/**
+ * 【下载】：下载到**用户选的 DSH 工作区**（2026-09 用户要求）。
+ *
+ * 不用浏览器的默认下载，也不需要输地址：列出宿主注册表里的工作区，点一个就行。
+ *
+ * **只存 ZIP，不解压**（2026-09 用户拍板）：所以没有 scope、没有"这个工作区里有没有
+ * 研究"的拦截 —— 同名不覆盖（宿主自动加序号），任何工作区都能选。
+ */
+function DownloadDialog({
+  t,
+  proposal,
+  fileName,
+  workspaces,
+  workspacesAvailable,
+  workspacesReason,
+  selection,
+  files,
+  bytes,
+  busy,
+  notice,
+  onSelect,
+  onDownload,
+  onClose,
+}: {
+  t: Translate
+  proposal: HostProposal
+  /** 预计保存成的文件名（服务器命名 `<owner>-<title>.zip`；实际以响应头为准）。 */
+  fileName: string
+  workspaces: Array<{ id: string; title: string; path: string }> | null
+  workspacesAvailable: boolean
+  workspacesReason: string | null
+  selection: string
+  files: number | null
+  bytes: number | null
+  busy: boolean
+  notice: { tone: 'success' | 'error'; text: string } | null
+  onSelect: (id: string) => void
+  onDownload: () => void
+  onClose: () => void
+}): JSX.Element {
+  /*
+   * **每个工作区都可以选**：下载只是把 ZIP 存进工作区，同名不覆盖（自动加序号），
+   * 所选工作区里原有的东西一个都不动 —— 所以"已有研究项目就禁用"既没必要也挡路。
+   */
+  const chosen = workspaces?.find((w) => w.id === selection)
+  const dest = chosen ? `${chosen.path}/${fileName}` : ''
+  const ready = Boolean(selection) && files !== null && files > 0 && !busy
+  return (
+    <div style={S.overlay} role="dialog" aria-modal="true">
+      <div style={{ ...S.card, width: 'min(520px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
+        <div style={S.cardHead}>
+          {t('community.exchange.downloadTitle')}
+          <span style={{ flex: '1 1 auto' }} />
+          {files === null ? null : (
+            <Badge tone="neutral">{t('community.exchange.sizeBadge', { files, size: formatBytes(bytes ?? 0) })}</Badge>
+          )}
+        </div>
+        <div style={{ ...S.cardBody, gap: 9 }}>
+          <div style={S.listTitle}>
+            {proposal.projectTitle ?? t('community.mentor.untitledProject')}
+          </div>
+          {/* 只存 ZIP、其余交给用户：说清楚，免得以为会自动解压 */}
+          <div style={S.hint}>{t('community.exchange.zipOnly')}</div>
+
+          {!workspacesAvailable ? (
+            <div style={S.hint}>{workspacesReason ?? t('community.exchange.noWorkspaces')}</div>
+          ) : workspaces === null ? (
+            <div style={S.hint}>{t('community.action.loading')}</div>
+          ) : workspaces.length === 0 ? (
+            <div style={S.hint}>{t('community.exchange.noWorkspaces')}</div>
+          ) : (
+            <div style={{ ...S.list, maxHeight: 240, overflowY: 'auto' }}>
+              {workspaces.map((w, i) => (
+                <label
+                  key={w.id}
+                  style={{
+                    ...S.listRow,
+                    alignItems: 'center',
+                    cursor: 'pointer',
+                    ...(i === 0 ? {} : { borderTop: '1px solid var(--dsw-alias-border-l1)' }),
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="cf-download-workspace"
+                    checked={selection === w.id}
+                    onChange={() => onSelect(w.id)}
+                  />
+                  <span style={{ minWidth: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <span style={S.listTitle}>{w.title}</span>
+                    <span style={{ ...S.hint, wordBreak: 'break-all' }}>{w.path}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {/* 写到哪里要看得见（用户可以选任何工作区，那就更该知道落点在哪） */}
+          {dest ? (
+            <div style={{ ...S.hint, wordBreak: 'break-all' }}>
+              {t('community.exchange.destHint', { dest })}
+            </div>
+          ) : null}
+          {notice ? (
+            <div
+              style={{
+                ...S.hint,
+                color:
+                  notice.tone === 'success'
+                    ? 'var(--dsw-alias-label-secondary)'
+                    : 'var(--dsw-alias-state-error-primary)',
+              }}
+            >
+              {notice.text}
+            </div>
+          ) : null}
+          <div style={S.footer}>
+            <span style={{ flex: '1 1 auto' }} />
+            <button type="button" style={S.ghostBtn} onClick={onClose}>
+              {t('community.action.close')}
+            </button>
+            <button
+              type="button"
+              style={{ ...S.primaryBtn, opacity: ready ? 1 : 0.55 }}
+              disabled={!ready}
+              onClick={onDownload}
+            >
+              {busy ? t('community.action.loading') : t('community.action.download')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
  * 【上传】：把本地 `workspace/review/` 下的指导结果**按原相对路径**回传。
  *
  * 为什么是"选目录 + 扫描"而不是"选文件"：
@@ -2493,6 +2674,72 @@ function RefreshIconButton({
   )
 }
 
+/**
+ * 服务器地址框右边的**快捷切换**按钮（一个开发、一个互联网）。
+ *
+ * 图标式（26×26，与刷新按钮同规格）的理由：地址框本身就要占掉大半行，两个文字按钮会把
+ * 这一行挤成两行（2026-09 用户要求："用图标式按钮就行，节省空间"）。
+ * 代价是失去可见文案 → `title` + `aria-label` 是**必须**的，且 `title` 里带上完整地址与
+ * 探测结果（不用点开试、也不用猜为什么没变绿）。
+ *
+ * 配色就是**探测结果**（2026-09 用户要求："绿色表示成功，原始颜色为不成功"）：
+ * 通了 = 绿；没通 = 原色；正在测 = 变灰（有反馈，否则用户会连点）。
+ * 只有**还没测过**的按钮才用品牌色标出"当前生效的是这一边"——测过之后由结果说话，
+ * 免得"绿"和"高亮"两个信号互相抵消。
+ */
+function ServerPresetButton({
+  t,
+  icon,
+  label,
+  url,
+  result,
+  active,
+  onPick,
+}: {
+  t: Translate
+  icon: string
+  label: string
+  url: string
+  result: { state: 'idle' | 'busy' | 'ok' | 'fail'; reason: string | null }
+  active: boolean
+  onPick: (url: string) => void
+}): JSX.Element {
+  const status =
+    result.state === 'busy'
+      ? t('community.server.probing')
+      : result.state === 'ok'
+        ? t('community.server.probeOk')
+        : result.state === 'fail'
+          ? t('community.server.probeFail')
+          : ''
+  const title = [label, status, result.reason ?? '', url].filter((s) => s !== '').join(' · ')
+  /**
+   * 配色只在这一处决定（顺序即优先级）：通了绿 → 没通原色 → 正在测变灰 →
+   * 还没测过则用品牌色标出"当前生效的是这一边"。
+   */
+  const skin: React.CSSProperties =
+    result.state === 'busy'
+      ? { opacity: 0.55 }
+      : result.state === 'ok'
+        ? S.iconBtnOk
+        : result.state === 'fail'
+          ? S.iconBtn
+          : active
+            ? S.iconBtnActive
+            : S.iconBtn
+  return (
+    <button
+      type="button"
+      style={{ ...S.iconBtn, flex: '0 0 auto', ...skin }}
+      title={title}
+      aria-label={label}
+      onClick={() => onPick(url)}
+    >
+      {icon}
+    </button>
+  )
+}
+
 function CommunityTab({
   send,
   initial,
@@ -2501,7 +2748,8 @@ function CommunityTab({
   send: SettingsSend
   initial: HostAccountState | null
   t: Translate
-}): JSX.Element {  const [state, setState] = React.useState<HostAccountState | null>(initial)
+}): JSX.Element {
+  const [state, setState] = React.useState<HostAccountState | null>(initial)
   const [phase, setPhase] = React.useState<'loading' | 'ready'>('loading')
   const [busy, setBusy] = React.useState(false)
   /** 正在单独刷新 Token 余额。 */
@@ -2512,6 +2760,15 @@ function CommunityTab({
   /** 用户信息区的内部 Tab：账号（登录 / 已登录）与服务器设置。 */
   const [userTab, setUserTab] = React.useState<'account' | 'server'>('account')
   const [serverDraft, setServerDraft] = React.useState(initial?.serverUrl ?? '')
+  /**
+   * 两个服务器快捷按钮的**连通性探测结果**（按环境记）。
+   *
+   * 为什么要有它：用户点了"切到某一台"之后，最想知道的是"这台通不通"。颜色就是答案
+   * （2026-09 用户要求：绿色 = 成功，原色 = 不成功），失败原因收进悬浮提示。
+   */
+  const [serverProbes, setServerProbes] = React.useState<
+    Partial<Record<'development' | 'production', { state: 'idle' | 'busy' | 'ok' | 'fail'; reason: string | null }>>
+  >({})
   const [apiKey, setApiKey] = React.useState('')
   const [invite, setInvite] = React.useState({ code: '', email: '', displayName: '' })
   /**
@@ -2643,6 +2900,20 @@ function CommunityTab({
     proposal: HostProposal
     mode: 'upload'
   } | null>(null)
+  /** 【下载】对话框：目标工作区列表 + 选择 + 预检结果。 */
+  const [download, setDownload] = React.useState<{
+    proposal: HostProposal
+    workspaces: Array<{ id: string; title: string; path: string }> | null
+    available: boolean
+    reason: string | null
+    selection: string
+    files: number | null
+    bytes: number | null
+    /** 预计/实际保存成的文件名（服务器命名，落盘后由宿主回报真名）。 */
+    fileName: string
+    notice: { tone: 'success' | 'error'; text: string } | null
+  } | null>(null)
+  const [downloadBusy, setDownloadBusy] = React.useState(false)
   /** 上传对话框里的工作区目录（导师解压快照后写指导意见的地方）。 */
   const [uploadDir, setUploadDir] = React.useState('')
   /** 当前环境有没有可用的**系统**目录选择器（没有就只给手填输入框）。 */
@@ -2935,46 +3206,72 @@ function CommunityTab({
   }
 
   /**
-   * 点【下载】：让**浏览器原生下载**服务器上的工作区快照（2026-09 用户拍板）。
+   * 点【下载】：让用户**选一个 DSH 工作区**，把 ZIP 存进去（2026-09 用户要求）。
    *
-   * 流程：先 `mentor/archiveInfo` 预检（有没有文件、多大）→ 再用一个同源 GET
-   * 触发浏览器自己的保存流程（`Content-Disposition: attachment` 由宿主的代理回给浏览器）。
-   *
-   * 为什么必须预检：浏览器下载失败时**只会把错误响应当文件存下来**，用户得到一个坏
-   * zip；而且页面拿不到"下载成功/失败"的回执。所以在导航之前把失败说清楚。
+   * 不用浏览器默认下载（页面拿不到保存位置），也不要求输地址 —— 工作区列表来自宿主
+   * 注册表。**只存 ZIP，不解压**：其余交给用户处理，因此任何工作区都能选
+   * （同名不覆盖，会加序号）。
    */
   const requestDownload = async (p: HostProposal): Promise<void> => {
-    setMentorNotice(null)
-    const res = await post('mentor/archiveInfo', { projectId: p.projectId })
+    const prefix = downloadPrefix(p)
+    const res = await post('mentor/downloadState', { projectId: p.projectId, prefix })
     if (!res.ok) {
       setMentorNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
       return
     }
-    const info = res.value as { files: number; bytes: number }
-    if (info.files === 0) {
-      setMentorNotice({ tone: 'error', text: t('community.exchange.noFilesYet') })
+    const v = res.value as {
+      files: number
+      bytes: number
+      available: boolean
+      reason: string | null
+      expectedName: string
+      items: Array<{ id: string; title: string; path: string }>
+    }
+    // 预选：优先这项工作**所在的工作区**（学生侧指导意见该落回那里），否则第一个
+    const own = v.items.find((w) =>
+      (mine ?? []).some((m) => m.id === w.id && m.published?.projectId === p.projectId),
+    )
+    setDownload({
+      proposal: p,
+      workspaces: v.items,
+      available: v.available,
+      reason: v.reason,
+      selection: (own ?? v.items[0])?.id ?? '',
+      files: v.files,
+      bytes: v.bytes,
+      fileName: v.expectedName,
+      notice: null,
+    })
+  }
+
+  const runDownload = async (): Promise<void> => {
+    const target = download
+    if (!target || !target.selection) return
+    setDownloadBusy(true)
+    setDownload((prev) => (prev ? { ...prev, notice: null } : prev))
+    const res = await post('mentor/download', {
+      projectId: target.proposal.projectId,
+      workspaceId: target.selection,
+      prefix: downloadPrefix(target.proposal),
+    })
+    setDownloadBusy(false)
+    if (!res.ok) {
+      setDownload((prev) =>
+        prev
+          ? { ...prev, notice: { tone: 'error', text: res.error?.message ?? t('community.error.unknown') } }
+          : prev,
+      )
       return
     }
-    const title = p.projectTitle ?? t('community.mentor.untitledProject')
-    const url = `${SETTINGS_ROUTE_PREFIX}/mentor/archive?projectId=${encodeURIComponent(p.projectId)}&title=${encodeURIComponent(title)}`
+    const v = res.value as { dir: string; path: string; name: string; bytes: number }
     /*
-     * 用 `<a>` 而不是 `window.location=`：后者会把整个设置页导航走。
-     *
-     * ⚠️ **不设 `a.download`**：同源下载里它会覆盖服务器的 `Content-Disposition` 文件名，
-     * 于是"服务器按 `<owner>-<project>.zip` 命名"就白改了（2026-09 实测踩到）。
-     * 文件名只有一个权威来源 = 服务器。
+     * 成功就**关窗**（2026-09 用户要求）：文件已经落盘，对话框再留着没有任何可做的事，
+     * 只剩一个"已保存"的提示——那放到列表页顶部那条回执里说（和其它业务回执同一处）。
      */
-    const a = document.createElement('a')
-    a.href = url
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
+    setDownload(null)
     setMentorNotice({
       tone: 'success',
-      text: t('community.exchange.downloadStarted', {
-        files: info.files,
-        size: formatBytes(info.bytes),
-      }),
+      text: t('community.exchange.downloadDone', { dir: v.dir, name: v.name }),
     })
   }
 
@@ -3305,6 +3602,36 @@ function CommunityTab({
    * 不是常驻说明（2026-09 用户要求：设置页不要总是堆说明文字）。
    */
   const serverChanged = Boolean(account) && Boolean(serverDraft.trim()) && serverDraft.trim() !== (state?.serverUrl ?? '')
+  /**
+   * 快捷按钮要比对的"当前地址"：**去掉末尾斜杠**再比（宿主给的生效地址是归一过的，
+   * 而配置文件里的预设可能带末尾斜杠）。留空 = 跟随环境配置 → 用生效地址。
+   */
+  const activeServerUrl = stripSlash(serverDraft.trim() || state?.serverUrl || '')
+
+  /**
+   * 点快捷按钮 = **换地址 + 立刻测一次连通性**（2026-09 用户要求）。
+   *
+   * 测的是**按钮自己那个地址**，不是输入框里的内容：用户点的就是这一边，中间不该有
+   * "他改过输入框"这种歧义。探测走宿主的 `account/probe`（匿名 `/health`）——
+   * 浏览器不能跨域直连服务器，凭据也**不该**为了探活而出门。
+   */
+  const pickServerPreset = async (env: 'development' | 'production', url: string): Promise<void> => {
+    setServerDraft(url)
+    setServerProbes((prev) => ({ ...prev, [env]: { state: 'busy', reason: null } }))
+    const res = await post('account/probe', { serverUrl: url })
+    if (!res.ok) {
+      setServerProbes((prev) => ({
+        ...prev,
+        [env]: { state: 'fail', reason: res.error?.message ?? null },
+      }))
+      return
+    }
+    const v = res.value as { reachable: boolean; reason: string | null }
+    setServerProbes((prev) => ({
+      ...prev,
+      [env]: { state: v.reachable ? 'ok' : 'fail', reason: v.reason },
+    }))
+  }
 
   const login = async (): Promise<void> => {
     if (!apiKey.trim()) return
@@ -3629,6 +3956,33 @@ function CommunityTab({
                   title={t('community.server.title', { url: state?.defaultServerUrl ?? '' })}
                   onChange={(e) => setServerDraft(e.target.value)}
                 />
+                {/*
+                 * 快捷切换：本机（开发）↔ 线上（互联网）。**图标式**——地址框要占掉大半行，
+                 * 两个文字按钮会把这一行挤成两行；`title` 里带完整地址，悬停即知会填什么。
+                 * 旧宿主不返回 `serverPresets` → 整组不显示（不做假的）。
+                 */}
+                {state?.serverPresets ? (
+                  <>
+                    <ServerPresetButton
+                      t={t}
+                      icon="⌂"
+                      label={t('community.server.presetDev')}
+                      url={state.serverPresets.development}
+                      result={serverProbes.development ?? { state: 'idle', reason: null }}
+                      active={activeServerUrl === stripSlash(state.serverPresets.development)}
+                      onPick={(url) => void pickServerPreset('development', url)}
+                    />
+                    <ServerPresetButton
+                      t={t}
+                      icon="☁"
+                      label={t('community.server.presetProd')}
+                      url={state.serverPresets.production}
+                      result={serverProbes.production ?? { state: 'idle', reason: null }}
+                      active={activeServerUrl === stripSlash(state.serverPresets.production)}
+                      onPick={(url) => void pickServerPreset('production', url)}
+                    />
+                  </>
+                ) : null}
               </div>
               {/* 只在**地址真的改了**（业务发生）时提示后果，不做常驻说明 */}
               {serverChanged ? (
@@ -3807,7 +4161,27 @@ function CommunityTab({
         </>
       ) : null}
 
-      {/* ══ 文件交换：【下载】工作区快照 / 【上传】指导结果 ══════════════════ */}
+      {/* ══ 【下载】到选定的 DSH 工作区 ══════════════════════════════════════ */}
+      {download ? (
+        <DownloadDialog
+          t={t}
+          proposal={download.proposal}
+          fileName={download.fileName}
+          workspaces={download.workspaces}
+          workspacesAvailable={download.available}
+          workspacesReason={download.reason}
+          selection={download.selection}
+          files={download.files}
+          bytes={download.bytes}
+          busy={downloadBusy}
+          notice={download.notice}
+          onSelect={(id) => setDownload((prev) => (prev ? { ...prev, selection: id } : prev))}
+          onDownload={() => void runDownload()}
+          onClose={() => setDownload(null)}
+        />
+      ) : null}
+
+      {/* ══ 文件交换：【上传】指导结果 ══════════════════════════════════════ */}
       {exchange?.mode === 'upload' ? (
         <UploadDialog
           t={t}

@@ -253,6 +253,13 @@ export interface AccountState {
     /** 这个地址是哪来的：设置文档 / 环境变量 / 环境配置文件 / 内置兜底。 */
     serverUrlSource: 'settings' | 'env' | 'config' | 'default';
     /**
+     * **两个环境的地址**（开发 / 生产），给设置页那两个快捷按钮用。
+     *
+     * ⚠️ 由宿主按配置文件解析（`serverUrlPresets`）—— 界面不自己写死域名，
+     * 否则部署把地址换成自有域名后按钮会指错地方。
+     */
+    serverPresets: Record<'development' | 'production', string>;
+    /**
      * 当前环境（开发 / 生产）。
      *
      * ⚠️ **地址随环境而变**：开发是 `http://localhost:8000`、生产是
@@ -469,6 +476,7 @@ export interface SettingsRpcDeps {
  * | `customization/resetSkill` | `{ skillId }` | 清除一个 Skill 的全部覆盖 |
  * | `customization/resetAll` | `{}` | 清除全部定制（回到全系统原文） |
  * | `account/state` | `{}` | 【ConvFusion.com】登录状态（**不联网**） |
+ * | `account/probe` | `{ serverUrl? }` | **只测连通性**（匿名 `/health`，最长 8 秒）；`reachable` 是结果不是错误 |
  * | `account/login` | `{ apiKey, serverUrl? }` | 用 API Key 登录（联网验证后落盘） |
  * | `account/register` | `{ invitationCode, email, displayName, serverUrl? }` | 凭邀请码注册并登录 |
  * | `account/verify` | `{}` | 用已保存的凭据重新验证身份（联网） |
@@ -486,7 +494,8 @@ export interface SettingsRpcDeps {
  * | `mentor/accept` | `{ proposalId, intentKey }` | 接受指导（研究者）→ **冻结押金**、建合同与关系 |
  * | `mentor/reject` | `{ proposalId }` | 拒绝指导（研究者） |
  * | `mentor/pickDirectory` | `{}` / `{ probe:true }` | 开系统目录选择器（`native` 才可用）；`probe` 只问能力不开窗 |
- * | `mentor/archiveInfo` | `{ projectId }` | 下载前的预检（文件数 / 体积）；真正的下载走 GET `mentor/archive` |
+ * | `mentor/downloadState` | `{ projectId, prefix }` | 【下载】对话框一次拿齐：预检（文件数 / 体积 / 预计文件名）+ **全部**可选工作区 |
+ * | `mentor/download` | `{ projectId, workspaceId, prefix }` | 只把 ZIP 存进所选工作区（**不解压、不覆盖**，同名加序号） |
  * | `mentor/scanReview` | `{ dir }` | 列出工作区 `review/` 下的文件（上传源） |
  * | `mentor/upload` | `{ projectId, dir, paths:[relPath] }` | 按原相对路径回传 `review/**` |
  *

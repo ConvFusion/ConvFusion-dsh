@@ -472,11 +472,13 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
     /\.\.\.S\.tokenBadge,[\s\S]{0,120}?flex: '0 0 auto'/.test(src),
     '余额徽章不许被压（它是关键数字）',
   )
-  // 两个动作现在是图标按钮，同样不许被压（`flex: 0 0 auto` 跟着样式一起换）
+  // 图标按钮一律不许被压（`flex: 0 0 auto` 跟着样式一起换）：
+  // 账号行的刷新 + 登出，以及【服务器设置】地址框右边那两个快捷按钮
+  // （服务器快捷按钮见下面的 [1i]：它们还要**恒为方形**，否则行宽会跟着文案跳）
   assertEq(
     (src.match(/\.\.\.S\.iconBtn, flex: '0 0 auto'/g) ?? []).length,
-    2,
-    '两个图标按钮都不许被压（刷新 + 登出）',
+    3,
+    '图标按钮都不许被压（刷新 + 登出 + 两个服务器快捷）',
   )
   assert(zhDict.includes("'community.balance.frozenNote': '（冻 {count}）'"), '冻结标记压到最短（详情在 tooltip）')
 
@@ -731,6 +733,61 @@ console.log('\n[1h] ConvFusion.com：服务器地址与凭据来源')
   assertEq(typeof res.value.keyConfigured, 'boolean', '报告凭据可用性')
   assert(/^https?:\/\//.test(res.value.serverUrl), '报告生效的服务器地址')
   assert(!('convfusionApiKey' in res.value), 'account 状态里没有凭据字段')
+  // 两个环境的地址也一并带回（设置页那两个快捷按钮要用；旧宿主没有 → 按钮不显示）
+  assertEq(
+    Object.keys(res.value.serverPresets ?? {}).sort(),
+    ['development', 'production'],
+    '带回 serverPresets（开发 / 线上两个地址）',
+  )
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 1i. 【服务器设置】地址框右边的两个快捷按钮（开发 / 互联网）
+ *
+ * 需求（2026-09 用户）：① 图标式（省空间）；② 点一下**换地址并立刻测连通**；
+ * ③ 通了变绿、没通保持原色。地址由宿主给（`serverPresets`）—— 界面不写死域名。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[1i] 服务器快捷按钮：换地址 + 测连通（绿 = 通）')
+{
+  const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+  const zhDict = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
+
+  assert(src.includes('function ServerPresetButton('), '有快捷按钮组件')
+  assert(/label=\{t\('community\.server\.presetDev'\)\}/.test(src), '第一个按钮 = 开发服务器')
+  assert(/label=\{t\('community\.server\.presetProd'\)\}/.test(src), '第二个按钮 = 互联网服务器')
+  // 图标式（26×26，与刷新按钮同规格）：省空间，且**必须有** title / aria-label
+  assert(/S\.iconBtn, flex: '0 0 auto'/.test(src), '图标按钮与刷新按钮同规格（不被压）')
+  assert(/title=\{title\}/.test(src) && /aria-label=\{label\}/.test(src), '悬浮提示 + 无障碍名不可省')
+  assert(/icon="⌂"/.test(src) && /icon="☁"/.test(src), '两个图标：本机 / 线上')
+  // 地址来自宿主（界面不写死域名）
+  assert(
+    /state\.serverPresets\.development/.test(src) && /state\.serverPresets\.production/.test(src),
+    '两个地址都来自宿主 serverPresets',
+  )
+  assert(/state\?\.serverPresets \?/.test(src), '旧宿主没有该字段 → 整组不显示（不做假的）')
+  assert(!/convfusion\.com|localhost|127\.0\.0\.1/.test(src), '客户端不写死任何服务器地址')
+  // 点一下 = 换地址 + 立刻探测
+  assert(/const pickServerPreset = async/.test(src), '有"换地址 + 探测"这个动作')
+  assert(/setServerDraft\(url\)[\s\S]{0,400}?post\('account\/probe'/.test(src), '先换地址，再马上测连通性')
+  assert(
+    /pickServerPreset\('development', url\)/.test(src) && /pickServerPreset\('production', url\)/.test(src),
+    '两个按钮各测自己那一边（不读输入框，避免歧义）',
+  )
+  // 颜色 = 探测结果：通了绿、没通原色、正在测变灰
+  assert(/iconBtnOk: \{[\s\S]{0,220}?state-success-primary/.test(src), '成功态用系统成功色（绿）')
+  assert(/state === 'ok'[\s\S]{0,140}?S\.iconBtnOk/.test(src), '通了才变绿')
+  assert(/state === 'fail'[\s\S]{0,160}?S\.iconBtn\b/.test(src), '没通 = 原色（不残留上一次的绿）')
+  assert(/state === 'busy'[\s\S]{0,140}?opacity: 0\.55/.test(src), '正在测 = 变灰（有反馈，防连点）')
+
+  for (const k of [
+    'community.server.presetDev',
+    'community.server.presetProd',
+    'community.server.probing',
+    'community.server.probeOk',
+    'community.server.probeFail',
+  ]) {
+    assert(zhDict.includes(`'${k}'`), `中文字典含 ${k}`)
+  }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -1443,7 +1500,7 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
   assert(src.includes('below={'), 'WorkRow 有第二行动作插槽')
   assert(src.includes('{below}'), 'WorkRow 真的渲染这个插槽')
   // 导师侧只填**总费用**：指导范围已删、成功条件不由导师定、押金比例由平台定
-  const pd = src.slice(src.indexOf('function ProposeDialog('), src.indexOf('function UploadDialog('))
+  const pd = src.slice(src.indexOf('function ProposeDialog('), src.indexOf('function DownloadDialog('))
   assertEq((pd.match(/<input/g) ?? []).length, 1, '提案对话框只剩一个输入框（总费用）')
   assert(!pd.includes('scopeLabel') && !pd.includes('scopePlaceholder'), '对话框不再采集指导范围')
   assert(!pd.includes('conditionLabel') && !pd.includes('conditionPlaceholder'), '对话框不再采集成功条件')
@@ -1560,37 +1617,44 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     /p\.status === 'ACCEPTED' && !incoming \? \(\s*<button[\s\S]{0,300}?openExchange\(p\)/.test(src),
     '【上传】只在导师侧（学生的工作区本来就在服务器上）',
   )
-  assert(!src.includes('function DownloadDialog('), '下载不再有对话框（浏览器原生下载）')
+  // 下载现在**必须有**对话框（选工作区在那里）
+  assert(src.includes('function DownloadDialog('), '下载有工作区选择器对话框')
   assert(src.includes('function UploadDialog('), '有上传对话框')
 
-  // ② 点【下载】= **浏览器原生下载**：预检 → 同源 GET → 浏览器自己的保存框
+  // ② 点【下载】= 让用户**选一个 DSH 工作区**，把 ZIP 存下来（不走浏览器默认下载）
   assert(
-    /const requestDownload = async \(p: HostProposal\)[\s\S]{0,300}?post\('mentor\/archiveInfo'/.test(src),
-    '【下载】先预检（失败要在导航前说清，否则浏览器会把错误存成坏 zip）',
+    /const requestDownload = async \(p: HostProposal\)[\s\S]{0,300}?post\('mentor\/downloadState'/.test(src),
+    '【下载】一次拿齐：预检 + 可选工作区列表',
+  )
+  assert(src.includes('function DownloadDialog('), '有工作区选择器对话框')
+  assert(/w\.path/.test(src) && /type="radio"/.test(src), '列出工作区（标题 + 路径）供点选 —— 不需要输地址')
+  /*
+   * **任何工作区都能选**（2026-09 用户拍板）：下载只存 ZIP，同名不覆盖（宿主加序号），
+   * 所以"已有研究项目就禁用"既没必要也挡路 —— 断言它真的不再回来。
+   */
+  assert(!/hasResearch/.test(src), '不再按"已有研究项目"禁用工作区')
+  assert(!/community\.exchange\.occupied/.test(src), '不再有"不可选原因"那一行')
+  // 只存 ZIP：没有 scope、没有解压、没有目录前缀拼接
+  assert(!/scope: target\.incoming/.test(src), '不再按角色分 scope')
+  assert(src.includes("t('community.exchange.zipOnly')"), '对话框说明"只存 ZIP，不解压"')
+  assert(src.includes("t('community.exchange.destHint', { dest })"), '落点路径可见')
+  assert(
+    /post\('mentor\/download',\s*\{[\s\S]{0,200}?workspaceId: target\.selection/.test(src),
+    '下载按工作区 id 提交（路径由宿主解析，客户端递不进任意路径）',
+  )
+  // 成功就**关窗**（文件已落盘，对话框没有可做的事）；失败留着让用户看到原因并能重试
+  assert(
+    /setDownload\(null\)[\s\S]{0,200}?community\.exchange\.downloadDone/.test(src),
+    '下载成功后关闭对话框（回执改到列表顶部那条）',
   )
   assert(
-    /if \(info\.files === 0\)[\s\S]{0,160}?noFilesYet/.test(src),
-    '服务器上没有文件 → 不起下载',
+    /if \(!res\.ok\)[\s\S]{0,400}?tone: 'error'[\s\S]{0,100}?return/.test(src),
+    '下载失败时对话框留着并说明原因',
   )
-  assert(
-    /\$\{SETTINGS_ROUTE_PREFIX\}\/mentor\/archive\?projectId=/.test(src),
-    '走同源 GET 代理（凭据由宿主持有，不进浏览器）',
-  )
-  assert(
-    /document\.createElement\('a'\)/.test(src) && /a\.click\(\)/.test(src),
-    '用 <a> 触发（window.location 会把设置页导航走）',
-  )
-  // ⚠️ 不能设 `a.download`：同源下载里它会覆盖服务器的 Content-Disposition 文件名，
-  // 于是"服务器改成 <owner>-<project>.zip"就白改了（实测踩到）
-  assert(
-    !/a\.download\s*=/.test(src),
-    '不设 a.download —— 文件名只由服务器的 Content-Disposition 决定',
-  )
-  assert(src.includes("t('community.exchange.downloadStarted',"), '起下载后给一句回执（带文件数与体积）')
+  // 不再调起浏览器下载：<a download> 与同源 GET 代理都必须消失
+  assert(!/a\.download\s*=/.test(src) && !/document\.createElement\('a'\)/.test(src), '不再用 <a> 触发浏览器下载')
+  assert(!/mentor\/archive\?projectId/.test(src), '不再走同源 GET 代理')
   assert(src.includes("t('community.exchange.uploadTitle')"), '上传对话框标题走 i18n')
-  // 插件不再解压/注册工作区：那些组件和端点都必须消失
-  assert(!src.includes('function DownloadDialog('), '下载对话框已删除（不再选目录、不再解压）')
-  assert(!/post\('mentor\/download'/.test(src), '不再调用带 dir 的下载端点')
   assert(src.includes("t('community.exchange.noPicker')"), '上传选目录要说明没有选择器时的退路')
 
   // ③ 上传：选目录 → 扫描 review/ → 勾选 → 按**原相对路径**上传
@@ -1609,10 +1673,15 @@ console.log('\n[13] 指导闭环：下载 / 上传')
 
   // ④ 宿主侧（host）：下载是**代理**，上传是**扫描 + 原路径回传**
   const rpc = readFileSync(join(PKG, 'src', 'settings-rpc.ts'), 'utf8')
-  assert(/case 'mentor\/archive':/.test(rpc), '有内部归档端点（只给 GET 分支用）')
-  assert(/content-disposition/.test(rpc), '回给浏览器时带 Content-Disposition: attachment')
-  assert(!/materializeWorkspaceSnapshot/.test(rpc), 'RPC 层不再解包落盘')
-  assert(!/registerWorkspace/.test(rpc), '不再由插件注册 DSH 工作区')
+  assert(/case 'mentor\/download':/.test(rpc), '有按工作区写入的下载端点')
+  assert(/case 'mentor\/downloadState':/.test(rpc), '有对话框要的 downloadState（预检 + 工作区列表）')
+  // ⚠️ 目标目录按**注册表 id** 在宿主侧解析：客户端递不进任意路径
+  assert(
+    /it\.id === workspaceId[\s\S]{0,200}?not-found/.test(rpc),
+    '工作区按 id 在宿主侧解析（不接受任意路径）',
+  )
+  assert(/writeFileUnique\(target\.path/.test(rpc), '写盘走 workspace-sync（RPC 层不做文件写入）')
+  assert(!/extractZip|unzip|adm-zip/i.test(rpc), '宿主不解压（只存 ZIP，其余交给用户）')
   assert(/uploadReviewFiles\(base, apiKey, projectId, payload/.test(rpc), '回传走 uploadReviewFiles（review/ 前缀）')
   assert(/scanReviewFiles\(dir\)/.test(rpc), '上传源来自扫描（不接受任意路径）')
   assert(/allowed\.has\(rel\)/.test(rpc), '只上传扫描得到的文件（界面不能递任意路径读盘）')
@@ -1627,8 +1696,11 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     'community.action.download',
     'community.action.upload',
     'community.action.chooseDir',
-    'community.exchange.downloadStarted',
-    'community.exchange.noFilesYet',
+    'community.exchange.downloadTitle',
+    'community.exchange.downloadDone',
+    'community.exchange.noWorkspaces',
+    'community.exchange.zipOnly',
+    'community.exchange.destHint',
     'community.exchange.uploadTitle',
     'community.exchange.uploadDone',
     'community.exchange.noPicker',

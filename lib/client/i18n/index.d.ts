@@ -98,6 +98,7 @@ export declare const dictionaries: {
         'upload.category.papers': string;
         'upload.category.experiments': string;
         'upload.category.research-assets': string;
+        'upload.category.review': string;
         'upload.category.outputs': string;
         'upload.category.literature-raw': string;
         'upload.category.literature-fulltext': string;
@@ -108,6 +109,7 @@ export declare const dictionaries: {
         'upload.reason.papers': string;
         'upload.reason.experiments': string;
         'upload.reason.research-assets': string;
+        'upload.reason.review': string;
         'upload.reason.outputs': string;
         'upload.reason.literature-raw': string;
         'upload.reason.literature-fulltext': string;
@@ -132,6 +134,11 @@ export declare const dictionaries: {
         'community.login.keyLabel': string;
         'community.server.address': string;
         'community.server.title': string;
+        'community.server.presetDev': string;
+        'community.server.presetProd': string;
+        'community.server.probing': string;
+        'community.server.probeOk': string;
+        'community.server.probeFail': string;
         'community.badge.production': string;
         'community.badge.development': string;
         'community.badge.envMismatch': string;
@@ -208,8 +215,12 @@ export declare const dictionaries: {
         'community.mentor.acceptConfirm': string;
         'community.mentor.acceptFreezeNote': string;
         'community.mentor.acceptBalance': string;
-        'community.exchange.downloadStarted': string;
-        'community.exchange.noFilesYet': string;
+        'community.exchange.downloadTitle': string;
+        'community.exchange.sizeBadge': string;
+        'community.exchange.zipOnly': string;
+        'community.exchange.destHint': string;
+        'community.exchange.noWorkspaces': string;
+        'community.exchange.downloadDone': string;
         'community.exchange.dirLabel': string;
         'community.exchange.notScanned': string;
         'community.exchange.noReviewFiles': string;
@@ -426,6 +437,7 @@ export declare const dictionaries: {
         'taxonomy.category.research-decision': string;
         'taxonomy.category.academic-writing': string;
         'taxonomy.category.research-management': string;
+        'taxonomy.category.review': string;
         'taxonomy.skill.topic-understanding': string;
         'taxonomy.skill.research-intent-assessment': string;
         'taxonomy.skill.problem-definition': string;
@@ -476,6 +488,11 @@ export declare const dictionaries: {
         'taxonomy.skill.experiment-pipeline-design': string;
         'taxonomy.skill.resource-requirement-estimation': string;
         'taxonomy.skill.infrastructure-cost-selection': string;
+        'taxonomy.skill.research-direction-review': string;
+        'taxonomy.skill.research-quality-review': string;
+        'taxonomy.skill.experimental-evidence-review': string;
+        'taxonomy.skill.paper-claim-review': string;
+        'taxonomy.skill.pre-submission-review': string;
     };
     en: {
         readonly 'settings.nav': "ConvFusion";
@@ -571,6 +588,7 @@ export declare const dictionaries: {
         readonly 'upload.category.papers': "Paper and figures";
         readonly 'upload.category.experiments': "Experiments and code";
         readonly 'upload.category.research-assets': "Research assets";
+        readonly 'upload.category.review': "Review records";
         readonly 'upload.category.outputs': "Outputs";
         readonly 'upload.category.literature-raw': "Literature extracts and search payloads";
         readonly 'upload.category.literature-fulltext': "Literature full texts (PDF)";
@@ -581,6 +599,7 @@ export declare const dictionaries: {
         readonly 'upload.reason.papers': "Paper text and figures: how results are expressed";
         readonly 'upload.reason.experiments': "Experiment scripts and results: how it was verified";
         readonly 'upload.reason.research-assets': "Evidence, claims, decisions and literature notes: the researcher’s judgement";
+        readonly 'upload.reason.review': "Diagnosis and guidance: who reviewed this work, and on what basis";
         readonly 'upload.reason.outputs': "Deliverables (reports, slides, …)";
         readonly 'upload.reason.literature-raw': "Machine-extracted text and raw search payloads: not uploaded by default";
         readonly 'upload.reason.literature-fulltext': "Other people’s papers: not uploaded by default; select individually if needed";
@@ -605,6 +624,11 @@ export declare const dictionaries: {
         readonly 'community.login.keyLabel': "Sign in with API key";
         readonly 'community.server.address': "Server address";
         readonly 'community.server.title': "Leave empty to follow the environment config (this environment defaults to {url}); addresses containing /api or /docs are normalized automatically.";
+        readonly 'community.server.presetDev': "Dev server";
+        readonly 'community.server.presetProd': "Internet server";
+        readonly 'community.server.probing': "Testing connection...";
+        readonly 'community.server.probeOk': "Connected";
+        readonly 'community.server.probeFail': "Connection failed";
         readonly 'community.badge.production': "Production";
         readonly 'community.badge.development': "Development";
         readonly 'community.badge.envMismatch': "Address does not match environment";
@@ -681,8 +705,12 @@ export declare const dictionaries: {
         readonly 'community.mentor.acceptConfirm': "Confirm accept";
         readonly 'community.mentor.acceptFreezeNote': "Accepting freezes a {deposit} Token deposit (still yours, just unavailable).";
         readonly 'community.mentor.acceptBalance': "Available balance: {balance} Token";
-        readonly 'community.exchange.downloadStarted': "Download started ({files} files, {size}).";
-        readonly 'community.exchange.noFilesYet': "Nothing to download on the server yet.";
+        readonly 'community.exchange.downloadTitle': "Download into a workspace";
+        readonly 'community.exchange.sizeBadge': "{files} files · {size}";
+        readonly 'community.exchange.zipOnly': "Only the ZIP is saved into the chosen workspace; no extraction — the rest is up to you.";
+        readonly 'community.exchange.destHint': "Saves to: {dest}";
+        readonly 'community.exchange.noWorkspaces': "No DSH workspace available (create one in DSH first).";
+        readonly 'community.exchange.downloadDone': "Saved {name} into {dir}.";
         readonly 'community.exchange.dirLabel': "Workspace folder";
         readonly 'community.exchange.notScanned': "Click Scan to list files under review/.";
         readonly 'community.exchange.noReviewFiles': "No review/ files yet (put guidance in workspace/review/).";
@@ -899,6 +927,7 @@ export declare const dictionaries: {
         readonly 'taxonomy.category.research-decision': "Research Decision";
         readonly 'taxonomy.category.academic-writing': "Academic Writing";
         readonly 'taxonomy.category.research-management': "Research Management";
+        readonly 'taxonomy.category.review': "Review";
         readonly 'taxonomy.skill.topic-understanding': "Topic Understanding";
         readonly 'taxonomy.skill.research-intent-assessment': "Research Intent Assessment";
         readonly 'taxonomy.skill.problem-definition': "Problem Definition";
@@ -949,6 +978,11 @@ export declare const dictionaries: {
         readonly 'taxonomy.skill.experiment-pipeline-design': "Experiment Pipeline Design";
         readonly 'taxonomy.skill.resource-requirement-estimation': "Resource Requirement Estimation";
         readonly 'taxonomy.skill.infrastructure-cost-selection': "Infrastructure and Cost Selection";
+        readonly 'taxonomy.skill.research-direction-review': "Research Direction Review";
+        readonly 'taxonomy.skill.research-quality-review': "Research Quality Review";
+        readonly 'taxonomy.skill.experimental-evidence-review': "Experimental Evidence Review";
+        readonly 'taxonomy.skill.paper-claim-review': "Paper and Claim Review";
+        readonly 'taxonomy.skill.pre-submission-review': "Pre-submission Review";
     };
 };
 /** English fallback for pure helpers and offline tests that run without DSH. */

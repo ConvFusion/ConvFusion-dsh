@@ -70,6 +70,14 @@ console.log('\n[A] 系统 Skill Library（包内资产）')
     'research-process',
     // 论文全文下载：v2 原生能力（旧实现没有这条），手写正文、不伪造历史出处
     'paper-fulltext-download',
+    // C10 工作评阅（`ConvFusion-dsh-Skill-Review.md`）：整个类别都是 v2 新增 ——
+    // 旧实现里没有"评阅/指导"这套提示词，正文按设计文档新写，无历史出处可引
+    'research-direction-review',
+    'research-quality-review',
+    'experimental-evidence-review',
+    'paper-claim-review',
+    // C10P04 投稿前评阅：编辑视角的投稿审计（依据出版社的两份评阅参考），同样 v2 新增
+    'pre-submission-review',
   ])
   const withSources = docs.filter((d) => d.sections.some((x) => x.title.startsWith('Source Prompts')))
   const migrated = docs.filter((d) => !V2_NATIVE.has(d.id))
@@ -95,6 +103,34 @@ console.log('\n[A] 系统 Skill Library（包内资产）')
   assert(docs.every((d) => TAX.SYSTEM_CATEGORIES.some((c) => c.id === d.category)), '所有 category 都在系统 taxonomy 内')
 
   assert(docs.every((d) => /^skills\/[a-z-]+\/[a-z0-9-]+\.md$/.test(d.relPath)), '路径为 skills/<category>/<id>.md')
+
+  // ── C10 工作评阅：是**普通类别**，不是独立技能库（设计文档 §2 原则 2、§31）──
+  const review = docs.filter((d) => d.category.startsWith('review/'))
+  assertEq(review.length, 5, `评阅技能 5 个（粒度按 §8 不过度拆分）：${review.map((d) => d.id).join(', ')}`)
+  assert(
+    review.every((d) => d.relPath.startsWith('skills/review/')),
+    '评阅技能就放在同一个 skills/ 库里（不存在独立的 Review Library）',
+  )
+  assert(
+    review.every((d) => d.editable === false && d.type === 'system'),
+    '评阅技能与其它系统技能同样只读（用户通过定制层沉淀自己的评阅方法）',
+  )
+  // 六个可定制章节必须齐备，否则用户在"本地研究方法"里覆盖不了评阅方法
+  for (const d of review) {
+    for (const section of d.sections) {
+      assert(section.body.trim().length > 0, `${d.id}: 章节 ${section.title} 非空`)
+    }
+    // 落盘约定写进技能正文：技能是给 agent 看的方法文本，不写清位置它就写到别处
+    const goes = d.sections.find((x) => x.title.startsWith('Where the Result Goes'))
+    assert(goes !== undefined, `${d.id}: 声明了结果落盘位置`)
+    assert(/review\/<skill-id>-<YYYY-MM-DD>\.md/.test(goes.body.replace(d.id, '<skill-id>')), `${d.id}: 落到 review/<skill-id>-<日期>.md`)
+    assert(/same level as `research\/`/.test(goes.body), `${d.id}: 说明与 research/ 平级`)
+    assert(/Do not modify the research state/.test(goes.body), `${d.id}: 不得顺手改研究状态`)
+    const titles = d.sections.map((x) => x.title)
+    for (const need of ['Purpose', 'When to Use', 'Research Method', 'Reasoning Guidance', 'Evidence Requirements', 'Expected Output']) {
+      assert(titles.includes(need), `${d.id}: 有可定制章节「${need}」`)
+    }
+  }
   assert(!readdirSync(root).some((f) => /^step|^stage|^phase/.test(f)), '系统库无 step/stage/phase 目录（§27）')
 }
 

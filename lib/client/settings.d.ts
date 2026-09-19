@@ -147,6 +147,16 @@ interface HostAccountState {
     defaultServerUrl: string;
     serverUrlSource: 'settings' | 'env' | 'config' | 'default';
     /**
+     * 两个环境的地址（开发 / 生产），给地址框右边那两个**快捷图标按钮**用。
+     *
+     * 由宿主解析（配置文件 > 内置兜底）→ 客户端**不写死任何域名**。旧宿主没有这个字段时
+     * 按钮**不显示**（拿不到 ≠ 没有，但不假装有）。
+     */
+    serverPresets?: {
+        development: string;
+        production: string;
+    };
+    /**
      * 当前环境（开发 / 生产）。
      *
      * ⚠️ **地址随环境而变**（开发 = 本机服务器，生产 = 线上）。界面必须把这件事说出来：

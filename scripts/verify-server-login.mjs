@@ -399,6 +399,69 @@ section('[2] account/state 不联网（服务器挂了也能打开设置页）')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+ * 2b. 两个环境的地址（serverPresets）+ account/probe（只测连通性）
+ *
+ * 设置页那两个快捷按钮要"点一下就换地址并显示通不通"：地址必须由**宿主按配置**给出
+ * （界面不写死域名），探测必须**匿名**（`/health` 不需要身份；带 Key 就是白送凭据）。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[2b] serverPresets + account/probe（快捷按钮：换地址 + 测连通）')
+{
+  // ① 两个环境的地址：无配置文件 → 内置兜底；有配置文件 → 以文件为准
+  const noFile = ENVCFG.serverUrlPresets(withEnv({ CONVFUSION_ENV_FILE: '-' }))
+  assertEq(noFile.development, 'http://localhost:8000', '开发兜底地址')
+  assertEq(noFile.production, 'https://convfusion.com', '线上兜底地址')
+  assertEq(
+    ENVCFG.serverUrlPresets(withEnv({ CONVFUSION_SERVER_URL: 'http://x:1' })).development,
+    'http://localhost:8000',
+    '环境变量（当前地址）**不**污染两个预设 —— 预设回答的是"两边分别是哪台"',
+  )
+
+  // ② 状态里带回这两个地址（界面据此渲染按钮；旧宿主没有这个字段 → 按钮不显示）
+  const h = makeHost()
+  const st = await h.handler('account/state', {})
+  assertEq(
+    Object.keys(st.value.serverPresets ?? {}).sort(),
+    ['development', 'production'],
+    'state.serverPresets 是两个环境的地址',
+  )
+  assert(
+    /^https?:\/\//.test(st.value.serverPresets.development) &&
+      /^https?:\/\//.test(st.value.serverPresets.production),
+    '两个预设都是可用地址',
+  )
+  keyLeak(st.value, 'account/state（含 serverPresets）')
+
+  // ③ probe：通了 → reachable:true，且**不发凭据**
+  const okHost = makeHost({ handler: async () => ({ status: 200, body: { status: 'ok' } }) })
+  const okProbe = await okHost.handler('account/probe', { serverUrl: 'http://localhost:8000' })
+  assertEq(okProbe.ok, true, 'probe 的 RPC 本身成功')
+  assertEq(okProbe.value.reachable, true, '健康检查 200 → 通了')
+  assertEq(okProbe.value.url, 'http://localhost:8000', '回报归一后的地址')
+  assertEq(okHost.calls.length, 1, '只发一次请求')
+  assertEq(okHost.calls[0].url, 'http://localhost:8000/api/v1/health', '探的是公开存活探针')
+  assert(
+    !('authorization' in (okHost.calls[0].headers ?? {})),
+    '**匿名**探测：一个字节的凭据都不带',
+  )
+
+  // ④ probe：连不上 → 仍然是 ok:true，但 reachable:false（"连不上"是结果，不是 RPC 失败）
+  const downHost = makeHost({
+    handler: async () => {
+      throw new Error('ECONNREFUSED')
+    },
+  })
+  const down = await downHost.handler('account/probe', { serverUrl: 'http://localhost:9' })
+  assertEq(down.ok, true, '连不上不是 RPC 失败（界面要的是把按钮涂回原色，不是报错弹窗）')
+  assertEq(down.value.reachable, false, 'reachable:false')
+  assert(String(down.value.reason ?? '').length > 0, '带回失败原因（放进悬浮提示）')
+
+  // ⑤ 地址本身非法 → 这才是 bad-request（在联网之前就拦住）
+  const bad = await makeHost().handler('account/probe', { serverUrl: 'not a url' })
+  assertEq(bad.ok, false, '非法地址 → 失败')
+  assertEq(bad.error?.code, 'bad-url', '错误码是 bad-url（地址本身不合法，不是在网络上失败）')
+}
+
+/* ════════════════════════════════════════════════════════════════════════
  * 3. login：成功路径
  * ════════════════════════════════════════════════════════════════════════ */
 section('[3] account/login：成功路径')
@@ -1512,10 +1575,27 @@ section('[6f] 上传计划（哪些文件值得传）')
   mk('node_modules/pkg/index.js', 900)
   mk('.git/objects/ab/cdef', 700)
   mk('.DS_Store', 100)
+  // 评阅记录：调用 C10 评阅技能后落在 review/（与 research/ 平级，见 workspace-layout）
+  mk('review/research-quality-review-2026-09-19.md', 2000)
 
   const plan = UP.buildUploadPlan(root)
   const cat = (id) => plan.categories.find((c) => c.id === id)
   const has = (id, rel) => (cat(id)?.files ?? []).some((f) => f.relPath === rel)
+
+  // 评阅记录**上传时排除**：这一层里有导师从服务器下来的指导结果（回声），
+  // 学生的自查也不是要发布的研究事实 —— 一律不传。
+  assertEq(cat('review')?.decision, 'excluded', 'review/ 归"排除"（分类保留供对账）')
+  assertEq(has('review', 'review/research-quality-review-2026-09-19.md'), true, 'review/ 下文件进该分类')
+  assertEq(
+    plan.defaultSelection.includes('review/research-quality-review-2026-09-19.md'),
+    false,
+    '评阅记录不在默认勾选里',
+  )
+  assertEq(
+    UP.isSelectable('excluded'),
+    false,
+    'excluded 不可勾选（发布对话框里看不到 review/）',
+  )
 
   assertEq(has('state', 'project.md'), true, 'project.md → 推荐')
   assertEq(has('plans', 'plans/p1.md'), true, 'plans/** → 推荐')

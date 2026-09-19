@@ -1,30 +1,27 @@
 /**
- * 工作区里的文件级操作：`review/`（导师交付指导结果的保留前缀）的**扫描与读取**。
+ * 工作区里的文件级操作：`review/` 的**扫描与读取**（导师回传），
+ * 以及下载时**往工作区写一个文件**。
  *
  * ## 为什么单独一个模块
  *
  * `settings-rpc.ts` 有一条既定的分层纪律：**RPC 层不做文件读写**（只经 store 或
- * 专门模块）。这里放"找文件、读字节、拼安全路径"这些机械动作，既能守住那条纪律，
- * 又能脱离 RPC 单独测。
+ * 专门模块）。这里放"找文件、读字节、拼安全路径、写一个文件"这些机械动作，
+ * 既守住那条纪律，又能脱离 RPC 单独测。
  *
- * ## 【下载】不在这里
+ * ## 下载只负责"把 .zip 存下来"
  *
- * 下载是**浏览器原生下载**（2026-09 用户拍板）：宿主只做带凭据的同源 GET 代理，
- * 把服务器的 ZIP 交给浏览器保存 —— 插件不落盘、不解压、不注册工作区
- * （浏览器把文件存到哪，页面无从得知）。所以这里没有解包逻辑。
+ * 2026-09 用户拍板：下载**不解压**、不生成目录结构、不动别的文件 ——
+ * 只把服务器给的 ZIP 写进用户选的工作区，其余交给用户处理。
+ * 于是"不覆盖所选工作区里的东西"是**结构性成立**的（同名只加序号，从不覆盖），
+ * 不需要在运行时空想哪些文件属于"这个工作区自己"。
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 
 import { researchWorkspaceOf } from './workspace.js'
+import { REVIEW_DIR } from './workspace-layout.js'
 
-/**
- * 导师交付指导结果的目录名（相对**研究根**）。
- *
- * 服务器把这个前缀保留给关系方（`docs/API.md` §13.1）：导师只能写 `review/**`，
- * 结构上改不了 `project.md` / `research-state.md` 这些研究事实。
- */
-export const REVIEW_DIR = 'review'
+export { REVIEW_DIR }
 
 /** `review/` 下的一个待上传文件。 */
 export interface ReviewFile {
@@ -36,13 +33,13 @@ export interface ReviewFile {
 /**
  * 把一个不可信的相对路径解析成根目录下的**安全**绝对路径。
  *
- * 绝对路径、空、`..`、以及规范化后逃出根目录的路径一律拒绝 —— 拿到不可信的
- * 相对路径就往磁盘上写，一个被篡改的值就能写到 `~/.ssh/authorized_keys`。
+ * 绝对路径、空、`..`、以及规范化后逃出根目录的路径一律拒绝。拿到不可信的相对路径
+ * 就往磁盘上写，一个被篡改的值就能写到 `~/.ssh/authorized_keys`。
  *
  * @returns 绝对路径；不安全时返回 `null`。
  */
-export function safeJoin(root: string, relative: string): string | null {
-  const rel = (relative ?? '').trim()
+export function safeJoin(root: string, relativePath: string): string | null {
+  const rel = (relativePath ?? '').trim()
   if (!rel || isAbsolute(rel)) return null
   const normalizedRoot = resolve(root)
   const target = normalize(resolve(normalizedRoot, rel))
@@ -93,8 +90,7 @@ export function scanReviewFiles(dir: string): {
         continue
       }
       // 统一用 `/` 分隔：服务器的相对路径约定是 POSIX 风格
-      const rel = relative(researchRoot, abs).split(sep).join('/')
-      files.push({ relPath: rel, size })
+      files.push({ relPath: relative(researchRoot, abs).split(sep).join('/'), size })
     }
   }
   walk(reviewDir)
@@ -110,4 +106,43 @@ export function readReviewFile(researchRoot: string, relPath: string): Uint8Arra
   const abs = safeJoin(researchRoot, relPath)
   if (!abs) throw new Error(`不安全的相对路径：${relPath}`)
   return new Uint8Array(readFileSync(abs))
+}
+
+/** 一次落盘的结果。 */
+export interface WrittenFile {
+  /** 实际写出的绝对路径（重名时名字与请求的不同）。 */
+  path: string
+  /** 实际写出的文件名。 */
+  name: string
+  bytes: number
+}
+
+/** 把一段用户可见的文字变成**安全的文件名片段**（去掉分隔符与危险片段）。 */
+export function safeDirName(raw: string, fallback = 'download'): string {
+  const cleaned = (raw ?? '')
+    .replace(/[/\\:*?"<>|\u0000-\u001f]/g, '-')
+    .replace(/\.{2,}/g, '-')
+    .replace(/^[.\s-]+|[.\s-]+$/g, '')
+    .trim()
+  return cleaned || fallback
+}
+
+/**
+ * 把一个文件写进目录，**绝不覆盖已有文件**（同名就加 `-2`、`-3`…）。
+ *
+ * 这是"下载只是把 .zip 存下来"的直接后果：目标目录里原来的东西一个都不动，
+ * 所以任何工作区都能安全地当目标（用户 2026-09 拍板：不必因此禁用工作区）。
+ */
+export function writeFileUnique(dir: string, rawName: string, bytes: Uint8Array): WrittenFile {
+  const name = safeDirName(rawName, 'download.zip')
+  mkdirSync(dir, { recursive: true })
+  const stem = name.replace(/\.zip$/i, '')
+  let target = join(dir, name)
+  let n = 2
+  while (existsSync(target)) {
+    target = join(dir, `${stem}-${n}.zip`)
+    n += 1
+  }
+  writeFileSync(target, bytes)
+  return { path: target, name: relative(dir, target), bytes: bytes.byteLength }
 }

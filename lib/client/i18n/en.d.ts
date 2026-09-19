@@ -93,6 +93,7 @@ export declare const en: {
     readonly 'upload.category.papers': "Paper and figures";
     readonly 'upload.category.experiments': "Experiments and code";
     readonly 'upload.category.research-assets': "Research assets";
+    readonly 'upload.category.review': "Review records";
     readonly 'upload.category.outputs': "Outputs";
     readonly 'upload.category.literature-raw': "Literature extracts and search payloads";
     readonly 'upload.category.literature-fulltext': "Literature full texts (PDF)";
@@ -103,6 +104,7 @@ export declare const en: {
     readonly 'upload.reason.papers': "Paper text and figures: how results are expressed";
     readonly 'upload.reason.experiments': "Experiment scripts and results: how it was verified";
     readonly 'upload.reason.research-assets': "Evidence, claims, decisions and literature notes: the researcher’s judgement";
+    readonly 'upload.reason.review': "Diagnosis and guidance: who reviewed this work, and on what basis";
     readonly 'upload.reason.outputs': "Deliverables (reports, slides, …)";
     readonly 'upload.reason.literature-raw': "Machine-extracted text and raw search payloads: not uploaded by default";
     readonly 'upload.reason.literature-fulltext': "Other people’s papers: not uploaded by default; select individually if needed";
@@ -127,6 +129,11 @@ export declare const en: {
     readonly 'community.login.keyLabel': "Sign in with API key";
     readonly 'community.server.address': "Server address";
     readonly 'community.server.title': "Leave empty to follow the environment config (this environment defaults to {url}); addresses containing /api or /docs are normalized automatically.";
+    readonly 'community.server.presetDev': "Dev server";
+    readonly 'community.server.presetProd': "Internet server";
+    readonly 'community.server.probing': "Testing connection...";
+    readonly 'community.server.probeOk': "Connected";
+    readonly 'community.server.probeFail': "Connection failed";
     readonly 'community.badge.production': "Production";
     readonly 'community.badge.development': "Development";
     readonly 'community.badge.envMismatch': "Address does not match environment";
@@ -203,8 +210,12 @@ export declare const en: {
     readonly 'community.mentor.acceptConfirm': "Confirm accept";
     readonly 'community.mentor.acceptFreezeNote': "Accepting freezes a {deposit} Token deposit (still yours, just unavailable).";
     readonly 'community.mentor.acceptBalance': "Available balance: {balance} Token";
-    readonly 'community.exchange.downloadStarted': "Download started ({files} files, {size}).";
-    readonly 'community.exchange.noFilesYet': "Nothing to download on the server yet.";
+    readonly 'community.exchange.downloadTitle': "Download into a workspace";
+    readonly 'community.exchange.sizeBadge': "{files} files · {size}";
+    readonly 'community.exchange.zipOnly': "Only the ZIP is saved into the chosen workspace; no extraction — the rest is up to you.";
+    readonly 'community.exchange.destHint': "Saves to: {dest}";
+    readonly 'community.exchange.noWorkspaces': "No DSH workspace available (create one in DSH first).";
+    readonly 'community.exchange.downloadDone': "Saved {name} into {dir}.";
     readonly 'community.exchange.dirLabel': "Workspace folder";
     readonly 'community.exchange.notScanned': "Click Scan to list files under review/.";
     readonly 'community.exchange.noReviewFiles': "No review/ files yet (put guidance in workspace/review/).";
@@ -421,6 +432,7 @@ export declare const en: {
     readonly 'taxonomy.category.research-decision': "Research Decision";
     readonly 'taxonomy.category.academic-writing': "Academic Writing";
     readonly 'taxonomy.category.research-management': "Research Management";
+    readonly 'taxonomy.category.review': "Review";
     readonly 'taxonomy.skill.topic-understanding': "Topic Understanding";
     readonly 'taxonomy.skill.research-intent-assessment': "Research Intent Assessment";
     readonly 'taxonomy.skill.problem-definition': "Problem Definition";
@@ -471,4 +483,9 @@ export declare const en: {
     readonly 'taxonomy.skill.experiment-pipeline-design': "Experiment Pipeline Design";
     readonly 'taxonomy.skill.resource-requirement-estimation': "Resource Requirement Estimation";
     readonly 'taxonomy.skill.infrastructure-cost-selection': "Infrastructure and Cost Selection";
+    readonly 'taxonomy.skill.research-direction-review': "Research Direction Review";
+    readonly 'taxonomy.skill.research-quality-review': "Research Quality Review";
+    readonly 'taxonomy.skill.experimental-evidence-review': "Experimental Evidence Review";
+    readonly 'taxonomy.skill.paper-claim-review': "Paper and Claim Review";
+    readonly 'taxonomy.skill.pre-submission-review': "Pre-submission Review";
 };

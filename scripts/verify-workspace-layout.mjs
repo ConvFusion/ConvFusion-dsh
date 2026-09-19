@@ -39,6 +39,8 @@ const assert = (c, l) => { if (c) { passed++; console.log(`  ✓ ${l}`) } else {
 const assertEq = (a, b, l) => { const ok = JSON.stringify(a) === JSON.stringify(b); if (!ok) console.log(`    actual: ${JSON.stringify(a)}\n    expect: ${JSON.stringify(b)}`); assert(ok, l) }
 
 const ws = mkdtempSync(join(tmpdir(), 'cf-ws-'))
+/** §5 建立的 Paper：§6 的 provenance 断言要跨块引用，所以在块外声明。 */
+let paper
 const top = () => readdirSync(ws).filter((f) => !f.startsWith('.')).sort()
 /**
  * 列出一个目录的内容（深度优先、目录在前，深度最多 3 层）。
@@ -88,6 +90,8 @@ console.log('\n[1] 规范清单（v2-Workspace.md §2）')
     'project.md', 'research-state.md',
     'attachments', 'plans', 'experiments', 'harness', 'papers', 'outputs',
     'research', 'research/evidence', 'research/claims', 'research/decisions', 'research/state-history',
+    // 评阅记录：与 research/ 平级（同属 assets），且是服务器对关系方保留的前缀
+    'review',
     'outputs/patents', 'outputs/reports', 'outputs/slides',
   ]) {
     assert(paths.includes(want), `清单含 ${want}`)
@@ -96,6 +100,13 @@ console.log('\n[1] 规范清单（v2-Workspace.md §2）')
   assert(!paths.some((p) => p.includes('work_')), '清单不含 work_xxxxx')
   assert(!paths.includes('skills'), '清单不含 skills（§16：Skill 不属于 Workspace）')
   assert(!paths.includes('workspace'), '不是 workspace/workspace 双层结构')
+  // 评阅记录与 research 平级、同类别（否则"评阅结果放哪"就成了每轮各写各的）
+  const reviewEntry = entries.find((e) => e.path === 'review')
+  const researchEntry = entries.find((e) => e.path === 'research')
+  assert(reviewEntry !== undefined && researchEntry !== undefined, 'review 与 research 都在清单里')
+  assertEq(reviewEntry?.category, researchEntry?.category, 'review 与 research 同类别（平级）')
+  assert(reviewEntry?.kind === 'optional', 'review 是按需产生（没评阅过就不该有这个目录）')
+
   // 五类数据都有
   const cats = new Set(entries.map((e) => e.category))
   for (const c of ['definition', 'inputs', 'assets', 'outputs', 'runtime']) assert(cats.has(c), `含 ${c} 类数据`)
@@ -160,12 +171,17 @@ console.log('\n[4] experiments/（§6）')
 /* ── 5. Paper（§8 / §9）─────────────────────────────────────────── */
 console.log('\n[5] papers/（§8：Paper 是核心 Research Output）')
 {
-  P.createPaper(ws, { title: 'Cross-Modal Calibration' })
-  const pt = children('papers/paper-main')
+  // ⚠️ 这条**曾经写死了 `paper-main`**，在 `createPaper` 改为自动生成 id
+  // （`paper-<track>-<type>`，缺省 `paper-main-paper`）之后就一直在失败 ——
+  // 等于 papers/ 的布局无人验证。改成用**返回值里的 id**，验的是契约不是字面量。
+  paper = P.createPaper(ws, { title: 'Cross-Modal Calibration' })
+  assert(typeof paper.id === 'string' && paper.id.length > 0, 'createPaper 返回 id')
+  const pt = children(`papers/${paper.id}`)
   for (const want of ['paper.md', 'metadata.md', 'history/', 'latex/', 'figures/']) {
-    assert(pt.includes(want), `paper-main 含 ${want}`)
+    assert(pt.includes(want), `${paper.id} 含 ${want}`)
   }
-  assert(existsSync(join(ws, 'papers', 'paper-main', 'paper.md')), 'paper.md 在 Paper 目录内')
+  assert(existsSync(join(ws, 'papers', paper.id, 'paper.md')), 'paper.md 在 Paper 目录内')
+  assertEq(paper.relDir, `papers/${paper.id}`, 'relDir 与 id 一致（研究根相对路径）')
   // §8：Paper **不在** outputs/ 下
   assert(!existsSync(join(ws, 'outputs', 'papers')), 'Paper 不在 outputs/ 下（§8 单独放 papers/）')
 }
@@ -173,7 +189,7 @@ console.log('\n[5] papers/（§8：Paper 是核心 Research Output）')
 /* ── 6. Outputs（§10 / §14）─────────────────────────────────────── */
 console.log('\n[6] outputs/（§10 复数目录 + §14 provenance）')
 {
-  const patent = O.createOutput(ws, { type: 'patent', title: 'Calibration method', source: { paper: 'paper-main', claims: ['C001'], evidence: ['E001'] } })
+  const patent = O.createOutput(ws, { type: 'patent', title: 'Calibration method', source: { paper: paper.id, claims: ['C001'], evidence: ['E001'] } })
   const report = O.createOutput(ws, { type: 'technical-report', title: 'Reproduction report' })
   const slides = O.createOutput(ws, { type: 'slides', title: 'Group talk' })
 
@@ -190,7 +206,7 @@ console.log('\n[6] outputs/（§10 复数目录 + §14 provenance）')
   const prov = readFileSyncSafe(join(ws, 'outputs', 'patents', patent.id, 'provenance.md'))
   assert(prov.includes('Chain'), 'provenance.md 含追溯链')
   assert(prov.includes('C001') && prov.includes('E001'), 'provenance.md 记录 claims/evidence 引用')
-  assert(prov.includes('paper-main'), 'provenance.md 记录来源 paper')
+  assert(prov.includes(paper.id), 'provenance.md 记录来源 paper')
 
   // 三个类型都在各自目录下
   assert(existsSync(join(ws, 'outputs', 'reports', report.id, 'report.md')), 'Report 落 outputs/reports/<id>/report.md')

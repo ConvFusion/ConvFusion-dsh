@@ -47,7 +47,7 @@
  * 用法：node scripts/verify-server-login-live.mjs [pkgDir]
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -216,10 +216,38 @@ function makeHostFor(apiKey) {
 }
 
 const TMP = mkdtempSync(join(tmpdir(), 'cf-live-'))
-const DB_FILE = join(TMP, 'live.db')
+
+/*
+ * ⚠️ 隔离数据库 = **PostgreSQL 临时库**（2026-09 服务器迁移后 SQLite 已从代码里移除：
+ * 模型用了 `JSONB`，SQLite 连 `alembic upgrade head` 都过不去）。
+ *
+ * 做法照 `ConvFusion-server/tests/conftest.py`：连维护库 `postgres` 建一个一次性库，
+ * 跑完 DROP。库名带后缀，**绝不碰**开发库 `convfusion`。
+ */
+const TEMP_DB = `convfusion_live_${process.pid}_${Date.now().toString(36)}`
+/**
+ * 服务器**自己配置里**的数据库 URL（问它最准：`.env` / 默认值 / 环境变量都由它合并）。
+ * 拿不到才退回本进程的环境变量 —— 都没有就跳过（见下方 skip）。
+ */
+const configuredDatabaseUrl = (() => {
+  const r = spawnSync(
+    PYTHON,
+    ['-c', 'from app.core.config import settings; print(settings.DATABASE_URL)'],
+    { cwd: SERVER_DIR, encoding: 'utf8' },
+  )
+  const out = (r.stdout ?? '').trim()
+  return r.status === 0 && out ? out : (process.env.DATABASE_URL ?? '')
+})()
+/** 把配置里的 URL 换成同一个服务器上的另一个库名（**只换库名**，凭据/主机都不动）。 */
+const adminUrl = (dbName) => {
+  if (!configuredDatabaseUrl) return ''
+  const u = new URL(configuredDatabaseUrl.replace(/^postgresql\+psycopg:/, 'postgresql:'))
+  u.pathname = `/${dbName}`
+  return u.toString().replace(/^postgresql:/, 'postgresql+psycopg:')
+}
 const env = {
   ...process.env,
-  DATABASE_URL: `sqlite:///${DB_FILE}`,
+  DATABASE_URL: adminUrl(TEMP_DB),
   APP_ENV: 'test',
   LOG_LEVEL: 'WARNING',
   SECRET_KEY: 'live-verify-secret',
@@ -232,70 +260,34 @@ const env = {
 }
 
 /**
- * 通过**宿主的同源 GET 代理**取回归档字节 —— 浏览器原生下载那一步的服务端形态。
- *
- * 浏览器那边是 `<a download>` 直接发起（页面拿不到成败），所以这里直接调路由处理器
- * 来验：状态码、`Content-Disposition`、以及拿到的确实是服务器的真实 ZIP。
+ * 带**工作区注册表**的宿主夹具：`mentor/download` 的目标目录只能按注册表 id 解析，
+ * 所以下载相关的用例必须经它。
  */
-async function archiveViaProxy(apiKey, projectId, title = 'live') {
-  const route = RPC.createSettingsRouteHandler({
-    getConfig: () =>
-      CFG.resolveConfig({
-        customizationFile: 'live-proxy.json',
-        customizationDir: join(TMP, 'cf'),
-        serverUrl: BASE,
-        convfusionApiKey: apiKey,
-      }),
+function makeHostWithWorkspaces(apiKey, workspaces) {
+  const h = makeHostFor(apiKey)
+  let config = CFG.resolveConfig({
+    customizationFile: 'live-ws.json',
+    customizationDir: join(TMP, 'cf'),
+    serverUrl: BASE,
+    convfusionApiKey: apiKey,
+  })
+  return RPC.createSettingsRpcHandler({
+    getConfig: () => config,
     store: CUST.createMemoryCustomizationStore(),
+    setConfig: async (patch) => {
+      config = { ...config, ...patch }
+    },
     fetchImpl: fetch,
     serverTimeoutMs: 30000,
+    listLocalWorkspaces: async () => ({
+      available: true,
+      items: workspaces.map((w) => ({ ...w, updatedAt: '' })),
+    }),
   })
-  const chunks = []
-  const res = {
-    statusCode: 0,
-    headers: {},
-    setHeader() {},
-    writeHead(status, headers) {
-      this.status = status
-      this.headers = headers ?? {}
-    },
-    write(chunk) {
-      chunks.push(Buffer.from(chunk))
-    },
-    end(payload) {
-      if (payload !== undefined) chunks.push(Buffer.from(payload))
-    },
-  }
-  await route(
-    {
-      method: 'GET',
-      url: `/dsh-convfusion/mentor/archive?projectId=${encodeURIComponent(projectId)}&title=${encodeURIComponent(title)}`,
-      headers: {},
-      async *[Symbol.asyncIterator]() {},
-    },
-    res,
-  )
-  return { status: res.status, headers: res.headers, bytes: Buffer.concat(chunks) }
 }
 
-/** 用 Python 的 zipfile 读归档里的条目名（证明拿到的是**内容正确**的 ZIP，不只是 PK 头）。 */
-function zipEntryNames(zipBytes) {
-  const dir = mkdtempSync(join(tmpdir(), 'cf-ziplist-'))
-  const file = join(dir, 'a.zip')
-  writeFileSync(file, zipBytes)
-  const r = spawnSync(
-    PYTHON,
-    ['-c', 'import json,sys,zipfile;print(json.dumps(zipfile.ZipFile(sys.argv[1]).namelist(),ensure_ascii=False))', file],
-    { encoding: 'utf8' },
-  )
-  rmSync(dir, { recursive: true, force: true })
-  if (r.status !== 0) return []
-  try {
-    return JSON.parse(r.stdout)
-  } catch {
-    return []
-  }
-}
+/** 从 downloadState 的返回值里取体积（断言里用，避免行内再解构）。 */
+const info_bytes = (res) => res.value?.bytes ?? 0
 
 let server = null
 const cleanup = () => {
@@ -310,6 +302,22 @@ const cleanup = () => {
     rmSync(TMP, { recursive: true, force: true })
   } catch {
     /* 临时目录清不掉不影响结论 */
+  }
+  // 删掉一次性数据库（连不上的话留给人工处理，但要说一声）
+  if (TEMP_DB) {
+    const r = spawnSync(
+      PYTHON,
+      [
+        '-c',
+        'import sys; from sqlalchemy import create_engine, text\n' +
+          'e=create_engine(sys.argv[1], isolation_level="AUTOCOMMIT")\n' +
+          'with e.connect() as c: c.execute(text(f\'DROP DATABASE IF EXISTS "{sys.argv[2]}" WITH (FORCE)\'))',
+        adminUrl('postgres'),
+        TEMP_DB,
+      ],
+      { cwd: SERVER_DIR, env, encoding: 'utf8' },
+    )
+    if (r.status !== 0) console.log(`  · 临时库 ${TEMP_DB} 未删除（可手工 DROP）`)
   }
 }
 process.on('exit', cleanup)
@@ -352,11 +360,33 @@ async function shutdown() {
 }
 
 console.log(`[live] 隔离实例：${SERVER_DIR}（python: ${PYTHON}）`)
-console.log(`[live] 临时库：${DB_FILE}`)
+console.log(`[live] 临时库：${TEMP_DB}`)
 console.log(`[live] 监听：${HOST}:${PORT}\n`)
 
-/* ── ① 建表 ───────────────────────────────────────────────────────────── */
-console.log('[live.1] alembic upgrade head（临时库建表）')
+/* ── ① 建库 + 建表 ─────────────────────────────────────────────────────── */
+console.log('[live.1] 建临时 Postgres 库 + alembic upgrade head')
+if (!configuredDatabaseUrl) {
+  skip('读不到服务器的 DATABASE_URL（隔离实例需要 PostgreSQL 才能建库）')
+}
+{
+  const r = spawnSync(
+    PYTHON,
+    [
+      '-c',
+      'import sys; from sqlalchemy import create_engine, text\n' +
+        'e=create_engine(sys.argv[1], isolation_level="AUTOCOMMIT")\n' +
+        'with e.connect() as c: c.execute(text(f\'CREATE DATABASE "{sys.argv[2]}"\'))',
+      adminUrl('postgres'),
+      TEMP_DB,
+    ],
+    { cwd: SERVER_DIR, env, encoding: 'utf8' },
+  )
+  assert(r.status === 0, `建临时库 ${TEMP_DB} 成功`)
+  if (r.status !== 0) {
+    console.log(r.stderr?.slice(-1500) ?? '')
+    skip('临时 Postgres 库不可用')
+  }
+}
 {
   const r = spawnSync(PYTHON, ['-m', 'alembic', 'upgrade', 'head'], { cwd: SERVER_DIR, env, encoding: 'utf8' })
   assert(r.status === 0, 'alembic 迁移成功')
@@ -479,6 +509,24 @@ console.log('\n[live.5] 本插件 account/* 端点 × 真实服务器')
   assertEq(verify.ok, true, 'verify 用已保存凭据成功')
   if (verify.ok) assertEq(verify.value.account.email, ADMIN_EMAIL, 'verify 返回同一账号')
   assert(!JSON.stringify(verify.value).includes(adminKey), 'verify 响应里没有 Key 明文')
+
+  // ⑤-3b 【服务器设置】两个快捷按钮用的连通性探测：真的打到 /api/v1/health
+  const probeOk = await handler('account/probe', { serverUrl: BASE })
+  assertEq(probeOk.ok, true, 'account/probe 可用')
+  assertEq(probeOk.value.reachable, true, `探测到隔离实例活着（${BASE}）`)
+  assertEq(probeOk.value.url, BASE, '回报归一后的地址')
+  assertEq(probeOk.value.reason, null, '通了就没有失败原因')
+  assertEq(
+    Object.keys(verify.value.serverPresets ?? {}).sort(),
+    ['development', 'production'],
+    'state 里带回两个环境的地址（按钮的地址由宿主给，界面不写死域名）',
+  )
+  // 同一台机器上一个**没人监听**的端口：连接必须失败，而且不能抛成 RPC 错误
+  // （界面要的是"把按钮涂回原色"，不是弹一个错误框）
+  const probeDown = await handler('account/probe', { serverUrl: 'http://127.0.0.1:1' })
+  assertEq(probeDown.ok, true, '连不上也是成功的 RPC')
+  assertEq(probeDown.value.reachable, false, '没人监听的端口 → reachable:false')
+  assert(String(probeDown.value.reason ?? '').length > 0, '带回失败原因（悬停里能看懂为什么）')
 
   // ⑤-4 邀请码注册（真实 accept + 新 Key 自检）
   const register = await handler('account/register', {
@@ -1233,11 +1281,10 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
     '拒绝**不冻结**任何 Token（只有接受才冻押金）',
   )
 
-  // ⑨-10 【下载】= 预检 + 宿主持凭据的同源 GET 代理，交给**浏览器原生保存**
+  // ⑨-10 【下载】= 把 ZIP 存进**用户选的 DSH 工作区**（不调浏览器下载、不输地址）
   //
-  // 用户拍板：下载走浏览器自己的保存流程（页面拿不到存到哪），插件不落盘、不解压。
-  // 所以这里验的是代理这一侧：预检能拿到文件数/体积，GET 回的是**真 ZIP**（按
-  // Content-Disposition 交给浏览器）。
+  // 2026-09 用户拍板：**下载只负责把 .zip 保存下来**，其余交给用户处理。所以这里
+  // 断言的是"工作区根目录多了一个 ZIP"，而**不是**"文件被还原到 workspace/ 下"。
   const ATTACH = 'notes/结果.md'
   const ATTACH_BODY = '# 结果\n\n长上下文推理的关键在于……\n'
   await SC.uploadProjectFiles(
@@ -1247,33 +1294,92 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
     [{ relPath: ATTACH, bytes: Buffer.from(ATTACH_BODY) }],
     { fetchImpl: fetch },
   )
-  const mentorHost = makeHostFor(adminKey)
-  const info = await mentorHost.handler('mentor/archiveInfo', { projectId })
-  assertEq(info.ok, true, '下载前预检成功')
-  assertEq(info.value?.files, 1, `预检报出 1 个文件（实际 ${info.value?.files}）`)
-  assert(info.value?.bytes > 0, `预检报出体积（${info.value?.bytes} 字节）`)
 
-  const proxied = await archiveViaProxy(adminKey, projectId, 'Live 指导下载')
-  assertEq(proxied.status, 200, '同源 GET 代理返回 200')
+  /** 工作区根目录下的 ZIP（下载只该产生这个）。 */
+  const zipsIn = (dir) => readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.zip'))
+  const PREFIX = '林研-长上下文推理'
+
+  // 导师侧：**任何工作区都能选**（包括已有研究项目的那个）
+  const mentorWs = join(TMP, 'mentor-ws-dl')
+  mkdirSync(join(mentorWs, 'workspace'), { recursive: true })
+  const occupiedWs = join(TMP, 'occupied-ws')
+  mkdirSync(join(occupiedWs, 'workspace'), { recursive: true })
+  writeFileSync(join(occupiedWs, 'workspace', 'project.md'), '# 导师自己的研究\n')
+
+  const mentorHost = makeHostWithWorkspaces(adminKey, [
+    { id: 'ws-empty', title: '空工作区', path: mentorWs },
+    { id: 'ws-occupied', title: '已有研究', path: occupiedWs },
+  ])
+  const state = await mentorHost('mentor/downloadState', { projectId, prefix: PREFIX })
+  assertEq(state.ok, true, 'downloadState 可用')
+  assertEq(state.value?.files, 1, `预检报出 1 个文件（实际 ${state.value?.files}）`)
+  assert(info_bytes(state) > 0, `预检报出体积（${info_bytes(state)} 字节）`)
+  assertEq(state.value?.items?.length, 2, '列出两个工作区')
+  assertEq(state.value?.expectedName, `${PREFIX}.zip`, '预检给出预计文件名（宿主安全化后）')
   assert(
-    String(proxied.headers['content-disposition'] ?? '').startsWith('attachment;'),
-    'Content-Disposition: attachment —— 浏览器据此走"保存文件"',
+    state.value?.items?.every((w) => w.hasResearch === undefined),
+    '工作区不再带"已有研究项目"标记（都能选，不设禁用）',
   )
-  assertEq(proxied.bytes.subarray(0, 2).toString('latin1'), 'PK', '回的是真 ZIP（PK 头）')
-  // ⚠️ 文件名必须**原样透传服务器**的（`<owner 的 display_name>-<项目 title>.zip`）。
-  // 代理曾经自己按 title 拼，结果服务器改了命名规则、下载下来还是旧名字（实测踩到）。
-  const cdHeader = String(proxied.headers['content-disposition'] ?? '')
+
+  const download = await mentorHost('mentor/download', {
+    projectId,
+    workspaceId: 'ws-empty',
+    prefix: PREFIX,
+  })
+  assertEq(
+    download.ok,
+    true,
+    `写入空工作区成功${download.ok ? '' : `（${download.error?.code}: ${download.error?.message}）`}`,
+  )
+  const mentorZips = zipsIn(mentorWs)
+  assertEq(mentorZips.length, 1, `工作区根目录多了一个 ZIP（${mentorZips.join(', ')}）`)
+  assertEq(download.value?.name, mentorZips[0], '回报的文件名就是落盘的那个')
   assert(
-    cdHeader.includes("filename*=UTF-8''") &&
-      decodeURIComponent(cdHeader.split("filename*=UTF-8''")[1]) ===
-        `Live Researcher-Live Verify · 指导关系.zip`,
-    `文件名透传服务器的 <owner>-<title>.zip（实际 ${cdHeader}）`,
+    readFileSync(join(mentorWs, mentorZips[0])).subarray(0, 2).toString() === 'PK',
+    '存下来的确实是 ZIP（PK 魔数）',
   )
-  const names = zipEntryNames(proxied.bytes)
-  assert(
-    names.includes(ATTACH),
-    `ZIP 里确实含学生的附件（${names.join(', ')}）`,
+  assertEq(
+    existsSync(join(mentorWs, 'workspace', ATTACH)),
+    false,
+    '**不解压**：workspace/ 下不该冒出项目文件',
   )
+
+  // 已有研究项目的工作区：照样写，只是多一个 ZIP，原有的东西一个都不动
+  const intoOccupied = await mentorHost('mentor/download', {
+    projectId,
+    workspaceId: 'ws-occupied',
+    prefix: PREFIX,
+  })
+  assertEq(intoOccupied.ok, true, '已有研究项目的工作区**也能选**（不再 workspace-occupied 拒绝）')
+  assertEq(zipsIn(occupiedWs).length, 1, 'ZIP 落进那个工作区的根目录')
+  assertEq(
+    readFileSync(join(occupiedWs, 'workspace', 'project.md'), 'utf8'),
+    '# 导师自己的研究\n',
+    '导师自己的研究没被动',
+  )
+
+  // 同名不覆盖：再下一次自动加序号（这就是"任何工作区都能选"的结构性保证）
+  const twice = await mentorHost('mentor/download', {
+    projectId,
+    workspaceId: 'ws-empty',
+    prefix: PREFIX,
+  })
+  assertEq(twice.ok, true, '第二次下载成功')
+  const firstStem = String(download.value?.name ?? '').replace(/\.zip$/i, '')
+  assertEq(
+    twice.value?.name,
+    `${firstStem}-2.zip`,
+    `同名第二次自动加序号（实际 ${twice.value?.name}）`,
+  )
+  assertEq(zipsIn(mentorWs).length, 2, '两份 ZIP 并存，谁也没被覆盖')
+
+  // 客户端只能按注册表 id 指定目标：递路径进来无效
+  const badTarget = await mentorHost('mentor/download', {
+    projectId,
+    workspaceId: mentorWs,
+    prefix: PREFIX,
+  })
+  assertEq(badTarget.ok, false, '按路径指定目标 → 拒绝（只认注册表 id）')
 
   // ⑨-11 **反向流程**：导师在 workspace/review/ 写指导结果 → 回传 → 学生能看到
   //
@@ -1329,13 +1435,36 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
       '目录层次原样保留（review/figures/trend.csv）',
     )
 
-    // 学生【下载】：走同样的代理，且快照里必须已经含导师的 review/
-    const studentProxy = await archiveViaProxy(researcherKey, projectId, 'Live 学生取回')
-    assertEq(studentProxy.status, 200, '学生侧同样能下载（关系双方读权限一致）')
-    const studentNames = zipEntryNames(studentProxy.bytes)
+    // 学生【下载】：同样是"存一个 ZIP"，不再按 scope 只挑 review/ 写回
+    // （服务器上的项目快照是发布时的副本，全量解压写回会盖掉本地新改动 ——
+    //  只存 ZIP、不解压，就结构性地没有这个问题）
+    const studentWs = join(TMP, 'student-ws-dl')
+    mkdirSync(join(studentWs, 'workspace'), { recursive: true })
+    writeFileSync(join(studentWs, 'workspace', 'project.md'), '# 学生本地最新版\n')
+    const studentHost = makeHostWithWorkspaces(researcherKey, [
+      { id: 'ws-student', title: '学生工作区', path: studentWs },
+    ])
+    const back = await studentHost('mentor/download', {
+      projectId,
+      workspaceId: 'ws-student',
+      prefix: '学生甲-长上下文推理',
+    })
+    assertEq(back.ok, true, `学生侧写入成功${back.ok ? '' : `（${back.error?.code}）`}`)
+    const studentZips = zipsIn(studentWs)
+    assertEq(studentZips.length, 1, `学生工作区根目录多了一个 ZIP（${studentZips.join(', ')}）`)
     assert(
-      studentNames.includes(reviewRel),
-      `学生取回的 ZIP 含指导结果（${studentNames.filter((n) => n.startsWith('review/')).join(', ')}）`,
+      readFileSync(join(studentWs, studentZips[0])).subarray(0, 2).toString() === 'PK',
+      '学生拿到的确实是 ZIP',
+    )
+    assertEq(
+      existsSync(join(studentWs, 'workspace', reviewRel)),
+      false,
+      '**不解压**：指导意见不会自动展开到学生工作区里',
+    )
+    assertEq(
+      readFileSync(join(studentWs, 'workspace', 'project.md'), 'utf8'),
+      '# 学生本地最新版\n',
+      '学生自己的 project.md 没被动',
     )
 
     // 上传之后进展必须**变**（这是"状态永远停在已接受"那个问题的验收点）

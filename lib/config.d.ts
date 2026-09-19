@@ -53,6 +53,7 @@
  */
 import Schema from '@deepseek-ai/schemastery';
 import { type ConvFusionEnvironment } from './server-env.js';
+export { serverUrlPresets } from './server-env.js';
 /** 设置里没配 OpenAlex Key 时回退的环境变量名。 */
 export declare const OPENALEX_API_KEY_ENV = "OPENALEX_API_KEY";
 /** 设置里没配 ConvFusion.com API Key 时回退的环境变量名。 */

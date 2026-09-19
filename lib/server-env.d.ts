@@ -125,6 +125,17 @@ export declare function environmentServerUrl(env?: NodeJS.ProcessEnv, options?: 
     environment: ConvFusionEnvironment;
     path?: string;
 };
+/**
+ * **两种环境各自的地址**（配置文件 > 内置兜底）—— 设置页那两个快捷按钮用。
+ *
+ * 为什么要两边都要：`environmentServerUrl` 只回答"当前环境是哪台"。而用户想做的动作是
+ * **在两边之间切**（本机调试 ↔ 线上），所以他必须同时看到另一个环境的地址。
+ * ⚠️ 地址依然只来自配置文件 / 内置兜底 —— 界面**不自己写死** `localhost:8000`，
+ * 否则某个部署把生产地址换成自有域名后，按钮会指向错误的地方。
+ */
+export declare function serverUrlPresets(env?: NodeJS.ProcessEnv, options?: {
+    fresh?: boolean;
+}): Record<ConvFusionEnvironment, string>;
 /** 开发流程用值的读取（脚本用；`env` 覆盖文件）。 */
 export declare function resolveDevTooling(env?: NodeJS.ProcessEnv): {
     serverDir?: string;

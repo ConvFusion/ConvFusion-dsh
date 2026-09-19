@@ -4,8 +4,8 @@
  *
  * ## 覆盖什么
  *
- *   1. 下载：预检（`mentor/archiveInfo`）+ **同源 GET 代理**（`GET mentor/archive`）——
- *      宿主持凭据取回 ZIP，再以 `Content-Disposition: attachment` 交浏览器原生保存；
+ *   1. 下载：写进**用户选的 DSH 工作区**（`mentor/downloadState` 取目标列表 + 预检，
+ *      `mentor/download` 逐文件写入研究根；范围按角色分：导师 `all`、学生 `review`）；
  *   2. 上传：`workspace/review/` 的扫描与按原相对路径回传（服务器只允许写 `review/**`）；
  *   3. 列表：ACCEPTED 提案的指导进展标注（`reviewFiles`）。
  *
@@ -50,7 +50,7 @@ const KEY = 'cf_live_0123456789abcdef0123456789abcdef0123456789abcdef0123456789a
 const PROJECT_ID = '6a628fdc-86e4-4935-b619-8b479b0e6218'
 
 /** 建一个 host 夹具：假 fetch 按脚本作答。 */
-function makeHost({ handler }) {
+function makeHost({ handler, listLocalWorkspaces }) {
   let config = CFG.resolveConfig({
     customizationFile: 'mentor.json',
     customizationDir: mkdtempSync(join(tmpdir(), 'cf-cust-')),
@@ -72,6 +72,8 @@ function makeHost({ handler }) {
         const b = reply.bytes ?? Buffer.from('')
         return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)
       },
+      // 服务器给的文件名走 Content-Disposition（`<owner>-<title>.zip`）
+      ...(reply.headers ? { headers: reply.headers } : {}),
     }
   }
   const handlerFn = RPC.createSettingsRpcHandler({
@@ -82,6 +84,7 @@ function makeHost({ handler }) {
     },
     fetchImpl,
     serverTimeoutMs: 5000,
+    ...(listLocalWorkspaces ? { listLocalWorkspaces } : {}),
   })
   return { handler: handlerFn, calls }
 }
@@ -133,6 +136,23 @@ section('[5] 回传指导结果（review/ 前缀）')
     `扫描出 review/ 下的文件（含子目录、跳过隐藏文件）：${listed.join(', ')}`,
   )
   assertEq(scan.value?.researchRoot, join(ws, 'workspace'), '研究根按 researchWorkspaceOf 判定')
+
+  /*
+   * ⚠️ 刻意的不对称（有断言才不会被"顺手统一"改掉）：
+   *   - **学生发布/更新**（`work/publish` → `classify`）：`review/` 判为 `excluded`，不传；
+   *   - **导师回传**（本端点的 `scanReviewFiles`）：照列 `review/` 下的文件并上传。
+   * 理由：这一层里的导师指导本来就来自服务器（传回去是回声），而学生的自查不是要发布的
+   * 研究事实；反过来，导师的【上传】正是靠这条通道把指导结果送回服务器。
+   */
+  {
+    const UP = await import(lib('research/upload-selection.js'))
+    assertEq(UP.classify('review/x.md', 100).decision, 'excluded', '发布侧把 review/ 排除')
+    assertEq(UP.isSelectable('excluded'), false, 'excluded 在对话框里不可勾选')
+    assert(
+      (scan.value?.files ?? []).length > 0,
+      '导师回传侧仍然照传 review/（两条通道的取舍不同）',
+    )
+  }
 
   // 按原相对路径上传（不是拍平成文件名）
   const res = await upload.handler('mentor/upload', {
@@ -275,174 +295,134 @@ section('[6] mentor/list 带出指导进展（reviewFiles）')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
- * [7] 【下载】= 同源 GET 代理 → 浏览器原生保存
+ * [7] 【下载】= 把 ZIP 存进**用户选的 DSH 工作区**
  *
- * 为什么必须由宿主代理：服务器要 `Authorization: Bearer cf_live_…`，浏览器直接点
- * URL 拿不到凭据（凭据也绝不能进浏览器）。所以宿主带凭据取回 ZIP，再以
- * `Content-Disposition: attachment` 回给浏览器 —— 浏览器看到"这是文件"就走自己的
- * 保存流程。
- *
- * 这里直接调**路由处理器**（拿假 req/res），验的是真实 HTTP 层行为：
- * 状态码、响应头、字节、以及栅栏与 405。
+ * 2026-09 用户拍板：**下载只负责把 .zip 保存下来**，其余交给用户处理。因此：
+ *   · 不调起浏览器默认下载（页面拿不到保存位置），也不要求输地址；
+ *   · 目标按**注册表 id 在宿主侧解析** —— 客户端递不进任意路径；
+ *   · 写在**工作区根目录**（用户材料，不进 <工作区>/workspace/ 研究数据区）；
+ *   · **不解压、无 scope、不因"已有研究项目"拒绝**；同名不覆盖（自动加序号），
+ *     所以所选工作区里原有的东西一个都不动，任何工作区都能选。
  * ════════════════════════════════════════════════════════════════════════ */
-section('[7] GET mentor/archive（同源代理，交给浏览器保存）')
+section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
 {
-  const ARCHIVE = Buffer.from('PK\u0003\u0004 fake-zip-bytes')
-  /** 服务器给的文件名（`filename*` 是 RFC 5987 的 UTF-8 形态）。 */
-  const SERVER_CD = `attachment; filename="zengsn-project.zip"; filename*=UTF-8''${encodeURIComponent('曾老师-检索增强推理.zip')}`
-  /** 假 res：记录 writeHead 的头与写入的字节。 */
-  const makeRes = () => {
-    const out = { status: 0, headers: {}, chunks: [] }
-    return {
-      out,
-      statusCode: 0,
-      setHeader() {},
-      writeHead(status, headers) {
-        out.status = status
-        out.headers = headers ?? {}
-      },
-      write(chunk) {
-        out.chunks.push(Buffer.from(chunk))
-      },
-      end(payload) {
-        if (payload !== undefined) out.chunks.push(Buffer.from(payload))
-      },
+  const FILES = [
+    { id: 'f1', relative_path: 'project.md', size: 4 },
+    { id: 'f2', relative_path: 'research/evidence/E001.md', size: 5 },
+    { id: 'f3', relative_path: 'review/指导意见.md', size: 6 },
+  ]
+  const ZIP = Buffer.from('PK\u0003\u0004fake-zip-bytes')
+  /** 造一个工作区目录（可选先放一个研究项目，用来验证"原文件不动"）。 */
+  const makeWorkspace = (name, { withResearch = false } = {}) => {
+    const dir = join(work, name)
+    mkdirSync(join(dir, 'workspace'), { recursive: true })
+    if (withResearch) {
+      writeFileSync(join(dir, 'workspace', 'project.md'), '# 我自己的研究\n')
+      writeFileSync(join(dir, 'workspace', 'research-state.md'), '# state\n')
     }
+    return dir
   }
-  const makeReq = (url, method = 'GET') => ({
-    method,
-    url,
-    headers: {},
-    async *[Symbol.asyncIterator]() {},
-  })
-
-  const route = RPC.createSettingsRouteHandler({
-    getConfig: () =>
-      CFG.resolveConfig({
-        customizationFile: 'x.json',
-        customizationDir: work,
-        serverUrl: 'http://localhost:8000',
-        convfusionApiKey: KEY,
+  /** 服务器那把 ZIP 命名成 `<owner>-<title>.zip`，用 Content-Disposition 回给我们。 */
+  const DISPOSITION = "attachment; filename*=UTF-8''%E5%AD%A6%E7%94%9F%E7%94%B2-%E9%95%BF%E4%B8%8A%E4%B8%8B%E6%96%87%E6%8E%A8%E7%90%86.zip"
+  const hostFor = (dirs, { filename = true } = {}) =>
+    makeHost({
+      handler: async (call) => {
+        if (call.url.endsWith('/files')) return { status: 200, body: { items: FILES, total_bytes: 15 } }
+        assert(call.url.endsWith(`/projects/${PROJECT_ID}/files/archive`), '下载取的是归档端点（ZIP）')
+        return {
+          status: 200,
+          bytes: ZIP,
+          headers: { get: (k) => (filename && k.toLowerCase() === 'content-disposition' ? DISPOSITION : null) },
+        }
+      },
+      listLocalWorkspaces: async () => ({
+        available: true,
+        items: dirs.map((d, i) => ({ id: `ws-${i}`, title: `工作区 ${i}`, path: d, updatedAt: '' })),
       }),
-    store: CUST.createMemoryCustomizationStore(),
-    fetchImpl: async (url) => {
-      assert(String(url).endsWith(`/api/v1/projects/${PROJECT_ID}/files/archive`), '代理去取 /files/archive')
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({}),
-        arrayBuffer: async () =>
-          ARCHIVE.buffer.slice(ARCHIVE.byteOffset, ARCHIVE.byteOffset + ARCHIVE.byteLength),
-        // 服务器按 `<owner>-<project>.zip` 命名（`app/api/v1/files.py` 的 download_name）
-        headers: {
-          get: (name) =>
-            name.toLowerCase() === 'content-disposition' ? SERVER_CD : null,
-        },
-      }
-    },
-  })
+    })
 
-  // ① 正常下载：200 + attachment + 原始字节
-  const res = makeRes()
-  await route(makeReq(`/dsh-convfusion/mentor/archive?projectId=${PROJECT_ID}&title=${encodeURIComponent('检索增强推理')}`), res)
-  assertEq(res.out.status, 200, 'GET 代理返回 200')
-  assertEq(res.out.headers['content-type'], 'application/zip', 'content-type 是 zip')
-  assertEq(res.out.headers['content-length'], String(ARCHIVE.byteLength), 'content-length 与字节数一致')
-  // ⚠️ 文件名必须**原样透传服务器**的 Content-Disposition。
-  // 自己按 title 拼的后果实测过：服务器改成 `<owner>-<title>.zip` 之后，
-  // 下载下来仍然是旧的 `<title>.zip`。
+  // ① 对话框要的三样：可选工作区（**全部可选**）、预检、预计文件名
+  const empty = makeWorkspace('dl-empty')
+  const mine = makeWorkspace('dl-mine', { withResearch: true })
+  const host = hostFor([empty, mine])
+  const state = await host.handler('mentor/downloadState', { projectId: PROJECT_ID, prefix: '学生甲-长上下文推理' })
+  assertEq(state.ok, true, 'downloadState 可用')
+  assertEq(state.value?.files, 3, '预检报 3 个文件（全量，不再按 scope 过滤）')
+  assertEq(state.value?.bytes, 15, '预检报总体积')
+  assertEq(state.value?.items?.length, 2, '列出两个工作区')
   assertEq(
-    res.out.headers['content-disposition'],
-    SERVER_CD,
-    'Content-Disposition 原样透传（服务器才是文件名的唯一权威）',
+    state.value?.items?.map((w) => Object.keys(w).sort()),
+    [['id', 'path', 'title'], ['id', 'path', 'title']],
+    '工作区只给 id/title/path —— 没有 hasResearch 之类的禁用标记',
   )
-  assertEq(Buffer.concat(res.out.chunks).toString('latin1'), ARCHIVE.toString('latin1'), '响应体就是服务器给的原字节')
+  assertEq(state.value?.expectedName, '学生甲-长上下文推理.zip', '预计文件名走宿主安全化')
 
-  // ①b 服务器没给 Content-Disposition 时兜底（否则浏览器会拿 URL 末段当文件名：
-  //     `archive` —— 连扩展名都没有）
-  const noHeader = RPC.createSettingsRouteHandler({
-    getConfig: () =>
-      CFG.resolveConfig({
-        customizationFile: 'x.json',
-        customizationDir: work,
-        serverUrl: 'http://localhost:8000',
-        convfusionApiKey: KEY,
-      }),
-    store: CUST.createMemoryCustomizationStore(),
-    fetchImpl: async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({}),
-      arrayBuffer: async () =>
-        ARCHIVE.buffer.slice(ARCHIVE.byteOffset, ARCHIVE.byteOffset + ARCHIVE.byteLength),
-      headers: { get: () => null },
+  // ② 落盘：ZIP 写进工作区**根目录**，文件名取服务器给的 Content-Disposition
+  const res = await host.handler('mentor/download', {
+    projectId: PROJECT_ID,
+    workspaceId: 'ws-0',
+    prefix: '学生甲-长上下文推理',
+  })
+  assertEq(res.ok, true, `写入空工作区成功${res.ok ? '' : `（${res.error?.code}）`}`)
+  assertEq(res.value?.dir, empty, '回报写到哪个工作区')
+  assertEq(res.value?.name, '学生甲-长上下文推理.zip', '文件名以服务器的 Content-Disposition 为准')
+  assertEq(res.value?.bytes, ZIP.byteLength, '回报写入字节数')
+  assertEq(readFileSync(join(empty, '学生甲-长上下文推理.zip')), ZIP, 'ZIP 内容逐字节一致')
+  assertEq(existsSync(join(empty, 'workspace', 'project.md')), false, '**不解压**：研究数据区里什么都不该多出来')
+  assertEq(
+    existsSync(join(empty, 'workspace', '学生甲-长上下文推理.zip')),
+    false,
+    '落在工作区根（用户材料），不是研究数据区',
+  )
+
+  // ③ **已有研究项目的工作区照写**：只是多一个 ZIP，原有的东西一个都不动
+  const intoMine = await host.handler('mentor/download', {
+    projectId: PROJECT_ID,
+    workspaceId: 'ws-1',
+    prefix: '学生甲-长上下文推理',
+  })
+  assertEq(intoMine.ok, true, '已有研究项目的工作区**也能选**（不再 workspace-occupied 拒绝）')
+  assertEq(readFileSync(join(mine, 'workspace', 'project.md'), 'utf8'), '# 我自己的研究\n', '原有 project.md 没被动')
+  assertEq(existsSync(join(mine, '学生甲-长上下文推理.zip')), true, 'ZIP 与自己的研究并存')
+
+  // ④ 同名**不覆盖**：再下一次自动加序号（这是"任何工作区都能选"的结构性保证）
+  const again = await host.handler('mentor/download', {
+    projectId: PROJECT_ID,
+    workspaceId: 'ws-0',
+    prefix: '学生甲-长上下文推理',
+  })
+  assertEq(again.value?.name, '学生甲-长上下文推理-2.zip', '同名第二次 → 自动加 -2，绝不覆盖')
+  assertEq(existsSync(join(empty, '学生甲-长上下文推理.zip')), true, '第一份还在')
+
+  // ⑤ 服务器没给文件名 → 用客户端前缀兜底（而不是叫 workspace.zip）
+  const plain = makeWorkspace('dl-plain')
+  const noName = hostFor([plain], { filename: false })
+  const fallback = await noName.handler('mentor/download', {
+    projectId: PROJECT_ID,
+    workspaceId: 'ws-0',
+    prefix: '学生甲-长上下文推理',
+  })
+  assertEq(fallback.value?.name, '学生甲-长上下文推理.zip', '服务器没给名字时用前缀兜底')
+
+  // ⑥ 客户端只能按**注册表 id** 指定目标：递路径进来无效
+  const bad = await host.handler('mentor/download', {
+    projectId: PROJECT_ID,
+    workspaceId: '/tmp/anywhere',
+    prefix: 'x',
+  })
+  assertEq(bad.ok, false, '未知工作区 id → 拒绝')
+  assertEq(bad.error?.code, 'not-found', '按 id 解析不到就报 not-found（不接受任意路径）')
+
+  // ⑦ 没有任何文件时预检为 0（界面据此不给下载）
+  const noFilesHost = makeHost({
+    handler: async () => ({ status: 200, body: { items: [], total_bytes: 0 } }),
+    listLocalWorkspaces: async () => ({
+      available: true,
+      items: [{ id: 'ws-0', title: 'w', path: empty, updatedAt: '' }],
     }),
   })
-  const fallbackRes = makeRes()
-  await noHeader(
-    makeReq(`/dsh-convfusion/mentor/archive?projectId=${PROJECT_ID}&title=${encodeURIComponent('检索增强推理')}`),
-    fallbackRes,
-  )
-  const cd = String(fallbackRes.out.headers['content-disposition'] ?? '')
-  assert(cd.startsWith('attachment;'), '没有服务器头时仍给 attachment')
-  assert(cd.includes(encodeURIComponent('检索增强推理')), '兜底名字来自 title，且带 UTF-8 编码')
-
-  // ② 缺 projectId → 400（而不是流一个空 zip 出去）
-  const bad = makeRes()
-  await route(makeReq('/dsh-convfusion/mentor/archive'), bad)
-  assertEq(bad.out.status, 400, '缺 projectId → 400')
-
-  // ③ 服务器侧失败（403 无关系）→ 5xx JSON，绝不 stream 坏 zip
-  const forbidden = RPC.createSettingsRouteHandler({
-    getConfig: () =>
-      CFG.resolveConfig({
-        customizationFile: 'x.json',
-        customizationDir: work,
-        serverUrl: 'http://localhost:8000',
-        convfusionApiKey: KEY,
-      }),
-    store: CUST.createMemoryCustomizationStore(),
-    fetchImpl: async () => ({
-      ok: false,
-      status: 403,
-      json: async () => ({ error: { code: 'FULL_STATE_ACCESS_REQUIRED', message: 'no', details: {} } }),
-      arrayBuffer: async () => new ArrayBuffer(0),
-    }),
-  })
-  const denied = makeRes()
-  await forbidden(makeReq(`/dsh-convfusion/mentor/archive?projectId=${PROJECT_ID}`), denied)
-  assertEq(denied.out.status, 502, '上游 403 → 502（JSON 错误，不是 attachment）')
-  assertEq(denied.out.headers['content-type'], 'application/json; charset=utf-8', '失败时回 JSON 错误')
-  assert(
-    !String(denied.out.headers['content-disposition'] ?? '').includes('attachment'),
-    '失败时**不能**带 attachment（否则浏览器会把错误存成一个坏 zip）',
-  )
-
-  // ④ 信任栅栏在 GET 上也必须生效（否则是一个本机可读的裸下载端点）
-  const fenced = RPC.createSettingsRouteHandler({
-    getConfig: () =>
-      CFG.resolveConfig({
-        customizationFile: 'x.json',
-        customizationDir: work,
-        serverUrl: 'http://localhost:8000',
-        convfusionApiKey: KEY,
-      }),
-    store: CUST.createMemoryCustomizationStore(),
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => ARCHIVE.buffer.slice(ARCHIVE.byteOffset, ARCHIVE.byteOffset + ARCHIVE.byteLength) }),
-    reject: () => 401,
-  })
-  const rejected = makeRes()
-  await fenced(makeReq(`/dsh-convfusion/mentor/archive?projectId=${PROJECT_ID}`), rejected)
-  assertEq(rejected.out.status, 401, 'GET 下载同样过信任栅栏（401）')
-  assert(
-    Buffer.concat(rejected.out.chunks).toString('utf8').includes('未认证'),
-    '被栅栏拒绝时回的是可读错误（不是文件字节）',
-  )
-
-  // ⑤ 其它端点仍然只接受 POST
-  const wrong = makeRes()
-  await route(makeReq('/dsh-convfusion/state', 'GET'), wrong)
-  assertEq(wrong.out.status, 405, '非下载端点用 GET → 405')
+  const none = await noFilesHost.handler('mentor/downloadState', { projectId: PROJECT_ID, prefix: 'x' })
+  assertEq(none.value?.files, 0, '项目还没有文件 → 预检为 0')
 }
 
 rmSync(work, { recursive: true, force: true })

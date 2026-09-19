@@ -99,6 +99,7 @@ export const zh = {
   'upload.category.papers': '论文与图表',
   'upload.category.experiments': '实验与代码',
   'upload.category.research-assets': '研究资产',
+  'upload.category.review': '评阅记录',
   'upload.category.outputs': '成果输出',
   'upload.category.literature-raw': '文献抽取文本 / 检索报文',
   'upload.category.literature-fulltext': '文献原文 (PDF)',
@@ -109,6 +110,7 @@ export const zh = {
   'upload.reason.papers': '论文正文与图表：研究结果的表达',
   'upload.reason.experiments': '实验脚本与结果：怎么验证的',
   'upload.reason.research-assets': '证据 / 主张 / 决策 / 文献笔记：研究者的判断',
+  'upload.reason.review': '研究诊断与指导：谁在什么依据下评阅过这项工作',
   'upload.reason.outputs': '交付成果（报告 / 演示等）',
   'upload.reason.literature-raw': '机器抽取的原文与检索报文：默认不上传',
   'upload.reason.literature-fulltext': '别人的论文原文：默认不上传，需要时单独勾选',
@@ -133,6 +135,13 @@ export const zh = {
   'community.login.keyLabel': 'API Key 登录',
   'community.server.address': '服务器地址',
   'community.server.title': '留空 = 跟随环境配置（本环境默认 {url}）；带 /api 或 /docs 的地址会自动归一。',
+  // 地址框右边那两个快捷图标按钮（悬停提示 = "<名称> · <完整地址>"）
+  'community.server.presetDev': '开发服务器',
+  'community.server.presetProd': '互联网服务器',
+  // 快捷按钮的连通性探测（颜色是答案，文字只在悬浮提示里出现）
+  'community.server.probing': '正在测试连接…',
+  'community.server.probeOk': '连接正常',
+  'community.server.probeFail': '连接失败',
   'community.badge.production': '生产环境',
   'community.badge.development': '开发环境',
   'community.badge.envMismatch': '地址与环境不一致',
@@ -228,11 +237,15 @@ export const zh = {
   'community.mentor.acceptFreezeNote': '接受后冻结押金 {deposit} Token（仍是你的，只是暂不可用）。',
   'community.mentor.acceptBalance': '当前可用余额：{balance} Token',
   // 指导闭环的文件交换（关系建立之后）
-  // 下载是**浏览器原生下载**：宿主代理 GET，浏览器弹自己的保存框。
-  // 页面拿不到成败回执，所以只有"已开始"这句 + 失败在导航前说清。
-  'community.exchange.downloadStarted': '已开始下载（{files} 个文件，{size}）。',
-  'community.exchange.noFilesYet': '服务器上还没有可下载的文件。',
-  'community.exchange.dirLabel': '工作区目录',
+  // 下载 = 把服务器上的工作区快照 **只当成一个 ZIP 存下来**，写进用户选的 DSH 工作区
+  // （不走浏览器默认下载，也不输地址；解压与整理交给用户自己处理）
+  'community.exchange.downloadTitle': '下载到工作区',
+  'community.exchange.sizeBadge': '{files} 个文件 · {size}',
+  'community.exchange.zipOnly': '只把 ZIP 保存到所选工作区，不解压，其余你自己处理。',
+  'community.exchange.destHint': '保存到：{dest}',
+  'community.exchange.noWorkspaces': '没有可用的 DSH 工作区（先在 DSH 里建一个）。',
+  'community.exchange.downloadDone': '已保存 {name} 到 {dir}。',
+    'community.exchange.dirLabel': '工作区目录',
   'community.exchange.notScanned': '点【扫描】列出 review/ 下的文件。',
   'community.exchange.noReviewFiles': '还没有 review/ 文件（指导意见放在 workspace/review/）。',
   'community.exchange.dirPlaceholder': '/绝对路径/到/工作区',
@@ -455,6 +468,7 @@ export const zh = {
   'taxonomy.category.research-decision': '研究决策',
   'taxonomy.category.academic-writing': '论文写作',
   'taxonomy.category.research-management': '研究管理',
+  'taxonomy.category.review': '工作评阅',
 
   'taxonomy.skill.topic-understanding': '主题理解',
   'taxonomy.skill.research-intent-assessment': '研究意图判断',
@@ -506,4 +520,9 @@ export const zh = {
   'taxonomy.skill.experiment-pipeline-design': '实验流水线设计',
   'taxonomy.skill.resource-requirement-estimation': '资源需求估算',
   'taxonomy.skill.infrastructure-cost-selection': '基础设施选型',
+  'taxonomy.skill.research-direction-review': '选题方向评阅',
+  'taxonomy.skill.research-quality-review': '研究工作质量评阅',
+  'taxonomy.skill.experimental-evidence-review': '实验与证据评阅',
+  'taxonomy.skill.paper-claim-review': '论文与主张评阅',
+  'taxonomy.skill.pre-submission-review': '投稿前评阅',
 } satisfies Record<keyof typeof en, string>

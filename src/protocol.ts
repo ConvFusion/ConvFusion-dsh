@@ -63,16 +63,21 @@
  *   `mentor/accept` / `mentor/reject`，并新增第三个视图「指导中」（我发起的 + 我收到的
  *   指导提案）。旧宿主没有这些端点 → `unknown-endpoint`，界面会提示"宿主侧需要重启"。
  *
- * - `14`：指导闭环的文件交换 —— `mentor/archiveInfo`（下载预检）、
- *   `mentor/scanReview` / `mentor/upload`（按原路径回传 `review/`）、
- *   `mentor/pickDirectory`（选目录），以及**唯一一个 GET** `mentor/archive`
- *   （宿主持凭据的同源代理，交给浏览器原生保存）。旧宿主没有这些端点 →
- *   `unknown-endpoint`，界面提示重启。
+ * - `14`：指导闭环的文件交换 —— `mentor/downloadState` / `mentor/download`
+ *   （【下载】= 把服务器的工作区 **ZIP 存进用户选的 DSH 工作区**：目标只认注册表 id、
+ *   **不解压、同名加序号不覆盖**，因此任何工作区都能选）、`mentor/scanReview` /
+ *   `mentor/upload`（按原路径回传 `review/`）、`mentor/pickDirectory`（选目录）。
+ *   旧宿主没有这些端点 → `unknown-endpoint`，界面提示重启。
  *
- * ⚠️ `5` 与 `6`–`14` 来自两条**并行开发线**（上游 PR 的国际化 + 本地接入 ConvFusion.com），
- * 合并后统一编号，故最终值取 `14`。宿主与客户端必须同号，否则设置页会提示重启。
+ * - `15`：【服务器设置】的账号状态多出 **`serverPresets`**（`{ development, production }`
+ *   两个环境的地址，由宿主按配置文件 / 内置兜底解析）。界面用它做**两个快捷图标按钮**
+ *   （本机调试 ↔ 线上），因此客户端不写死任何域名。旧宿主不返回该字段 → 按钮不显示
+ *   （界面按"拿不到就不显示"处理，不假装有），升号以便旧宿主提示重启。
+ *
+ * ⚠️ `5` 与 `6`–`15` 来自两条**并行开发线**（上游 PR 的国际化 + 本地接入 ConvFusion.com），
+ * 合并后统一编号，故最终值取 `15`。宿主与客户端必须同号，否则设置页会提示重启。
  */
-export const HOST_PROTOCOL = 14
+export const HOST_PROTOCOL = 15
 
 /** 状态响应里的协议字段名（两边共用，避免拼错）。 */
 export const HOST_PROTOCOL_FIELD = 'protocol'

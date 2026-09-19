@@ -53,6 +53,18 @@ export interface LayoutEntry {
  * `kind: 'core'` 的条目由 {@link ensureWorkspaceLayout} 建立；
  * `kind: 'optional'` 的条目**按需产生**（例如还没有实验就不该有 `experiments/`）。
  */
+/**
+ * 评阅记录目录（相对研究根，与 `research/` 平级）。
+ *
+ * 调用任一 C10 评阅技能，产出（诊断 / Findings / Guidance / 建议计划）都落在这里 ——
+ * 它不是"研究资产"本身，而是**对研究资产的诊断与指导**，所以单独一层目录，
+ * 既与研究事实分开，又能随工作区一起同步给对方。
+ *
+ * ⚠️ 这个目录名同时是**服务器契约**：关系方（导师）在项目里只能写 `review/**`
+ * （`ConvFusion-server` `docs/API.md` §13.1），所以本地把它放在研究根的这一层，
+ * 上传/下载时相对路径天然就是 `review/...`，不需要任何映射。
+ */
+export declare const REVIEW_DIR = "review";
 export declare const WORKSPACE_LAYOUT: readonly LayoutEntry[];
 /** 按类别分组（供文档 / 设置面板展示）。 */
 export declare function layoutByCategory(): Record<LayoutEntry['category'], LayoutEntry[]>;
