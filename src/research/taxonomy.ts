@@ -150,6 +150,29 @@ const SYSTEM_TAXONOMY: ReadonlyArray<{ group: string; name: string; leaves: Read
       ['progress-assessment', 'Progress Assessment'],
     ],
   },
+  {
+    /*
+     * C10 工作评阅：对**已有的**研究做系统诊断（`ConvFusion-dsh-Skill-Review.md`）。
+     *
+     * 为什么排在最后而不是插在分析/写作之间：评阅是**横切能力** —— 它作用于某一轮
+     * 研究已经产出的资产（state / evidence / claims / paper），不专属某个阶段；与
+     * research-management 同理。真要在中间插一个，就必须重编 C07–C09，而编号是
+     * 常量表、被导出与界面引用，重编的代价远大于收益。
+     *
+     * 粒度按该文档 §8「不过度拆分」：只做三个，而不是把 problem/literature/novelty/
+     * evidence/claim/... 拆成一堆微技能 —— 那些是这三个技能**内部的方法维度**。
+     */
+    group: 'review',
+    name: 'Review',
+    leaves: [
+      // 顺序 = **评阅场合从早到晚**：只有方向 → 有研究状态 → 证据链 → 正文 → 投稿包
+      ['research-direction-review', 'Research Direction Review'],
+      ['research-quality-review', 'Research Quality Review'],
+      ['experimental-evidence-review', 'Experimental Evidence Review'],
+      ['paper-claim-review', 'Paper and Claim Review'],
+      ['pre-submission-review', 'Pre-submission Review'],
+    ],
+  },
 ]
 
 /** 展平后的系统分类表（大类 + 子类）。 */

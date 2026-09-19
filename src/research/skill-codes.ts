@@ -60,6 +60,8 @@ export const CATEGORY_CODES: readonly CategoryCode[] = [
   { categoryId: 'research-decision', code: 'C07', order: 7, label: '研究决策', labelEn: 'Research Decision' },
   { categoryId: 'academic-writing', code: 'C08', order: 8, label: '论文写作', labelEn: 'Academic Writing' },
   { categoryId: 'research-management', code: 'C09', order: 9, label: '研究管理', labelEn: 'Research Management' },
+  // C10 工作评阅：横切能力（作用于已有研究资产），故排在最后 —— 理由见 taxonomy.ts
+  { categoryId: 'review', code: 'C10', order: 10, label: '工作评阅', labelEn: 'Review' },
 ]
 
 /** 一个技能的身份信息：编号 + 中文名。 */
@@ -149,6 +151,16 @@ export const SKILL_CODES: Readonly<Record<string, SkillCodeEntry>> = {
   'experiment-pipeline-design': { code: 'C09P03', label: '实验流水线设计' },
   'resource-requirement-estimation': { code: 'C09P04', label: '资源需求估算' },
   'infrastructure-cost-selection': { code: 'C09P05', label: '基础设施选型' },
+  // ── C10 工作评阅 ──
+  // 顺序 = **评阅场合从早到晚**，不是按重要性：
+  //   只有方向 → 有研究状态 → 证据链 → 正文表达 → 面向投稿包/期刊政策
+  // P05 不算把 P04 拆细：它审的是"能不能投、投出去会怎么被拒"，
+  // 输出是编辑建议 / 评分卡 / 整改计划，与"研究工作本身好不好"是两个问题。
+  'research-direction-review': { code: 'C10P01', label: '选题方向评阅' },
+  'research-quality-review': { code: 'C10P02', label: '研究工作质量评阅' },
+  'experimental-evidence-review': { code: 'C10P03', label: '实验与证据评阅' },
+  'paper-claim-review': { code: 'C10P04', label: '论文与主张评阅' },
+  'pre-submission-review': { code: 'C10P05', label: '投稿前评阅' },
 }
 
 /* ════════════════════════════════════════════════════════════════════════
