@@ -54,6 +54,13 @@ export type FetchLike = (
   ok: boolean
   status: number
   json(): Promise<unknown>
+  /**
+   * 原始字节（附件下载用）。
+   *
+   * 声明成必然而不是可选：假 fetch 少实现一个方法应当**编译期**就报错，
+   * 而不是等到用户点下载才在运行期炸（测试夹具已经跟着补上了）。
+   */
+  arrayBuffer(): Promise<ArrayBuffer>
 }>
 
 /** 服务器上的账号（`GET /api/v1/auth/me` 的响应，字段名已转 camelCase）。 */
@@ -172,9 +179,11 @@ export interface WorkBrief {
  * | `server-error` | 5xx | 稍后重试（服务端问题） |
  * | `bad-response` | 200 但响应不是预期形状 | 报 bug |
  * | `insufficient-tokens` | 402 Token 余额不足 | **不要重试**；拿到 Token 后用**同一次意图**重试 |
- * | `no-relationship` | 403 需要有效研究关系 | 先建立导师关系（本轮不实现入口） |
+ * | `no-relationship` | 403 需要有效研究关系 | 先在【指导中】接受一条指导申请 |
  * | `not-found` | 404 不存在或不可见 | 刷新列表 |
  * | `idempotency-reused` | 409 同 Key 不同 payload | 客户端 bug（同一意图才能复用 Key） |
+ * | `proposal-state` | 409 提案已不在可接受状态 / 项目已有生效关系 | 刷新列表（别人已处理，或已过期） |
+ * | `path-reserved` | 403 导师越界写（只允许 `review/**`） | 把文件放进 `review/` 再传 |
  */
 export type ServerErrorCode =
   | 'invalid-key'
@@ -194,6 +203,14 @@ export type ServerErrorCode =
   | 'idempotency-reused'
   /** 409：研究状态乐观锁冲突（`details.current_version` 是服务端最新版本）。 */
   | 'version-conflict'
+  /**
+   * 409：指导提案的状态在用户操作期间变了 —— `PROPOSAL_INVALID_STATE`（已被处理 /
+   * 已过期）或 `PROJECT_ALREADY_HAS_ACTIVE_MENTORSHIP`（项目已有生效关系）。
+   * 两者都不是"输入有问题"，正确的动作是**刷新列表**再看。
+   */
+  | 'proposal-state'
+  /** 403：导师写了 `review/` 之外（或别人的）路径 —— 结构上禁止改写研究事实。 */
+  | 'path-reserved'
 
 /** 带分类的服务器错误。`message` **已经是可直接展示的中文**。 */
 export class ServerError extends Error {
@@ -386,6 +403,15 @@ function mapHttpError(status: number, body: unknown): ServerError {
         withCode,
       )
     }
+    // 导师越界写（非 review/ 路径）：**不是**"没权限"，而是"只能写 review/"。
+    // ⚠️ 必须排在 account-inactive 兜底之前 —— 否则会被误报成"账号被停用"。
+    if (serverCode === 'FILE_PATH_RESERVED') {
+      return new ServerError(
+        'path-reserved',
+        `导师只能把文件写到 ${MENTOR_REVIEW_PREFIX}/ 目录下，其他路径不能改（研究事实由学生自己维护）。`,
+        { ...withCode, serverCode },
+      )
+    }
     return new ServerError(
       'account-inactive',
       where('账号未激活或被停用，请联系 ConvFusion.com 管理员。'),
@@ -432,6 +458,22 @@ function mapHttpError(status: number, body: unknown): ServerError {
         'idempotency-reused',
         '同一个请求标识被用于了不同的内容（客户端问题）。请重新发起这次查看。',
         withCode,
+      )
+    }
+    // 指导提案的状态在操作期间变了：不是输入错误，而是"别人已经动过了"。
+    // 单独分类，界面才能做出正确动作（刷新列表），而不是让用户去改表单。
+    if (serverCode === 'PROPOSAL_INVALID_STATE') {
+      return new ServerError(
+        'proposal-state',
+        '这条指导申请已经不在可接受的状态了（可能已被处理、或已过期）。列表已刷新。',
+        { ...withCode, serverCode },
+      )
+    }
+    if (serverCode === 'PROJECT_ALREADY_HAS_ACTIVE_MENTORSHIP') {
+      return new ServerError(
+        'proposal-state',
+        '这个项目已经有生效的指导关系了。请刷新列表。',
+        { ...withCode, serverCode },
       )
     }
   }
@@ -704,12 +746,25 @@ export interface UploadedFile {
   sha256: string
 }
 
-export async function uploadProjectFiles(
+/** 把一个相对路径规范化成"服务器将来会原样存下来"的形状（仅用于拼上传路径）。 */
+function joinRelativePath(prefix: string, name: string): string {
+  const clean = name.replace(/^[./\\]+/, '').replace(/\\/g, '/')
+  return prefix ? `${prefix}/${clean}` : clean
+}
+
+/**
+ * 往项目文件空间传一组文件（**共用底层**）。
+ *
+ * 抽出来的理由：发布（传自己的研究附件）与指导闭环（导师传指导产物）用的是
+ * 同一个端点、同一套 multipart 形状与错误映射，抄两遍必然漂移。
+ */
+async function postProjectFiles(
   base: string,
   apiKey: string,
   projectId: string,
   files: ReadonlyArray<{ relPath: string; bytes: Uint8Array }>,
-  options: { stateVersion?: number } & ServerRequestOptions = {},
+  options: { stateVersion?: number } & ServerRequestOptions,
+  timeoutMessage: string,
 ): Promise<UploadedFile[]> {
   const { stateVersion, fetchImpl: fetchOption, timeoutMs } = options
   const key = requireKey(apiKey)
@@ -737,7 +792,9 @@ export async function uploadProjectFiles(
   const timeoutPromise = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       controller.abort()
-      reject(new ServerError('unreachable', `上传附件到 ${base} 超时（${Math.round(timeout / 1000)} 秒）。`))
+      reject(
+        new ServerError('unreachable', `${timeoutMessage}到 ${base} 超时（${Math.round(timeout / 1000)} 秒）。`),
+      )
     }, timeout)
   })
   let res: Awaited<ReturnType<FetchLike>>
@@ -756,7 +813,7 @@ export async function uploadProjectFiles(
     if (e instanceof ServerError) throw e
     throw new ServerError(
       'unreachable',
-      `上传附件失败：${e instanceof Error ? e.message : String(e)}`,
+      `${timeoutMessage}失败：${e instanceof Error ? e.message : String(e)}`,
     )
   } finally {
     if (timer !== undefined) clearTimeout(timer)
@@ -779,6 +836,206 @@ export async function uploadProjectFiles(
       sha256: asString(b.sha256),
     }
   })
+}
+
+export async function uploadProjectFiles(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  files: ReadonlyArray<{ relPath: string; bytes: Uint8Array }>,
+  options: { stateVersion?: number } & ServerRequestOptions = {},
+): Promise<UploadedFile[]> {
+  return await postProjectFiles(base, apiKey, projectId, files, options, '上传附件')
+}
+
+/**
+ * 导师可写的**保留前缀**（服务器强制，`docs/API.md` §13.1）。
+ *
+ * | 谁 | 可写路径 |
+ * |---|---|
+ * | 项目 owner | 任意路径 |
+ * | 有效研究关系的另一方（导师） | **仅 `review/**`**，其他 → `403 FILE_PATH_RESERVED` |
+ *
+ * 结构上禁止导师改写研究事实（`project.md` / `research-state.md` 写不进去），
+ * 学生侧 `/files`、`/files/tree`、`/files/archive` 都能看到 `review/`，无需新接口。
+ */
+export const MENTOR_REVIEW_PREFIX = 'review'
+
+/**
+ * 回传指导结果：把本地 `workspace/review/` 下的文件**按原相对路径**上传。
+ *
+ * 服务器只允许关系方写 `review/**`；越界会得到 `403 FILE_PATH_RESERVED`
+ * （映射成 `path-reserved`，界面据此说"导师只能写 review/"，**不是**没权限）。
+ *
+ * @param relPaths 与 `files` 一一对应的 `review/...` 相对路径（保留目录层次）。
+ */
+export async function uploadReviewFiles(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  files: ReadonlyArray<{ relPath: string; bytes: Uint8Array }>,
+  options: ServerRequestOptions = {},
+): Promise<UploadedFile[]> {
+  for (const f of files) {
+    // 早于服务器一步拦住：既省一次往返，也让"导师只能写 review/"在客户端就成立
+    if (!f.relPath.startsWith(`${MENTOR_REVIEW_PREFIX}/`)) {
+      throw new ServerError(
+        'bad-request',
+        `导师只能上传 ${MENTOR_REVIEW_PREFIX}/ 目录下的文件（收到 ${f.relPath}）。`,
+      )
+    }
+  }
+  return await postProjectFiles(base, apiKey, projectId, files, options, '上传指导结果')
+}
+
+/** 项目文件空间里的一个文件（`GET /projects/{id}/files` 的条目）。 */
+export interface RemoteProjectFile {
+  id: string
+  relativePath: string
+  size: number
+}
+
+/**
+ * 列出项目工作区的**全部**文件。
+ *
+ * 读权限 = owner 或**活跃研究关系方**（服务器 `FileService._readable_project`），
+ * 所以导师不需要额外授权就能同步学生的工作区。
+ */
+export async function fetchProjectFiles(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  options: ServerRequestOptions = {},
+): Promise<RemoteProjectFile[]> {
+  const key = requireKey(apiKey)
+  const id = (projectId ?? '').trim()
+  if (!id) throw new ServerError('bad-request', '缺少 projectId。')
+  const body = await requestJson(
+    base,
+    `/projects/${encodeURIComponent(id)}/files`,
+    { method: 'GET', apiKey: key },
+    options,
+    '项目文件列表',
+  )
+  const items = asRecord(body)?.items
+  if (!Array.isArray(items)) {
+    throw new ServerError('bad-response', '项目文件列表缺少 items 字段。')
+  }
+  return items.map((raw) => {
+    const b = asRecord(raw) ?? {}
+    const fileId = asString(b.id)
+    const relativePath = asString(b.relative_path)
+    if (!fileId || !relativePath) {
+      throw new ServerError('bad-response', '项目文件条目缺少 id / relative_path。')
+    }
+    return { id: fileId, relativePath, size: asNumber(b.size) }
+  })
+}
+
+/**
+ * 一个返回**原始字节**的 GET（不是 JSON，所以不能走 `requestJson`）。
+ *
+ * ⚠️ 失败时仍然要拿到服务器的**结构化错误**（403 未授权 / 404 不存在），
+ * 否则界面只能显示"下载失败"，用户不知道是该去建立关系还是刷新列表。
+ */
+async function fetchBinary(
+  base: string,
+  path: string,
+  apiKey: string,
+  options: ServerRequestOptions,
+  label: string,
+): Promise<Uint8Array> {
+  const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike | undefined)
+  if (typeof fetchImpl !== 'function') throw new ServerError('unreachable', '当前运行环境没有可用的 fetch。')
+  const timeoutMs = options.timeoutMs ?? SERVER_TIMEOUT_MS
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new ServerError('unreachable', `${label}超时（${Math.round(timeoutMs / 1000)} 秒）。`))
+    }, timeoutMs)
+  })
+  let res: Awaited<ReturnType<FetchLike>>
+  try {
+    res = await Promise.race([
+      fetchImpl(apiUrl(base, path), {
+        method: 'GET',
+        headers: { authorization: `Bearer ${apiKey}` },
+        signal: controller.signal,
+      }),
+      timeout,
+    ])
+  } catch (e) {
+    if (e instanceof ServerError) throw e
+    throw new ServerError('unreachable', `${label}失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+  if (!res.ok) {
+    let body: unknown
+    try {
+      body = await res.json()
+    } catch {
+      body = undefined
+    }
+    throw mapHttpError(res.status, body)
+  }
+  return new Uint8Array(await res.arrayBuffer())
+}
+
+/**
+ * 下载项目工作区的 **ZIP 快照**（`GET /projects/{id}/files/archive`）。
+ *
+ * 为什么用归档而不是逐文件：指导闭环要的是"和学生研究工作区内容一致的一份副本"，
+ * 一个请求拿到整棵树最省事；逐文件会在几十个文件上放大往返与失败面。
+ *
+ * 服务端行为：同一路径只导出**最新一次上传**（工作区快照，不重复），
+ * 条目名是 workspace 相对路径（含目录层次）。
+ */
+export async function fetchProjectArchive(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  options: ServerRequestOptions = {},
+): Promise<Uint8Array> {
+  const key = requireKey(apiKey)
+  const id = (projectId ?? '').trim()
+  if (!id) throw new ServerError('bad-request', '缺少 projectId。')
+  const bytes = await fetchBinary(
+    base,
+    `/projects/${encodeURIComponent(id)}/files/archive`,
+    key,
+    options,
+    '下载工作区快照',
+  )
+  return bytes
+}
+
+/**
+ * 下载一个文件的**原始字节**（不是 JSON，所以不能走 `requestJson`）。
+ *
+ * ⚠️ 失败时仍然要拿到服务器的**结构化错误**（403 未授权 / 404 不存在），
+ * 否则界面只能显示"下载失败"，用户不知道是该去建立关系还是刷新列表。
+ */
+export async function fetchProjectFileBytes(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  fileId: string,
+  options: ServerRequestOptions = {},
+): Promise<Uint8Array> {
+  const key = requireKey(apiKey)
+  const id = (projectId ?? '').trim()
+  const fid = (fileId ?? '').trim()
+  if (!id || !fid) throw new ServerError('bad-request', '缺少 projectId / fileId。')
+  return await fetchBinary(
+    base,
+    `/projects/${encodeURIComponent(id)}/files/${encodeURIComponent(fid)}`,
+    key,
+    options,
+    '下载文件',
+  )
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -1137,5 +1394,336 @@ export async function fetchWorkBrief(
     '研究工作简报',
   )
   return parseWorkBrief(body)
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 指导关系（Mentorship）
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** 导师简介（`research_profiles` 的投影；后端 enrich 后才有，可能缺失）。 */
+export interface MentorProfile {
+  institution: string | null
+  department: string | null
+  bio: string | null
+  researchFields: string[]
+  researchInterests: string[]
+  researchExpertise: string[]
+}
+
+/** 提案里的当事一方（导师 / 研究者）。`displayName` 缺失时回退为 id 短前缀。 */
+export interface ProposalParty {
+  id: string
+  displayName: string
+  profile?: MentorProfile | null
+}
+
+export type ProposalStatus = 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED'
+
+/** 一条指导提案（`mentorship_proposals`）。 */
+export interface MentorshipProposal {
+  id: string
+  projectId: string
+  /** 项目标题（后端 enrich 后才有；旧服务器 → null，界面显示"未命名项目"）。 */
+  projectTitle: string | null
+  mentor: ProposalParty | null
+  researcher: ProposalParty | null
+  guidanceScope: string
+  totalFee: number
+  depositAmount: number
+  successPaymentAmount: number
+  successCondition: { type: string; description: string | null }
+  status: ProposalStatus
+  expiresAt: string
+  createdAt: string
+}
+
+/** 费用建议（`GET /mentorship-proposals/fee-suggestion`）。 */
+export interface FeeSuggestion {
+  suggestedFee: number
+  suggestedDeposit: number
+  suggestedSuccessPayment: number
+}
+
+/** 成功条件类型（服务器枚举，界面据此给中文标签；第一版重点用 MUTUAL_COMPLETION）。 */
+export const SUCCESS_CONDITION_TYPES = [
+  'PAPER_ACCEPTED',
+  'PAPER_PUBLISHED',
+  'RESEARCH_COMPLETED',
+  'PATENT_GRANTED',
+  'TECHNICAL_OUTCOME',
+  'MUTUAL_COMPLETION',
+] as const
+
+/** 接受提案返回的**合同**（`mentorship_contracts`）。 */
+export interface MentorshipContract {
+  id: string
+  researcherId: string
+  mentorId: string
+  projectId: string
+  totalFee: number
+  depositAmount: number
+  successPaymentAmount: number
+  guidanceScope: string
+  successCondition: { type: string; description: string | null }
+  status: string
+  createdAt: string
+  acceptedAt: string | null
+  startedAt: string | null
+  completedAt: string | null
+  settledAt: string | null
+}
+
+/** 项目与导师的研究关系（`research_relationships`）。 */
+export interface ResearchRelationship {
+  id: string
+  projectId: string
+  researcherId: string
+  mentorId: string
+  contractId: string
+  status: string
+  createdAt: string
+  startedAt: string | null
+  endedAt: string | null
+}
+
+/** 容错的对象读取（非对象 → null，不抛）。 */
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null
+}
+
+function parseProfile(raw: unknown): MentorProfile | null {
+  const b = asRecord(raw)
+  if (!b) return null
+  return {
+    institution: asString(b.institution) || null,
+    department: asString(b.department) || null,
+    bio: asString(b.bio) || null,
+    researchFields: asStringArray(b.research_fields),
+    researchInterests: asStringArray(b.research_interests),
+    researchExpertise: asStringArray(b.research_expertise),
+  }
+}
+
+function parseParty(raw: unknown, fallbackId?: unknown): ProposalParty | null {
+  const b = asRecord(raw)
+  const id = (b ? asString(b.id) : '') || asString(fallbackId)
+  if (!id) return null
+  const displayName = b ? asString(b.display_name) : ''
+  return {
+    id,
+    // 后端还没 enrich 身份字段时回退成短 id，界面仍然有东西可显示、可区分
+    displayName: displayName || id.slice(0, 8),
+    profile: b ? parseProfile(b.profile) : null,
+  }
+}
+
+function parseSuccessCondition(raw: unknown): { type: string; description: string | null } {
+  const b = asRecord(raw)
+  return { type: asString(b?.type) || 'MUTUAL_COMPLETION', description: asString(b?.description) || null }
+}
+
+function parseProposal(raw: unknown): MentorshipProposal {
+  const b = asRecord(raw)
+  if (!b) throw new ServerError('bad-response', '指导提案：响应格式不对。')
+  const id = asString(b.id)
+  if (!id) throw new ServerError('bad-response', '指导提案缺少 id。')
+  return {
+    id,
+    projectId: asString(b.project_id),
+    projectTitle: asString(b.project_title) || null,
+    // 后端 enrich 之后 `mentor` / `researcher` 是内嵌对象；没 enrich 时退回顶层
+    // `mentor_id` / `researcher_id`（UUID），界面用短 id 显示 —— 至少能分出"哪边是我"。
+    mentor: parseParty(b.mentor, b.mentor_id),
+    researcher: parseParty(b.researcher, b.researcher_id),
+    guidanceScope: asString(b.guidance_scope),
+    totalFee: asNumber(b.total_fee),
+    depositAmount: asNumber(b.deposit_amount),
+    successPaymentAmount: asNumber(b.success_payment_amount),
+    successCondition: parseSuccessCondition(b.success_condition),
+    status: (asString(b.status) || 'PROPOSED') as ProposalStatus,
+    expiresAt: asString(b.expires_at),
+    createdAt: asString(b.created_at),
+  }
+}
+
+function parseContract(raw: unknown): MentorshipContract {
+  const b = asRecord(raw)
+  if (!b) throw new ServerError('bad-response', '指导合同：响应格式不对。')
+  const id = asString(b.id)
+  if (!id) throw new ServerError('bad-response', '指导合同缺少 id。')
+  return {
+    id,
+    researcherId: asString(b.researcher_id),
+    mentorId: asString(b.mentor_id),
+    projectId: asString(b.project_id),
+    totalFee: asNumber(b.total_fee),
+    depositAmount: asNumber(b.deposit_amount),
+    successPaymentAmount: asNumber(b.success_payment_amount),
+    guidanceScope: asString(b.guidance_scope),
+    successCondition: parseSuccessCondition(b.success_condition),
+    status: asString(b.status) || 'ACCEPTED',
+    createdAt: asString(b.created_at),
+    acceptedAt: asString(b.accepted_at) || null,
+    startedAt: asString(b.started_at) || null,
+    completedAt: asString(b.completed_at) || null,
+    settledAt: asString(b.settled_at) || null,
+  }
+}
+
+function parseRelationship(raw: unknown): ResearchRelationship {
+  const b = asRecord(raw)
+  if (!b) throw new ServerError('bad-response', '研究关系：响应格式不对。')
+  const id = asString(b.id)
+  if (!id) throw new ServerError('bad-response', '研究关系缺少 id。')
+  return {
+    id,
+    projectId: asString(b.project_id),
+    researcherId: asString(b.researcher_id),
+    mentorId: asString(b.mentor_id),
+    contractId: asString(b.contract_id),
+    status: asString(b.status) || 'ACTIVE',
+    createdAt: asString(b.created_at),
+    startedAt: asString(b.started_at) || null,
+    endedAt: asString(b.ended_at) || null,
+  }
+}
+
+/** 费用建议（默认 100 / 20 / 80，导师可改）。 */
+export async function fetchFeeSuggestion(
+  base: string,
+  apiKey: string,
+  options: ServerRequestOptions = {},
+): Promise<FeeSuggestion> {
+  const key = requireKey(apiKey)
+  const body = await requestJson(
+    base,
+    '/mentorship-proposals/fee-suggestion',
+    { method: 'GET', apiKey: key },
+    options,
+    '指导费用建议',
+  )
+  const b = asRecord(body)
+  if (!b) throw new ServerError('bad-response', '指导费用建议：响应格式不对。')
+  return {
+    suggestedFee: asNumber(b.suggested_fee),
+    suggestedDeposit: asNumber(b.suggested_deposit),
+    suggestedSuccessPayment: asNumber(b.suggested_success_payment),
+  }
+}
+
+/** 发起指导提案（免费，不扣 Token）。 */
+export interface ProposeInput {
+  guidanceScope: string
+  totalFee: number
+  depositAmount: number
+  successPaymentAmount: number
+  successCondition: { type: string; description: string | null }
+}
+
+export async function fetchPropose(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  input: ProposeInput,
+  options: ServerRequestOptions = {},
+): Promise<MentorshipProposal> {
+  const key = requireKey(apiKey)
+  const id = (projectId ?? '').trim()
+  if (!id) throw new ServerError('bad-request', '缺少研究工作 id。')
+  const scope = (input.guidanceScope ?? '').trim()
+  if (!scope) throw new ServerError('bad-request', '指导范围不能为空。')
+  const body = await requestJson(
+    base,
+    `/projects/${encodeURIComponent(id)}/mentorship-proposals`,
+    {
+      method: 'POST',
+      apiKey: key,
+      body: {
+        guidance_scope: scope,
+        total_fee: input.totalFee,
+        deposit_amount: input.depositAmount,
+        success_payment_amount: input.successPaymentAmount,
+        success_condition: {
+          type: input.successCondition.type,
+          description: input.successCondition.description ?? null,
+        },
+      },
+    },
+    options,
+    '指导提案',
+  )
+  return parseProposal(body)
+}
+
+/** 我涉及的提案（作为导师 = 我发起的；作为研究者 = 我收到的）。 */
+export async function fetchProposals(
+  base: string,
+  apiKey: string,
+  options: ServerRequestOptions = {},
+): Promise<MentorshipProposal[]> {
+  const key = requireKey(apiKey)
+  const body = await requestJson(
+    base,
+    '/mentorship-proposals',
+    { method: 'GET', apiKey: key },
+    options,
+    '指导提案列表',
+  )
+  // ⚠️ 服务器这里是**裸数组**（FastAPI `response_model=list[...]`），不是 `{ items: [...] }`
+  // ——与 `/discovery/random` 的形状不同，别照抄。
+  if (!Array.isArray(body)) {
+    throw new ServerError('bad-response', '指导提案列表：响应应为数组。')
+  }
+  return body.map(parseProposal)
+}
+
+/**
+ * 接受指导提案（研究者）→ **冻结押金**，创建合同与关系。
+ *
+ * ⚠️ `intentKey` 是**一次接受意图**的幂等键（同 work/brief）：
+ * 402（押金不足）之后拿到 Token 再试必须复用同一个 key，服务器据此回放、不重复冻结。
+ */
+export async function fetchAcceptProposal(
+  base: string,
+  apiKey: string,
+  proposalId: string,
+  intentKey: string,
+  options: ServerRequestOptions = {},
+): Promise<MentorshipContract> {
+  const key = requireKey(apiKey)
+  const id = (proposalId ?? '').trim()
+  if (!id) throw new ServerError('bad-request', '缺少提案 id。')
+  const intent = (intentKey ?? '').trim()
+  if (!intent) throw new ServerError('bad-request', '缺少幂等键（接受指导的一次性意图）。')
+  const body = await requestJson(
+    base,
+    `/mentorship-proposals/${encodeURIComponent(id)}/accept`,
+    { method: 'POST', apiKey: key, idempotencyKey: intent },
+    options,
+    '接受指导',
+  )
+  return parseContract(body)
+}
+
+/** 拒绝指导提案（研究者）。 */
+export async function fetchRejectProposal(
+  base: string,
+  apiKey: string,
+  proposalId: string,
+  options: ServerRequestOptions = {},
+): Promise<MentorshipProposal> {
+  const key = requireKey(apiKey)
+  const id = (proposalId ?? '').trim()
+  if (!id) throw new ServerError('bad-request', '缺少提案 id。')
+  const body = await requestJson(
+    base,
+    `/mentorship-proposals/${encodeURIComponent(id)}/reject`,
+    { method: 'POST', apiKey: key },
+    options,
+    '拒绝指导',
+  )
+  return parseProposal(body)
 }
 

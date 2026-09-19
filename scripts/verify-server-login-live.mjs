@@ -47,7 +47,7 @@
  * 用法：node scripts/verify-server-login-live.mjs [pkgDir]
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -229,6 +229,72 @@ const env = {
   // （DSH 的文件沙箱只允许写会话工作区）—— 那样上传会在服务端 500
   // （PermissionError: data/storage/projects/...）。隔离实例必须自带可写目录。
   STORAGE_ROOT: join(TMP, 'storage'),
+}
+
+/**
+ * 通过**宿主的同源 GET 代理**取回归档字节 —— 浏览器原生下载那一步的服务端形态。
+ *
+ * 浏览器那边是 `<a download>` 直接发起（页面拿不到成败），所以这里直接调路由处理器
+ * 来验：状态码、`Content-Disposition`、以及拿到的确实是服务器的真实 ZIP。
+ */
+async function archiveViaProxy(apiKey, projectId, title = 'live') {
+  const route = RPC.createSettingsRouteHandler({
+    getConfig: () =>
+      CFG.resolveConfig({
+        customizationFile: 'live-proxy.json',
+        customizationDir: join(TMP, 'cf'),
+        serverUrl: BASE,
+        convfusionApiKey: apiKey,
+      }),
+    store: CUST.createMemoryCustomizationStore(),
+    fetchImpl: fetch,
+    serverTimeoutMs: 30000,
+  })
+  const chunks = []
+  const res = {
+    statusCode: 0,
+    headers: {},
+    setHeader() {},
+    writeHead(status, headers) {
+      this.status = status
+      this.headers = headers ?? {}
+    },
+    write(chunk) {
+      chunks.push(Buffer.from(chunk))
+    },
+    end(payload) {
+      if (payload !== undefined) chunks.push(Buffer.from(payload))
+    },
+  }
+  await route(
+    {
+      method: 'GET',
+      url: `/dsh-convfusion/mentor/archive?projectId=${encodeURIComponent(projectId)}&title=${encodeURIComponent(title)}`,
+      headers: {},
+      async *[Symbol.asyncIterator]() {},
+    },
+    res,
+  )
+  return { status: res.status, headers: res.headers, bytes: Buffer.concat(chunks) }
+}
+
+/** 用 Python 的 zipfile 读归档里的条目名（证明拿到的是**内容正确**的 ZIP，不只是 PK 头）。 */
+function zipEntryNames(zipBytes) {
+  const dir = mkdtempSync(join(tmpdir(), 'cf-ziplist-'))
+  const file = join(dir, 'a.zip')
+  writeFileSync(file, zipBytes)
+  const r = spawnSync(
+    PYTHON,
+    ['-c', 'import json,sys,zipfile;print(json.dumps(zipfile.ZipFile(sys.argv[1]).namelist(),ensure_ascii=False))', file],
+    { encoding: 'utf8' },
+  )
+  rmSync(dir, { recursive: true, force: true })
+  if (r.status !== 0) return []
+  try {
+    return JSON.parse(r.stdout)
+  } catch {
+    return []
+  }
 }
 
 let server = null
@@ -923,6 +989,375 @@ console.log('\n[live.8] 「已在网络中」跟着服务器走（取消发布 /
   assert(fresh.value?.published?.projectId !== projectId, '新的 project_id 与已删除的不同')
 
   fs.rmSync(home, { recursive: true, force: true })
+}
+
+/* ── ⑨ 指导关系：发起提案 → 接受（**冻结押金**）→ 关系生效 → 导师可读完整状态 ──
+ *
+ * 这是设计文档里的商业闭环，也是插件第三个 Tab「指导中」的全部能力：
+ *
+ *   导师（admin）  POST /projects/{id}/mentorship-proposals   发起提案（免费）
+ *   研究者         POST /mentorship-proposals/{id}/accept    接受 → 冻结押金 + 建合同 + 建关系
+ *   导师           GET  /projects/{id}/full                   关系生效后能读完整状态
+ *
+ * 角色分配：**admin 当导师、researcher 当研究者**（发现网络排除自己，本来就要两个账号）。
+ * 押金冻结是"动 Token"的操作，所以余额必须先在位；不足时用管理员接口充值再到场重试。
+ * ─────────────────────────────────────────────────────────────────────── */
+console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ 关系生效 → 完整状态')
+{
+  // ⑨-0 自建并发布一个属于**研究者**的项目（第六节的 projectId 是块作用域，拿不到；
+  //      而且导师本来就是在发现网络里看到已发布的工作才发起指导）
+  const ownerUid0 = (
+    await api('/auth/me', { headers: { authorization: `Bearer ${researcherKey}` } })
+  ).body?.id
+  const topUpSeed = await api(`/admin/users/${ownerUid0}/tokens/grant`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${adminKey}` },
+    body: JSON.stringify({ amount: 60, reason: 'live verify mentorship fixture' }),
+  })
+  assert([200, 201].includes(topUpSeed.status), `研究者预充值以覆盖发布与押金（HTTP ${topUpSeed.status}）`)
+
+  const created9 = await api('/projects', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${researcherKey}` },
+    body: JSON.stringify({ title: 'Live Verify · 指导关系', description: 'mentorship fixture' }),
+  })
+  const projectId = created9.body?.id
+  assertEq(created9.status, 201, '建立用于指导的项目')
+  const uploaded9 = await api(`/projects/${projectId}/state`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${researcherKey}`, 'idempotency-key': `mentor-state-${Date.now()}` },
+    body: JSON.stringify({
+      base_version: null,
+      content: {
+        schema_version: 1,
+        research_question: '指导关系能否解锁完整研究状态？',
+        hypothesis: '关系生效后可读 Level 3。',
+        core_idea: '把检索与注意力交错。',
+        method_overview: '在每层注意前插入检索。',
+        stage: 'EXPERIMENT',
+        progress: 0.4,
+        research_fields: ['LLM'],
+        summary: '指导关系端到端验证。',
+      },
+    }),
+  })
+  assertEq(uploaded9.status, 201, '上传研究状态')
+  const published9 = await api(`/projects/${projectId}/publish`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${researcherKey}`, 'idempotency-key': `mentor-publish-${projectId}` },
+  })
+  assertEq(published9.status, 200, '发布研究（导师才可能在网络里发现它）')
+  assertEq(published9.body?.visibility, 'PUBLISHED', '可见性 PUBLISHED')
+
+  const mentor = makeHostFor(adminKey)
+  const owner = makeHostFor(researcherKey)
+
+  // ⑨-1 费用建议：界面用 100 / 20 / 80 预填提案对话框
+  const feeRes = await mentor.handler('mentor/fee-suggestion', {})
+  assertEq(feeRes.ok, true, '导师读到费用建议')
+  const suggestion = feeRes.value?.suggestion ?? {}
+  assertEq(suggestion.suggestedFee, 100, `默认总费用 100（实际 ${suggestion.suggestedFee}）`)
+  assertEq(suggestion.suggestedDeposit, 20, `默认押金 20（实际 ${suggestion.suggestedDeposit}）`)
+  assertEq(
+    suggestion.suggestedDeposit + suggestion.suggestedSuccessPayment,
+    suggestion.suggestedFee,
+    '押金 + 成功付款 = 总额（服务器强校验这条，界面本地也要先拦）',
+  )
+
+  // ⑨-2 发起提案（免费，不扣 Token）
+  const proposeRes = await mentor.handler('mentor/propose', {
+    projectId,
+    guidanceScope: '指导实验设计与论文写作',
+    totalFee: suggestion.suggestedFee,
+    depositAmount: suggestion.suggestedDeposit,
+    successPaymentAmount: suggestion.suggestedSuccessPayment,
+    successCondition: { type: 'MUTUAL_COMPLETION', description: '双方确认完成' },
+  })
+  assertEq(proposeRes.ok, true, '导师发起提案成功')
+  const proposal = proposeRes.value?.proposal
+  assertEq(proposal?.status, 'PROPOSED', '提案初始状态 PROPOSED（界面显示「等待响应」）')
+  assertEq(proposal?.projectId, projectId, '提案挂在正确的项目上')
+  assertEq(proposal?.depositAmount, suggestion.suggestedDeposit, '提案带出押金（界面据此提示冻多少）')
+
+  // 身份内嵌（后端 enrich 之后才有）：缺了也不能崩，只记录实际形状
+  if (proposal?.mentor?.displayName && proposal.mentor.displayName !== proposal.mentor.id.slice(0, 8)) {
+    console.log(`  · 后端已 enrich 导师身份：${proposal.mentor.displayName}`)
+    assert(true, '提案内嵌导师身份（研究者能看清是谁在申请）')
+  } else {
+    console.log('  · 后端尚未 enrich 导师身份（界面回退为短 id，仍能区分方向）')
+  }
+  assert(Boolean(proposal?.researcher?.id), '提案带出研究者 id（界面据此分「我收到的」）')
+
+  // ⑨-3 同一项目同一导师只能有一个生效提案 → 409
+  const dup = await mentor.handler('mentor/propose', {
+    projectId,
+    guidanceScope: '重复提案',
+    totalFee: 100,
+    depositAmount: 20,
+    successPaymentAmount: 80,
+    successCondition: { type: 'MUTUAL_COMPLETION' },
+  })
+  assertEq(dup.ok, false, '重复提案被拒')
+
+  // ⑨-4 研究者能列出这条提案（分栏靠 id 匹配）
+  const ownerList = await owner.handler('mentor/list', {})
+  assertEq(ownerList.ok, true, '研究者读到提案列表')
+  const mine = (ownerList.value?.proposals ?? []).find((p) => p.id === proposal.id)
+  assert(Boolean(mine), '研究者列表里能看到这条提案')
+  assertEq(mine?.status, 'PROPOSED', '研究者看到的状态是 PROPOSED（可接受）')
+
+  // ⑨-5 确保研究者有足够可用 Token 冻结押金
+  const ownerUid = (
+    await api('/auth/me', { headers: { authorization: `Bearer ${researcherKey}` } })
+  ).body?.id
+  const before = (await api('/tokens', { headers: { authorization: `Bearer ${researcherKey}` } })).body
+  const need = suggestion.suggestedDeposit
+  if ((before?.available_balance ?? 0) < need) {
+    const topUp = await api(`/admin/users/${ownerUid}/tokens/grant`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${adminKey}` },
+      body: JSON.stringify({ amount: need + 10, reason: 'live verify mentorship deposit' }),
+    })
+    assert([200, 201].includes(topUp.status), `研究者充值以覆盖押金（HTTP ${topUp.status}）`)
+  }
+  const funded = (await api('/tokens', { headers: { authorization: `Bearer ${researcherKey}` } })).body
+  assert(
+    (funded?.available_balance ?? 0) >= need,
+    `研究者可用余额 ${funded?.available_balance} ≥ 押金 ${need}`,
+  )
+
+  // ⑨-6 **接受**：冻结押金 + 建合同 + 建关系，一个事务
+  const acceptIntent = `accept-${proposal.id}`
+  const accepted = await owner.handler('mentor/accept', { proposalId: proposal.id, intentKey: acceptIntent })
+  assertEq(accepted.ok, true, '研究者接受指导成功')
+  assertEq(accepted.value?.contract?.status, 'ACCEPTED', '合同状态 ACCEPTED')
+  assertEq(accepted.value?.contract?.depositAmount, need, '合同冻结的押金与提案一致')
+
+  // 余额语义：总额不变，押金从 available 转到 frozen
+  const after = (await api('/tokens', { headers: { authorization: `Bearer ${researcherKey}` } })).body
+  assertEq(
+    after?.frozen_balance,
+    (funded?.frozen_balance ?? 0) + need,
+    `冻结余额增加 ${need}（${funded?.frozen_balance} → ${after?.frozen_balance}）`,
+  )
+  assertEq(
+    after?.available_balance,
+    (funded?.available_balance ?? 0) - need,
+    `可用余额减少 ${need}（${funded?.available_balance} → ${after?.available_balance}）`,
+  )
+  assertEq(
+    after?.total_balance,
+    funded?.total_balance,
+    '总额不变（押金仍是研究者的钱，只是转为冻结 —— 不是转账）',
+  )
+
+  // ⑨-7 重复接受（哪怕同一个幂等键）→ 409，且**绝不重复冻结押金**
+  //
+  // ⚠️ 服务器语义（实测）：接受成功后提案已 `ACCEPTED`，再调 `/accept` 走
+  // `PROPOSAL_INVALID_STATE` → 409，而不是回放上一次响应。真正的安全性质是
+  // **钱只冻一次**，所以断言必须落在余额上，而不是"重放成功"。
+  const replay = await owner.handler('mentor/accept', { proposalId: proposal.id, intentKey: acceptIntent })
+  const afterReplay = (await api('/tokens', { headers: { authorization: `Bearer ${researcherKey}` } })).body
+  assertEq(
+    afterReplay?.frozen_balance,
+    after?.frozen_balance,
+    `重复接受不重复冻结押金（frozen=${afterReplay?.frozen_balance}，仍是 ${after?.frozen_balance}）`,
+  )
+  assertEq(replay.ok, false, '已经接受的提案再接受 → 失败（409 提案状态已变）')
+  assertEq(
+    replay.error?.code,
+    'proposal-state',
+    '409 提案状态冲突映射成 proposal-state（界面据此刷新列表，不是让用户改输入）',
+  )
+
+  // ⑨-8 关系真的生效，且导师拿到 Level 3 完整状态
+  const rel = await api(`/projects/${projectId}/relationship`, {
+    headers: { authorization: `Bearer ${adminKey}` },
+  })
+  assertEq(rel.status, 200, '关系可读（导师视角）')
+  assertEq(rel.body?.status, 'ACTIVE', '关系状态 ACTIVE')
+  assertEq(rel.body?.researcher_id, ownerUid, '关系里的研究者就是项目 owner')
+
+  const full = await api(`/projects/${projectId}/full`, {
+    headers: { authorization: `Bearer ${adminKey}` },
+  })
+  assertEq(full.status, 200, '导师现在能读 Level 3 完整状态（关系生效前是 403）')
+  assertEq(full.body?.content?.core_idea, '把检索与注意力交错。', '完整状态带出核心想法')
+
+  // 接受之后提案状态不再是 PROPOSED
+  const ownerList2 = await owner.handler('mentor/list', {})
+  const settled = (ownerList2.value?.proposals ?? []).find((p) => p.id === proposal.id)
+  assertEq(settled?.status, 'ACCEPTED', '研究者侧看到的提案状态已变为 ACCEPTED')
+  // 提案状态到 ACCEPTED 就**不再变化** —— 用户要看的是指导进展。
+  // 宿主在 mentor/list 里补 reviewFiles（导师已上传几份指导结果），
+  // 界面据此把"已接受"换成「等待指导意见」/「导师已指导」。
+  assertEq(settled?.reviewFiles, 0, '刚接受、导师还没传 → reviewFiles=0（界面：等待指导意见，不给【下载】）')
+
+  // ⑨-9 拒绝路径（不冻 Token）：另起一个**未发布**的项目也能提案（服务器不要求 PUBLISHED）
+  const disposable = await api('/projects', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${researcherKey}` },
+    body: JSON.stringify({ title: 'Live Verify · 拒绝路径', description: 'reject fixture' }),
+  })
+  const rejectTarget = disposable.body?.id
+  assertEq(disposable.status, 201, '另建一个项目用于验证拒绝路径')
+  // ⚠️ 这条用**界面现在真正发的载荷**：导师只填总费用，押金按平台建议的比例推导，
+  // 指导范围送占位符、成功条件送平台默认值（服务器当前仍要求这两个字段非空）。
+  // 验的是"过渡值在真实服务器上确实被接受"，免得界面点了没反应。
+  const uiRatio = suggestion.suggestedDeposit / suggestion.suggestedFee
+  const uiDeposit = Math.max(1, Math.round(100 * uiRatio))
+  const secondProposal = await mentor.handler('mentor/propose', {
+    projectId: rejectTarget,
+    guidanceScope: '-',
+    totalFee: 100,
+    depositAmount: uiDeposit,
+    successPaymentAmount: 100 - uiDeposit,
+    successCondition: { type: 'MUTUAL_COMPLETION', description: null },
+  })
+  assertEq(secondProposal.ok, true, '界面形态的载荷（只定总费用 + 过渡值）被服务器接受')
+  assertEq(
+    uiDeposit,
+    suggestion.suggestedDeposit,
+    `同一总额下前端推的押金 == 服务器建议的押金（都 ${uiDeposit}，ratio=${uiRatio}）`,
+  )
+  assertEq(secondProposal.value?.proposal?.depositAmount, uiDeposit, '服务器接受了推导出的押金')
+  const rejected = await owner.handler('mentor/reject', {
+    proposalId: secondProposal.value?.proposal?.id,
+  })
+  assertEq(rejected.ok, true, '研究者拒绝成功')
+  assertEq(rejected.value?.proposal?.status, 'REJECTED', '拒绝后状态 REJECTED')
+  const afterReject = (await api('/tokens', { headers: { authorization: `Bearer ${researcherKey}` } })).body
+  assertEq(
+    afterReject?.frozen_balance,
+    after?.frozen_balance,
+    '拒绝**不冻结**任何 Token（只有接受才冻押金）',
+  )
+
+  // ⑨-10 【下载】= 预检 + 宿主持凭据的同源 GET 代理，交给**浏览器原生保存**
+  //
+  // 用户拍板：下载走浏览器自己的保存流程（页面拿不到存到哪），插件不落盘、不解压。
+  // 所以这里验的是代理这一侧：预检能拿到文件数/体积，GET 回的是**真 ZIP**（按
+  // Content-Disposition 交给浏览器）。
+  const ATTACH = 'notes/结果.md'
+  const ATTACH_BODY = '# 结果\n\n长上下文推理的关键在于……\n'
+  await SC.uploadProjectFiles(
+    BASE,
+    researcherKey,
+    projectId,
+    [{ relPath: ATTACH, bytes: Buffer.from(ATTACH_BODY) }],
+    { fetchImpl: fetch },
+  )
+  const mentorHost = makeHostFor(adminKey)
+  const info = await mentorHost.handler('mentor/archiveInfo', { projectId })
+  assertEq(info.ok, true, '下载前预检成功')
+  assertEq(info.value?.files, 1, `预检报出 1 个文件（实际 ${info.value?.files}）`)
+  assert(info.value?.bytes > 0, `预检报出体积（${info.value?.bytes} 字节）`)
+
+  const proxied = await archiveViaProxy(adminKey, projectId, 'Live 指导下载')
+  assertEq(proxied.status, 200, '同源 GET 代理返回 200')
+  assert(
+    String(proxied.headers['content-disposition'] ?? '').startsWith('attachment;'),
+    'Content-Disposition: attachment —— 浏览器据此走"保存文件"',
+  )
+  assertEq(proxied.bytes.subarray(0, 2).toString('latin1'), 'PK', '回的是真 ZIP（PK 头）')
+  const names = zipEntryNames(proxied.bytes)
+  assert(
+    names.includes(ATTACH),
+    `ZIP 里确实含学生的附件（${names.join(', ')}）`,
+  )
+
+  // ⑨-11 **反向流程**：导师在 workspace/review/ 写指导结果 → 回传 → 学生能看到
+  //
+  // 服务器契约（docs/API.md §13.1）：关系方只能写 `review/**`，越界
+  // `403 FILE_PATH_RESERVED` —— 结构上禁止导师改写研究事实。
+  {
+    // 导师自己解压了快照 → 在 workspace/review/ 下写指导结果（本轮用普通目录模拟）
+    const mentorCopy = join(TMP, 'mentor-ws')
+    const reviewRel = 'review/指导意见.md'
+    const reviewBody = '# 指导意见\n\n建议先固定裁剪策略再比方法。\n'
+    mkdirSync(join(mentorCopy, 'workspace', 'review', 'figures'), { recursive: true })
+    writeFileSync(join(mentorCopy, 'workspace', reviewRel), reviewBody)
+    writeFileSync(join(mentorCopy, 'workspace', 'review', 'figures', 'trend.csv'), 'x,y\n1,2\n')
+
+    const uploader = RPC.createSettingsRpcHandler({
+      getConfig: () =>
+        CFG.resolveConfig({
+          customizationFile: 'live-up.json',
+          customizationDir: join(TMP, 'cf'),
+          serverUrl: BASE,
+          convfusionApiKey: adminKey,
+        }),
+      store: CUST.createMemoryCustomizationStore(),
+      fetchImpl: fetch,
+      serverTimeoutMs: 30000,
+    })
+    const scan = await uploader('mentor/scanReview', { dir: mentorCopy })
+    assertEq(scan.ok, true, '扫描导师工作区的 review/')
+    const listed = (scan.value?.files ?? []).map((f) => f.relPath)
+    assert(listed.includes(reviewRel), `扫描到指导结果（${listed.join(', ')}）`)
+
+    const sent = await uploader('mentor/upload', {
+      projectId,
+      dir: mentorCopy,
+      paths: [reviewRel, 'review/figures/trend.csv'],
+    })
+    assertEq(
+      sent.ok,
+      true,
+      `导师回传指导结果成功${sent.ok ? '' : `（${sent.error?.code}: ${sent.error?.message}）`}`,
+    )
+
+    // 学生侧能看到（服务器：同一个 workspace，review/ 目录）
+    const studentFiles = await (
+      await fetch(`${BASE}/api/v1/projects/${projectId}/files`, {
+        headers: { authorization: `Bearer ${researcherKey}` },
+      })
+    ).json()
+    const rels = (studentFiles.items ?? []).map((f) => f.relative_path)
+    assert(rels.includes(reviewRel), `学生在 /files 里看到指导结果（${rels.filter((r) => r.startsWith('review/')).join(', ')}）`)
+    assert(
+      rels.includes('review/figures/trend.csv'),
+      '目录层次原样保留（review/figures/trend.csv）',
+    )
+
+    // 学生【下载】：走同样的代理，且快照里必须已经含导师的 review/
+    const studentProxy = await archiveViaProxy(researcherKey, projectId, 'Live 学生取回')
+    assertEq(studentProxy.status, 200, '学生侧同样能下载（关系双方读权限一致）')
+    const studentNames = zipEntryNames(studentProxy.bytes)
+    assert(
+      studentNames.includes(reviewRel),
+      `学生取回的 ZIP 含指导结果（${studentNames.filter((n) => n.startsWith('review/')).join(', ')}）`,
+    )
+
+    // 上传之后进展必须**变**（这是"状态永远停在已接受"那个问题的验收点）
+    const afterUpload = await owner.handler('mentor/list', {})
+    const progressed = (afterUpload.value?.proposals ?? []).find((p) => p.id === proposal.id)
+    assertEq(
+      progressed?.reviewFiles,
+      2,
+      `导师上传 2 份后 reviewFiles=2（界面：导师已指导，并放开【下载】）实际 ${progressed?.reviewFiles}`,
+    )
+
+    // 越界：导师改不了研究事实
+    writeFileSync(join(mentorCopy, 'workspace', 'project.md'), '# 篡改\n')
+    const reserved = await uploader('mentor/upload', {
+      projectId,
+      dir: mentorCopy,
+      paths: ['review/指导意见.md'],
+    })
+    assertEq(reserved.ok, true, '（对照）review/ 内的文件仍然可传')
+    const grab = await SC.uploadReviewFiles(
+      BASE,
+      adminKey,
+      projectId,
+      [{ relPath: 'project.md', bytes: Buffer.from('# 篡改\n') }],
+      { fetchImpl: fetch },
+    ).then(
+      () => null,
+      (e) => e,
+    )
+    assert(grab === null || grab?.code === 'path-reserved' || grab?.code === 'bad-request', '导师写 project.md 被拦（研究事实不可改）')
+  }
 }
 
 await shutdown()

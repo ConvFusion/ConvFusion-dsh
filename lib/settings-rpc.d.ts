@@ -433,6 +433,27 @@ export interface SettingsRpcDeps {
             updatedAt: string;
         }>;
     }>;
+    /**
+     * DSH 的**目录选择器**（`ctx.directoryPicker` 能力 seam）。
+     *
+     * 只有 `native` 能力才能拿到"用户选的绝对路径"；`browse` 只有列目录/建目录原语，
+     * 未知能力按 DSH 的约定**隐藏**选择入口而不是硬凑 —— 所以这里返回能力描述，
+     * 让界面自己决定是给【选择目录…】还是退回手填路径。
+     */
+    pickDirectory?: () => Promise<{
+        /** false = 当前环境没有可用的系统选择器（界面退回手填）。 */
+        supported: boolean;
+        /** `supported` 时的绝对路径；null = 用户取消（**不是错误**）。 */
+        path: string | null;
+        /** 能力种类，供诊断与提示文案使用。 */
+        kind?: string;
+    }>;
+    /** 只探测"有没有可用的系统选择器"，**不打开**任何窗口（`probe: true` 用）。 */
+    probeDirectoryPicker?: () => Promise<{
+        supported: boolean;
+        path: null;
+        kind?: string;
+    }>;
 }
 /**
  * 建立一个端点分发器。
@@ -459,6 +480,15 @@ export interface SettingsRpcDeps {
  * | `work/list` | `{}` | 研究网络里已公开的研究工作（需登录；条数由服务器定） |
  * | `work/summary` | `{ projectId }` | 一项研究工作的摘要（免费） |
  * | `work/brief` | `{ projectId, intentKey }` | 一项研究工作的简报（非 owner 花 1 Token） |
+ * | `mentor/fee-suggestion` | `{}` | 默认指导费用建议（100 / 20 / 80，导师可改） |
+ * | `mentor/propose` | `{ projectId, guidanceScope, totalFee, depositAmount, successPaymentAmount, successCondition }` | 发起指导提案（免费；同一项目同一导师只能有一个生效提案） |
+ * | `mentor/list` | `{}` | 我涉及的指导提案（我发起的 + 我收到的）；ACCEPTED 的会附 `reviewFiles`（导师已上传几份指导结果） |
+ * | `mentor/accept` | `{ proposalId, intentKey }` | 接受指导（研究者）→ **冻结押金**、建合同与关系 |
+ * | `mentor/reject` | `{ proposalId }` | 拒绝指导（研究者） |
+ * | `mentor/pickDirectory` | `{}` / `{ probe:true }` | 开系统目录选择器（`native` 才可用）；`probe` 只问能力不开窗 |
+ * | `mentor/archiveInfo` | `{ projectId }` | 下载前的预检（文件数 / 体积）；真正的下载走 GET `mentor/archive` |
+ * | `mentor/scanReview` | `{ dir }` | 列出工作区 `review/` 下的文件（上传源） |
+ * | `mentor/upload` | `{ projectId, dir, paths:[relPath] }` | 按原相对路径回传 `review/**` |
  *
  * ⚠️ **凭据纪律**（改动这里前先读 `server-client.ts` 文件头）：
  * 服务器地址与 API Key 只出现在**宿主**与**服务器**之间；本渠道的任何返回值都不得
@@ -476,7 +506,9 @@ interface RouteResponse {
     statusCode: number;
     setHeader(name: string, value: string): void;
     writeHead(status: number, headers?: Record<string, string>): void;
-    end(payload?: string): void;
+    /** 流式写（归档下载用）。真实对象是 `node:http` 的 ServerResponse。 */
+    write(chunk: Uint8Array): void;
+    end(payload?: string | Uint8Array): void;
 }
 export interface SettingsRouteDeps extends SettingsRpcDeps {
     /**

@@ -74,7 +74,7 @@
  */
 
 import { existsSync, realpathSync, statSync } from 'node:fs'
-import { basename, resolve } from 'node:path'
+import { basename, join as joinPath, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import {
   CONVFUSION_API_KEY_ENV,
@@ -91,6 +91,7 @@ import {
   systemLibraryStatus,
 } from './research/skill-customization.js'
 import { effectiveSkillContentById } from './research/library.js'
+import { readReviewFile, scanReviewFiles } from './research/workspace-sync.js'
 import type { Config } from './config.js'
 import {
   describeConvFusionKey,
@@ -104,9 +105,16 @@ import {
 import {
   acceptInvitation,
   createProject,
+  fetchAcceptProposal,
   fetchAccount,
-  fetchWorkBrief,
+  fetchProjectArchive,
+  fetchProjectFiles,
+  fetchFeeSuggestion,
+  fetchProposals,
+  fetchPropose,
+  fetchRejectProposal,
   fetchTokenBalance,
+  fetchWorkBrief,
   fetchWorkList,
   fetchWorkSummary,
   normalizeApiKey,
@@ -116,9 +124,13 @@ import {
   publishProject,
   readStateVersion,
   ServerError,
+  uploadReviewFiles,
   uploadProjectFiles,
   uploadResearchState,
   type FetchLike,
+  type FeeSuggestion,
+  type MentorshipContract,
+  type MentorshipProposal,
   type ServerAccount,
   type TokenBalance,
   type WorkBrief,
@@ -628,10 +640,39 @@ export interface SettingsRpcDeps {
     reason?: string
     items: Array<{ id: string; title: string; path: string; updatedAt: string }>
   }>
+  /**
+   * DSH 的**目录选择器**（`ctx.directoryPicker` 能力 seam）。
+   *
+   * 只有 `native` 能力才能拿到"用户选的绝对路径"；`browse` 只有列目录/建目录原语，
+   * 未知能力按 DSH 的约定**隐藏**选择入口而不是硬凑 —— 所以这里返回能力描述，
+   * 让界面自己决定是给【选择目录…】还是退回手填路径。
+   */
+  pickDirectory?: () => Promise<{
+    /** false = 当前环境没有可用的系统选择器（界面退回手填）。 */
+    supported: boolean
+    /** `supported` 时的绝对路径；null = 用户取消（**不是错误**）。 */
+    path: string | null
+    /** 能力种类，供诊断与提示文案使用。 */
+    kind?: string
+  }>
+  /** 只探测"有没有可用的系统选择器"，**不打开**任何窗口（`probe: true` 用）。 */
+  probeDirectoryPicker?: () => Promise<{ supported: boolean; path: null; kind?: string }>
 }
 
 function asString(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
+}
+
+/** 正整数（费用类字段：0 / 负数 / 非数字一律视为无效）。 */
+function asInt(v: unknown): number {
+  return typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : 0
+}
+
+/** 普通对象读取（非对象 → null，不抛）。 */
+function asRecordLike(v: unknown): Record<string, unknown> | null {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null
 }
 
 /**
@@ -659,6 +700,15 @@ function asString(v: unknown): string {
  * | `work/list` | `{}` | 研究网络里已公开的研究工作（需登录；条数由服务器定） |
  * | `work/summary` | `{ projectId }` | 一项研究工作的摘要（免费） |
  * | `work/brief` | `{ projectId, intentKey }` | 一项研究工作的简报（非 owner 花 1 Token） |
+ * | `mentor/fee-suggestion` | `{}` | 默认指导费用建议（100 / 20 / 80，导师可改） |
+ * | `mentor/propose` | `{ projectId, guidanceScope, totalFee, depositAmount, successPaymentAmount, successCondition }` | 发起指导提案（免费；同一项目同一导师只能有一个生效提案） |
+ * | `mentor/list` | `{}` | 我涉及的指导提案（我发起的 + 我收到的）；ACCEPTED 的会附 `reviewFiles`（导师已上传几份指导结果） |
+ * | `mentor/accept` | `{ proposalId, intentKey }` | 接受指导（研究者）→ **冻结押金**、建合同与关系 |
+ * | `mentor/reject` | `{ proposalId }` | 拒绝指导（研究者） |
+ * | `mentor/pickDirectory` | `{}` / `{ probe:true }` | 开系统目录选择器（`native` 才可用）；`probe` 只问能力不开窗 |
+ * | `mentor/archiveInfo` | `{ projectId }` | 下载前的预检（文件数 / 体积）；真正的下载走 GET `mentor/archive` |
+ * | `mentor/scanReview` | `{ dir }` | 列出工作区 `review/` 下的文件（上传源） |
+ * | `mentor/upload` | `{ projectId, dir, paths:[relPath] }` | 按原相对路径回传 `review/**` |
  *
  * ⚠️ **凭据纪律**（改动这里前先读 `server-client.ts` 文件头）：
  * 服务器地址与 API Key 只出现在**宿主**与**服务器**之间；本渠道的任何返回值都不得
@@ -1528,6 +1578,233 @@ export function createSettingsRpcHandler(
           }
         }
 
+        case 'mentor/fee-suggestion': {
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          try {
+            const base = resolveServerUrl(config, env()).url
+            const suggestion: FeeSuggestion = await fetchFeeSuggestion(base, apiKey, netOptions())
+            return { ok: true, value: { suggestion } }
+          } catch (e) {
+            return serverFail(e)
+          }
+        }
+
+        case 'mentor/propose': {
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          const projectId = asString(p.projectId)
+          if (!projectId) return fail('bad-request', '缺少 projectId。')
+          const guidanceScope = asString(p.guidanceScope)
+          if (!guidanceScope) return fail('bad-request', '指导范围不能为空。')
+          const totalFee = asInt(p.totalFee)
+          const depositAmount = asInt(p.depositAmount)
+          const successPaymentAmount = asInt(p.successPaymentAmount)
+          const condition = asRecordLike(p.successCondition)
+          if (!totalFee || !depositAmount || !condition) {
+            return fail('bad-request', '费用或成功条件不完整。')
+          }
+          if (depositAmount + successPaymentAmount !== totalFee) {
+            return fail('bad-request', '押金 + 成功付款必须等于总费用。')
+          }
+          const type = asString(condition.type)
+          if (!type) return fail('bad-request', '缺少成功条件类型。')
+          try {
+            const base = resolveServerUrl(config, env()).url
+            const proposal: MentorshipProposal = await fetchPropose(base, apiKey, projectId, {
+              guidanceScope,
+              totalFee,
+              depositAmount,
+              successPaymentAmount,
+              successCondition: { type, description: asString(condition.description) || null },
+            }, netOptions())
+            return { ok: true, value: { proposal } }
+          } catch (e) {
+            return serverFail(e)
+          }
+        }
+
+        case 'mentor/list': {
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          try {
+            const base = resolveServerUrl(config, env()).url
+            const proposals: MentorshipProposal[] = await fetchProposals(base, apiKey, netOptions())
+            /*
+             * 关系建立（ACCEPTED）之后，提案状态就**不再变化**了 —— 但用户要看的是
+             * 指导进展（导师传了没有）。服务器没有专门的状态接口，而这个事实就在
+             * 项目文件里（`review/` 下的条目数），读权限也已经放行给关系双方。
+             *
+             * 代价：每个 ACCEPTED 提案一次文件列表请求（数量 = 本人接受中的指导关系数，
+             * 通常 1~3）。失败**不影响整个列表** —— 标成 null（未知），由界面保守处理。
+             */
+            const withReview = await Promise.all(
+              proposals.map(async (p) => {
+                if (p.status !== 'ACCEPTED') return p
+                try {
+                  const files = await fetchProjectFiles(base, apiKey, p.projectId, netOptions())
+                  return { ...p, reviewFiles: files.filter((f) => f.relativePath.startsWith('review/')).length }
+                } catch {
+                  return { ...p, reviewFiles: null }
+                }
+              }),
+            )
+            return { ok: true, value: { proposals: withReview } }
+          } catch (e) {
+            return serverFail(e)
+          }
+        }
+
+        case 'mentor/accept': {
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          const proposalId = asString(p.proposalId)
+          if (!proposalId) return fail('bad-request', '缺少 proposalId。')
+          // ⚠️ 幂等键由界面持有：402（押金不足）之后拿到 Token 再用**同一个** key 重试，
+          // 服务器据此回放、不会重复冻结。这里不做自动重试。
+          const intentKey = asString(p.intentKey)
+          if (!intentKey) return fail('bad-request', '缺少 intentKey（一次接受意图的幂等键）。')
+          try {
+            const base = resolveServerUrl(config, env()).url
+            const contract: MentorshipContract = await fetchAcceptProposal(
+              base, apiKey, proposalId, intentKey, netOptions(),
+            )
+            return { ok: true, value: { contract } }
+          } catch (e) {
+            return serverFail(e)
+          }
+        }
+
+        case 'mentor/reject': {
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          const proposalId = asString(p.proposalId)
+          if (!proposalId) return fail('bad-request', '缺少 proposalId。')
+          try {
+            const base = resolveServerUrl(config, env()).url
+            const proposal: MentorshipProposal = await fetchRejectProposal(
+              base, apiKey, proposalId, netOptions(),
+            )
+            return { ok: true, value: { proposal } }
+          } catch (e) {
+            return serverFail(e)
+          }
+        }
+
+        case 'mentor/pickDirectory': {
+          // 目录选择器是**可选**能力：没有就如实说"不可用"，界面退回手填路径。
+          // `probe: true` 只问能力、不开窗 —— 界面要"先知道有没有选择器"才能决定
+          // 显示【选择目录…】还是只有输入框，而开窗本身是有副作用的（会弹系统对话框）。
+          if (p.probe === true) {
+            if (!deps.pickDirectory) return { ok: true, value: { supported: false, path: null } }
+            try {
+              const probed = await deps.probeDirectoryPicker?.()
+              return { ok: true, value: probed ?? { supported: false, path: null } }
+            } catch (e) {
+              return serverFail(e)
+            }
+          }
+          if (!deps.pickDirectory) {
+            return { ok: true, value: { supported: false, path: null } }
+          }
+          try {
+            const picked = await deps.pickDirectory()
+            return { ok: true, value: picked }
+          } catch (e) {
+            return serverFail(e)
+          }
+        }
+
+        case 'mentor/archive': {
+          // 内部端点：只被上面的 GET 分支调用（浏览器不直接请求它）
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          const projectId = asString(p.projectId)
+          if (!projectId) return fail('bad-request', '缺少 projectId。')
+          try {
+            const base = resolveServerUrl(config, env()).url
+            const archive = await fetchProjectArchive(base, apiKey, projectId, netOptions())
+            return { ok: true, value: { archive } }
+          } catch (e) {
+            return serverFail(e)
+          }
+        }
+
+        case 'mentor/archiveInfo': {
+          /*
+           * 【下载】的**预检**：先问服务器"这个项目有没有文件、多大"。
+           *
+           * 为什么要有它：文件最终由**浏览器原生下载**（GET 同源代理，见
+           * `createSettingsRouteHandler` 里的 `mentor/archive`）。浏览器下载失败时
+           * 只会把一个 JSON 错误当文件存下来，用户看到的是一个坏 zip —— 所以
+           * 失败必须在**导航之前**就说清楚。
+           */
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          const projectId = asString(p.projectId)
+          if (!projectId) return fail('bad-request', '缺少 projectId。')
+          try {
+            const base = resolveServerUrl(config, env()).url
+            const files = await fetchProjectFiles(base, apiKey, projectId, netOptions())
+            return {
+              ok: true,
+              value: { files: files.length, bytes: files.reduce((sum, f) => sum + f.size, 0) },
+            }
+          } catch (e) {
+            return serverFail(e)
+          }
+        }
+
+        case 'mentor/scanReview': {
+          // 列出"导师自己的 review/ 目录里有什么"——上传是**按目录**走的，
+          // 因为服务器要求 relative_paths 保留目录层次（review/figures/x.png 这类）
+          const dir = asString(p.dir)
+          if (!dir) return fail('bad-request', '请先选择工作区目录。')
+          try {
+            const scanned = scanReviewFiles(dir)
+            return { ok: true, value: scanned }
+          } catch (e) {
+            return fail('bad-request', e instanceof Error ? e.message : String(e))
+          }
+        }
+
+        case 'mentor/upload': {
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          const projectId = asString(p.projectId)
+          if (!projectId) return fail('bad-request', '缺少 projectId。')
+          const dir = asString(p.dir)
+          if (!dir) return fail('bad-request', '请先选择工作区目录。')
+          const wanted = Array.isArray(p.paths) ? p.paths.map((x) => asString(x)).filter(Boolean) : []
+          if (wanted.length === 0) return fail('bad-request', '没有选择要上传的文件。')
+          try {
+            // 只上传**扫描得到**的文件：不让界面递任意路径进来读盘
+            const scanned = scanReviewFiles(dir)
+            const allowed = new Set(scanned.files.map((f) => f.relPath))
+            const picked = wanted.filter((rel) => allowed.has(rel))
+            if (picked.length === 0) {
+              return fail('bad-request', '选择的文件不在 review/ 目录下。')
+            }
+            const payload = picked.map((rel) => ({
+              relPath: rel,
+              bytes: readReviewFile(scanned.researchRoot, rel),
+            }))
+            const base = resolveServerUrl(config, env()).url
+            const uploaded = await uploadReviewFiles(base, apiKey, projectId, payload, netOptions())
+            return { ok: true, value: { uploaded } }
+          } catch (e) {
+            return serverFail(e)
+          }
+        }
+
         default:
           return fail('unknown-endpoint', `未知端点：${endpoint}`)
       }
@@ -1554,7 +1831,9 @@ interface RouteResponse {
   statusCode: number
   setHeader(name: string, value: string): void
   writeHead(status: number, headers?: Record<string, string>): void
-  end(payload?: string): void
+  /** 流式写（归档下载用）。真实对象是 `node:http` 的 ServerResponse。 */
+  write(chunk: Uint8Array): void
+  end(payload?: string | Uint8Array): void
 }
 
 export interface SettingsRouteDeps extends SettingsRpcDeps {
@@ -1620,11 +1899,8 @@ export function createSettingsRouteHandler(deps: SettingsRouteDeps): SettingsRou
       sendJson(res, 404, { ok: false, error: { code: 'not-found', message: '未知路径。' } })
       return
     }
-    if (method !== 'POST') {
-      sendJson(res, 405, { ok: false, error: { code: 'method-not-allowed', message: '只接受 POST。' } })
-      return
-    }
-    // Harness 的信任 / 鉴权栅栏：没有它就是一个本机可写的裸端点
+    // Harness 的信任 / 鉴权栅栏：没有它就是一个本机可写的裸端点。
+    // ⚠️ 必须在**任何**分支（含下面的 GET 下载）之前过一遍。
     if (deps.reject) {
       const rejection = deps.reject(req)
       if (rejection !== undefined) {
@@ -1634,6 +1910,51 @@ export function createSettingsRouteHandler(deps: SettingsRouteDeps): SettingsRou
         })
         return
       }
+    }
+
+    /*
+     * `GET mentor/archive`：**同源代理**服务器的工作区快照，交给浏览器原生下载。
+     *
+     * 为什么必须由宿主代理：
+     *   1. 服务器要 `Authorization: Bearer cf_live_…`，浏览器直接点 URL 拿不到凭据
+     *      （凭据也绝不能进浏览器）；
+     *   2. 于是响应由宿主带着凭据取回，再以 `Content-Disposition: attachment` 回给
+     *      浏览器 —— 浏览器看到"这是个文件"就会走它自己的保存流程。
+     *
+     * 这是**唯一**一个非 POST 端点，所以单独分支、不读 JSON body。
+     */
+    if (method === 'GET' && endpoint === 'mentor/archive') {
+      const query = new URL(req.url ?? '/', 'http://dsh.internal').searchParams
+      const projectId = (query.get('projectId') ?? '').trim()
+      const title = (query.get('title') ?? '').trim() || 'workspace'
+      if (!projectId) {
+        sendJson(res, 400, { ok: false, error: { code: 'bad-request', message: '缺少 projectId。' } })
+        return
+      }
+      const dispatchResult = await dispatch('mentor/archive', { projectId })
+      if (!dispatchResult.ok) {
+        // 预检失败就不该走到这里（界面先问 archiveInfo），但守一手：
+        // 宁可回 JSON 让用户看到错误，也不要流一个坏 zip 出去
+        sendJson(res, 502, { ok: false, error: dispatchResult.error })
+        return
+      }
+      const archive = (dispatchResult.value as { archive: Uint8Array }).archive
+      const filename = `${title.replace(/[\\/:*?"<>|]/g, '_') || 'workspace'}.zip`
+      res.writeHead(200, {
+        'content-type': 'application/zip',
+        'content-length': String(archive.byteLength),
+        // 文件名同时给 ASCII 兜底，避免中文名在部分客户端变成乱码
+        'content-disposition': `attachment; filename="workspace.zip"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        'cache-control': 'no-store',
+      })
+      res.write(archive)
+      res.end()
+      return
+    }
+
+    if (method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: { code: 'method-not-allowed', message: '只接受 POST。' } })
+      return
     }
 
     let payload: unknown

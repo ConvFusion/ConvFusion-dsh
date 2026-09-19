@@ -394,6 +394,16 @@ const S = {
     background: 'var(--dsw-alias-bg-layer-1)',
     overflow: 'hidden',
   } as React.CSSProperties,
+  /** 模态遮罩：四个对话框共用（原先各抄一遍，加第四个时抽出来）。 */
+  overlay: {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(0,0,0,.45)',
+    display: 'grid',
+    placeItems: 'center',
+    zIndex: 1000,
+    padding: 20,
+  } as React.CSSProperties,
   cardHead: {
     display: 'flex',
     alignItems: 'center',
@@ -430,6 +440,16 @@ const S = {
   row: { display: 'flex', gap: 12, flexWrap: 'wrap' } as React.CSSProperties,
   field: { display: 'flex', flexDirection: 'column', gap: 5, flex: '1 1 200px', minWidth: 0 } as React.CSSProperties,
   label: { fontSize: 11.5, fontWeight: 600, color: 'var(--dsw-alias-label-secondary)' } as React.CSSProperties,
+  /** 分区标题（指导中的「我收到的」/「我发起的」）：一行字 + 计数徽章。 */
+  sectionLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    fontSize: 11.5,
+    fontWeight: 700,
+    color: 'var(--dsw-alias-label-secondary)',
+    marginTop: 6,
+  } as React.CSSProperties,
   hint: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', lineHeight: 1.5 } as React.CSSProperties,
   select: {
     appearance: 'none',
@@ -518,6 +538,23 @@ const S = {
     gap: 8,
     flexWrap: 'wrap',
   } as React.CSSProperties,
+  /**
+   * **主行动按钮**（品牌色描边 + 淡底）：研究工作列表里的【发起指导】用它。
+   *
+   * 与 `ghostBtn`（中性描边）不同的理由：它是这一页真正的**商业动作**（把导师关系建起来），
+   * 和上面一排"看内容"的按钮不是一个层级。配色直接用 Badge brand 的那两个变量，
+   * 与全站品牌色一致；不做成实心 `primaryBtn`，避免和对话框里的「确认」抢主次。
+   */
+  accentBtn: {
+    padding: '6px 14px',
+    borderRadius: 8,
+    border: '1px solid var(--dsw-alias-state-business-primary)',
+    background: 'var(--dsw-alias-state-business-tertiary)',
+    color: 'var(--dsw-alias-state-business-primary)',
+    fontSize: 12.5,
+    fontWeight: 600,
+    cursor: 'pointer',
+  } as React.CSSProperties,
   /** 行内输入框：不占满整行（`S.input` 是 100% 宽，这里要压扁）。 */
   compactInput: {
     width: 'auto',
@@ -545,6 +582,28 @@ const S = {
     fontWeight: 700,
     cursor: 'pointer',
     whiteSpace: 'nowrap',
+  } as React.CSSProperties,
+  /**
+   * **图标按钮**：只有符号、没有文字（账号行的【刷新】【登出】用）。
+   *
+   * 为什么要有它：这两个动作是**次要操作**，两个字各占 ~45px，加上余额徽章会把
+   * 账号行挤成两行。图标固定方形（26×26）→ 宽度可预测，行宽不再随文案变。
+   * 代价是失去可见文案，所以 `title` + `aria-label` 是**必须**的（不可省）。
+   */
+  iconBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 26,
+    height: 26,
+    padding: 0,
+    borderRadius: 8,
+    border: '1px solid var(--dsw-alias-border-l2)',
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-secondary)',
+    fontSize: 13,
+    lineHeight: 1,
+    cursor: 'pointer',
   } as React.CSSProperties,
   /** 已登录时的账号名。 */
   accountName: {
@@ -1213,6 +1272,95 @@ function enumText(t: Translate, keys: Record<string, string>, value: string | nu
   return translateOr(t, keys[value] ?? value, value)
 }
 
+/** 指导提案状态（服务器 `ProposalStatus`）。 */
+const PROPOSAL_STATUS_KEYS: Record<string, string> = {
+  PROPOSED: 'community.mentor.status.PROPOSED',
+  ACCEPTED: 'community.mentor.status.ACCEPTED',
+  REJECTED: 'community.mentor.status.REJECTED',
+  EXPIRED: 'community.mentor.status.EXPIRED',
+  CANCELLED: 'community.mentor.status.CANCELLED',
+}
+
+/** 成功条件（服务器 `SuccessConditionType`）。 */
+const SUCCESS_CONDITION_KEYS: Record<string, string> = {
+  PAPER_ACCEPTED: 'community.mentor.condition.PAPER_ACCEPTED',
+  PAPER_PUBLISHED: 'community.mentor.condition.PAPER_PUBLISHED',
+  RESEARCH_COMPLETED: 'community.mentor.condition.RESEARCH_COMPLETED',
+  PATENT_GRANTED: 'community.mentor.condition.PATENT_GRANTED',
+  TECHNICAL_OUTCOME: 'community.mentor.condition.TECHNICAL_OUTCOME',
+  MUTUAL_COMPLETION: 'community.mentor.condition.MUTUAL_COMPLETION',
+}
+
+/** 提案状态 → Badge 色调：等待响应要人动作（brand），已接受成功，其余中性。 */
+function proposalTone(status: HostProposalStatus): 'brand' | 'success' | 'warn' | 'neutral' {
+  if (status === 'PROPOSED') return 'brand'
+  if (status === 'ACCEPTED') return 'success'
+  if (status === 'EXPIRED') return 'warn'
+  return 'neutral'
+}
+
+/**
+ * 「指导中」那一行的**进展文案**。
+ *
+ * ⚠️ 提案状态（`PROPOSED`/`ACCEPTED`/…）是**提案**的生命周期，接受之后就不再变化 ——
+ * 于是列表会永远停在「已接受」，看不出指导到底有没有开始（2026-09 用户反馈）。
+ * 关系建立之后真正有意义的是：**导师传了指导结果没有**。
+ *
+ * 因此 ACCEPTED 拆成两个进展状态，并且**按角色换称呼**（导师看自己的行不该写
+ * "导师已指导"）：
+ *
+ * | 事实 | 学生看到 | 导师看到 |
+ * |---|---|---|
+ * | `review/` 还没有文件 | 等待指导意见 | 待我指导 |
+ * | `review/` 有文件 | 导师已指导 | 我已指导 |
+ */
+function progressLabelKey(p: HostProposal, incoming: boolean): string {
+  if (p.status !== 'ACCEPTED') return PROPOSAL_STATUS_KEYS[p.status] ?? p.status
+  const hasReview = typeof p.reviewFiles === 'number' && p.reviewFiles > 0
+  if (incoming) return hasReview ? 'community.mentor.progress.studentGot' : 'community.mentor.progress.studentWaiting'
+  return hasReview ? 'community.mentor.progress.mentorDone' : 'community.mentor.progress.mentorWaiting'
+}
+
+/**
+ * 学生侧的【下载】只有在**导师传了东西**之后才有意义。
+ *
+ * 学生下载的是"自己的工作区 + 导师的 review/"；导师什么都没传时，下回来的就是
+ * 自己已发布的那份 —— 点了没用（2026-09 用户反馈：还没有人上传，按钮却可点）。
+ *
+ * `reviewFiles` 为 `null`（查不到）时**保留按钮**：拿不到 ≠ 没有，不能因为一次探测
+ * 失败就把一个可能可用的动作藏起来。
+ */
+function canDownloadProposal(p: HostProposal, incoming: boolean): boolean {
+  if (p.status !== 'ACCEPTED') return false
+  // 导师侧：下载的是**学生的工作区**，关系一建立就该能用（分析的前提）
+  if (!incoming) return true
+  if (p.reviewFiles === null || p.reviewFiles === undefined) return true
+  return p.reviewFiles > 0
+}
+
+/**
+ * 押金比例的**兜底值**（20%）。
+ *
+ * ⚠️ 只在拿不到 `mentor/fee-suggestion` 时才用它。正常情况下比例来自服务器的建议
+ * （`suggested_deposit / suggested_fee`）—— 比例是平台策略，不能当常量抄到客户端。
+ */
+const DEFAULT_DEPOSIT_RATIO = 0.2
+
+/**
+ * 提案里**导师侧已不再采集**、但服务器当前仍要求非空的两个字段的过渡值。
+ *
+ * 1. `guidance_scope`：服务器 `min_length=1` 必填，而导师侧已删掉这个输入
+ *    → 送占位符；学生侧展示时遇到占位符**整行不显示**（不显示"指导范围：-"）。
+ * 2. `success_condition`：新语义是**由学生在接受时确认**，导师不指定
+ *    → 送平台默认的「双方确认完成」。
+ *
+ * ⚠️ 都是**过渡值**：后端把这两个字段改成可选（见
+ * `dev-notes/v3-Mentorship-backend-spec.md` 的"追加需求"）之后，
+ * 这里应改成"干脆不发这两个字段"。
+ */
+const PROPOSE_SCOPE_PLACEHOLDER = '-'
+const PROPOSE_DEFAULT_CONDITION = 'MUTUAL_COMPLETION'
+
 function roleText(t: Translate, roles: string[]): string {
   if (!roles.length) return '—'
   return roles.map((r) => translateOr(t, ROLE_LABEL_KEYS[r] ?? r, r)).join(' · ')
@@ -1322,6 +1470,59 @@ interface HostWorkBrief extends HostWork {
   openProblems: string[]
 }
 
+/* ── 指导关系（宿主 `MentorshipProposal` 等的镜像）────────────────────── */
+
+/** 导师简介（`research_profiles` 投影；后端 enrich 后才有）。 */
+interface HostMentorProfile {
+  institution: string | null
+  department: string | null
+  bio: string | null
+  researchFields: string[]
+  researchInterests: string[]
+  researchExpertise: string[]
+}
+
+/** 提案当事一方。`displayName` 缺失时宿主已回退成 id 短前缀。 */
+interface HostProposalParty {
+  id: string
+  displayName: string
+  profile?: HostMentorProfile | null
+}
+
+type HostProposalStatus = 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED'
+
+/** 一条指导提案：我发起的（我是 mentor）/ 我收到的（我是 researcher）。 */
+interface HostProposal {
+  id: string
+  projectId: string
+  /** 项目标题（后端 enrich 后才有；缺 → null，界面写"未命名项目"）。 */
+  projectTitle: string | null
+  mentor: HostProposalParty | null
+  researcher: HostProposalParty | null
+  guidanceScope: string
+  totalFee: number
+  depositAmount: number
+  successPaymentAmount: number
+  successCondition: { type: string; description: string | null }
+  status: HostProposalStatus
+  /**
+   * 关系建立（ACCEPTED）后，导师已上传的指导结果条数（`review/` 下的文件数）。
+   *
+   * 提案状态接受之后就不再变了，而用户要看的是**指导进展**；这个事实只在项目
+   * 文件里。宿主在 `mentor/list` 里补齐；`null` = 没查到（未知），不是"没有"。
+   */
+  reviewFiles?: number | null
+  expiresAt: string
+  createdAt: string
+}
+
+/** 费用建议（`mentor/fee-suggestion`）。 */
+interface HostFeeSuggestion {
+  suggestedFee: number
+  suggestedDeposit: number
+  suggestedSuccessPayment: number
+}
+
 /**
  * **示例研究工作**（未登录时展示，标注"示例数据"、不可交互）。
  *
@@ -1424,6 +1625,7 @@ function WorkRow({
   briefFree,
   onSummary,
   onBrief,
+  below,
 }: {
   t: Translate
   title: string
@@ -1438,6 +1640,13 @@ function WorkRow({
   briefFree?: boolean
   onSummary: () => void
   onBrief: () => void
+  /**
+   * 按钮**下面一行**的动作（当前只有「可指导」视图用：发起指导 + 状态角标）。
+   *
+   * 做成插槽而不是加一堆 props：这一行只有导师视角才有，而且它需要提案状态与
+   * 发起回调（都属于 CommunityTab），塞进 WorkRow 会把两层的职责搅在一起。
+   */
+  below?: React.ReactNode
 }): JSX.Element {
   return (
     <div style={{ ...S.listRow, alignItems: 'flex-start' }}>
@@ -1450,7 +1659,8 @@ function WorkRow({
           {updatedAt ? <span>{updatedAt.slice(0, 10)}</span> : null}
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 6, flex: '0 0 auto' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: '0 0 auto', alignItems: 'flex-end' }}>
+      <div style={{ display: 'flex', gap: 6 }}>
         <button
           type="button"
           style={{ ...S.ghostBtn, opacity: disabled || busy ? 0.55 : 1 }}
@@ -1495,6 +1705,9 @@ function WorkRow({
             </>
           )}
         </button>
+      </div>
+      {/* 按钮下面一行（导师视角：发起指导 + 状态角标） */}
+      {below}
       </div>
     </div>
   )
@@ -1651,15 +1864,7 @@ function PublishDialog({
 
   return (
     <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,.45)',
-        display: 'grid',
-        placeItems: 'center',
-        zIndex: 1000,
-        padding: 20,
-      }}
+      style={S.overlay}
       role="dialog"
       aria-modal="true"
     >
@@ -1822,15 +2027,7 @@ function BriefConfirmDialog({
 }): JSX.Element {
   return (
     <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,.45)',
-        display: 'grid',
-        placeItems: 'center',
-        zIndex: 1000,
-        padding: 20,
-      }}
+      style={S.overlay}
       role="dialog"
       aria-modal="true"
     >
@@ -1866,6 +2063,436 @@ function BriefConfirmDialog({
   )
 }
 
+/**
+ * 接受指导的**确认对话框**。
+ *
+ * ⚠️ 为什么必须有它：接受会把押金从 `available` 转到 `frozen` —— 这是真正动 Token 的
+ * 操作。用户规则是"所有扣费操作都要先提醒，不能点击即生效"。所以点【接受指导】只是
+ * 打开这个框；点了「确认接受」才发请求。
+ *
+ * 框里必须说清三件事：跟谁合作（导师 + 机构）、冻多少钱（押金）、冻完还剩多少（余额）。
+ */
+function AcceptConfirmDialog({
+  t,
+  proposal,
+  balance,
+  onCancel,
+  onConfirm,
+}: {
+  t: Translate
+  proposal: HostProposal
+  balance: number | null
+  onCancel: () => void
+  onConfirm: () => void
+}): JSX.Element {
+  const affiliation = [proposal.mentor?.profile?.institution, proposal.mentor?.profile?.department]
+    .filter(Boolean)
+    .join(' · ')
+  return (
+    <div
+      style={S.overlay}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div style={{ ...S.card, width: 'min(460px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
+        <div style={S.cardHead}>
+          {t('community.mentor.acceptConfirmTitle')}
+          <span style={{ flex: '1 1 auto' }} />
+          <Badge tone="brand">{t('community.mentor.acceptConfirmBadge', { deposit: proposal.depositAmount })}</Badge>
+        </div>
+        <div style={{ ...S.cardBody, gap: 9 }}>
+          <div style={S.listTitle}>
+            {t('community.mentor.mentorIs', { name: proposal.mentor?.displayName ?? t('community.mentor.unknownParty') })}
+          </div>
+          {affiliation ? <div style={S.hint}>{affiliation}</div> : null}
+          <div style={S.hint}>
+            {t('community.mentor.feeText', {
+              total: proposal.totalFee,
+              deposit: proposal.depositAmount,
+              success: proposal.successPaymentAmount,
+            })}
+          </div>
+          {/* 冻结语义说清楚：钱还是研究者的，只是不可用 */}
+          <div style={S.hint}>{t('community.mentor.acceptFreezeNote', { deposit: proposal.depositAmount })}</div>
+          <div style={S.hint}>
+            {typeof balance === 'number'
+              ? t('community.mentor.acceptBalance', { balance })
+              : t('community.briefConfirm.balanceUnknown')}
+          </div>
+          <div style={S.footer}>
+            <span style={{ flex: '1 1 auto' }} />
+            <button type="button" style={S.ghostBtn} onClick={onCancel}>
+              {t('community.action.cancel')}
+            </button>
+            <button type="button" style={S.primaryBtn} onClick={onConfirm}>
+              {t('community.mentor.acceptConfirm')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 发起指导的**提案对话框**（导师视角，从【可指导】列表打开）。
+ *
+ * 为什么这个不用"二次确认"那一套：发起提案**不花 Token**（服务器只在接受时冻结押金），
+ * 所以对话框本身就是确认 —— 填完点「发起指导」才发请求。真正花钱的是对面的【接受指导】。
+ *
+ * 费用三项里**成功付款是推导出来的**（`总额 − 押金`），不是独立输入框：
+ * 服务器强校验 `押金 + 成功付款 == 总额`，与其让用户填出一个必然被拒的组合，
+ * 不如让非法状态在界面上**无法表达**。
+ */
+function ProposeDialog({
+  t,
+  title,
+  fee,
+  busy,
+  error,
+  onCancel,
+  onSubmit,
+}: {
+  t: Translate
+  title: string
+  fee: HostFeeSuggestion | null
+  busy: boolean
+  error: string | null
+  onCancel: () => void
+  onSubmit: (input: {
+    totalFee: number
+    depositAmount: number
+    successPaymentAmount: number
+  }) => void
+}): JSX.Element {
+  const [total, setTotal] = React.useState(String(fee?.suggestedFee ?? 100))
+
+  /**
+   * 押金比例取**平台自己的建议**（`suggested_deposit / suggested_fee`），不写死 20%。
+   *
+   * 比例属于平台策略：抄一份常量到客户端，平台改成 15% 时这边会继续显示 20%，
+   * 而且用户看到的就是假的。取不到建议时才退回文档里的默认值。
+   */
+  const ratio = fee && fee.suggestedFee > 0 ? fee.suggestedDeposit / fee.suggestedFee : DEFAULT_DEPOSIT_RATIO
+
+  /** 费用建议是开框之后才到的，`useState` 初值只算一次 → 到了要同步进去（用户已改则不覆盖）。 */
+  const touched = React.useRef(false)
+  React.useEffect(() => {
+    if (!fee || touched.current) return
+    setTotal(String(fee.suggestedFee))
+  }, [fee])
+
+  const totalNum = Number.parseInt(total, 10)
+  const valid = Number.isInteger(totalNum) && totalNum > 0
+  // 押金由比例**推导**（用户只填总额）：界面显示的三个数就是发出去的那三个数
+  const deposit = valid ? Math.max(1, Math.round(totalNum * ratio)) : 0
+  const success = valid ? totalNum - deposit : 0
+
+  /** 行内表单：本仓库的约定是 `S.inlineRow` + `S.compactInput`（不用大块表单样式）。 */
+  const input = S.compactInput
+
+  return (
+    <div
+      style={S.overlay}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div style={{ ...S.card, width: 'min(400px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
+        <div style={S.cardHead}>
+          {t('community.mentor.proposeTitle')}
+          <span style={{ flex: '1 1 auto' }} />
+          <Badge tone="neutral">{t('community.mentor.proposeFree')}</Badge>
+        </div>
+        <div style={{ ...S.cardBody, gap: 9 }}>
+          <div style={S.listTitle}>{title}</div>
+
+          <div style={S.inlineRow}>
+            <span style={S.label}>{t('community.mentor.feeTotal')}</span>
+            <input
+              style={input}
+              value={total}
+              inputMode="numeric"
+              autoFocus
+              onChange={(e) => {
+                touched.current = true
+                setTotal(e.target.value)
+              }}
+            />
+          </div>
+          {/* 押金比例由平台定，导师只填总额：把分账说清楚，不让他去猜 */}
+          <div style={S.hint}>
+            {valid
+              ? t('community.mentor.feeNote', {
+                  percent: Math.round(ratio * 100),
+                  deposit,
+                  success,
+                })
+              : t('community.mentor.feeInvalid')}
+          </div>
+
+          {error ? (
+            <div style={{ ...S.hint, color: 'var(--dsw-alias-state-error-primary)' }}>{error}</div>
+          ) : null}
+
+          <div style={S.footer}>
+            <span style={{ flex: '1 1 auto' }} />
+            <button type="button" style={S.ghostBtn} onClick={onCancel}>
+              {t('community.action.cancel')}
+            </button>
+            <button
+              type="button"
+              style={{ ...S.primaryBtn, opacity: valid && !busy ? 1 : 0.55 }}
+              disabled={!valid || busy}
+              onClick={() =>
+                onSubmit({
+                  totalFee: totalNum,
+                  depositAmount: deposit,
+                  successPaymentAmount: success,
+                })
+              }
+            >
+              {busy ? t('community.action.loading') : t('community.action.propose')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 导师信息（Profile 介绍）。
+ *
+ * 数据来自提案响应里**内嵌的** `mentor.profile`（后端 enrich 之后才有）——
+ * 为此不需要任何额外请求。导师没填过 profile 就如实说"尚未填写"，不编内容。
+ *
+ * 为什么学生需要它：接受指导要冻结一笔押金，决定跟谁合作之前应当能看清对方是谁。
+ */
+function MentorProfileDialog({
+  t,
+  proposal,
+  onClose,
+}: {
+  t: Translate
+  proposal: HostProposal
+  onClose: () => void
+}): JSX.Element {
+  const profile = proposal.mentor?.profile ?? null
+  const affiliation = [profile?.institution, profile?.department].filter(Boolean).join(' · ')
+  /** 一行：标签 + 值（值缺失就不渲染这一行）。 */
+  const line = (label: string, value: string | null | undefined): JSX.Element | null =>
+    value ? (
+      <div style={{ display: 'flex', gap: 8 }}>
+        <span style={{ ...S.label, flex: '0 0 64px' }}>{label}</span>
+        <span style={{ ...S.hint, flex: '1 1 auto', minWidth: 0 }}>{value}</span>
+      </div>
+    ) : null
+
+  return (
+    <div style={S.overlay} role="dialog" aria-modal="true">
+      <div style={{ ...S.card, width: 'min(430px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
+        <div style={S.cardHead}>
+          {t('community.mentor.profileTitle')}
+          <span style={{ flex: '1 1 auto' }} />
+          <Badge tone={proposalTone(proposal.status)}>
+            {enumText(t, PROPOSAL_STATUS_KEYS, proposal.status)}
+          </Badge>
+        </div>
+        <div style={{ ...S.cardBody, gap: 9 }}>
+          <div style={S.listTitle}>
+            {proposal.mentor?.displayName ?? t('community.mentor.unknownParty')}
+          </div>
+          {affiliation ? <div style={S.hint}>{affiliation}</div> : null}
+          {profile ? (
+            <>
+              {line(t('community.mentor.profileBio'), profile.bio)}
+              {line(t('community.mentor.profileFields'), profile.researchFields.join(' · '))}
+              {line(t('community.mentor.profileInterests'), profile.researchInterests.join(' · '))}
+              {line(t('community.mentor.profileExpertise'), profile.researchExpertise.join(' · '))}
+            </>
+          ) : (
+            <div style={S.hint}>{t('community.mentor.profileEmpty')}</div>
+          )}
+          <div style={S.footer}>
+            <span style={{ flex: '1 1 auto' }} />
+            <button type="button" style={S.ghostBtn} onClick={onClose}>
+              {t('community.action.close')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 【上传】：把本地 `workspace/review/` 下的指导结果**按原相对路径**回传。
+ *
+ * 为什么是"选目录 + 扫描"而不是"选文件"：
+ *   - 服务器要求 `relative_paths` 保留目录层次（`review/figures/x.png`），
+ *     浏览器文件选择器拿不到相对路径；
+ *   - 走宿主读盘还能绕开 RPC 的请求体上限（原来是 base64 传字节，4MB 就打住了）。
+ *
+ * 服务器只允许关系方写 `review/**`：越界会得到 `403 FILE_PATH_RESERVED`
+ * → 界面说"导师只能写 review/"，**不是**"没权限"。
+ */
+function UploadDialog({
+  t,
+  proposal,
+  dir,
+  pickerSupported,
+  files,
+  selected,
+  busy,
+  notice,
+  onDirChange,
+  onChooseDir,
+  onScan,
+  onToggle,
+  onUpload,
+  onClose,
+}: {
+  t: Translate
+  proposal: HostProposal
+  dir: string
+  pickerSupported: boolean
+  files: Array<{ relPath: string; size: number }> | null
+  selected: Set<string>
+  busy: boolean
+  notice: { tone: 'success' | 'error'; text: string } | null
+  onDirChange: (next: string) => void
+  onChooseDir: () => void
+  onScan: () => void
+  onToggle: (relPath: string) => void
+  onUpload: () => void
+  onClose: () => void
+}): JSX.Element {
+  return (
+    <div style={S.overlay} role="dialog" aria-modal="true">
+      <div style={{ ...S.card, width: 'min(500px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
+        <div style={S.cardHead}>
+          {t('community.exchange.uploadTitle')}
+          <span style={{ flex: '1 1 auto' }} />
+          <Badge tone="neutral">{t('community.mentor.status.ACCEPTED')}</Badge>
+        </div>
+        <div style={{ ...S.cardBody, gap: 9 }}>
+          <div style={S.listTitle}>
+            {proposal.projectTitle ?? t('community.mentor.untitledProject')}
+          </div>
+          <div style={S.inlineRow}>
+            <span style={S.label}>{t('community.exchange.dirLabel')}</span>
+            <input
+              style={S.compactInput}
+              value={dir}
+              placeholder={t('community.exchange.dirPlaceholder')}
+              onChange={(e) => onDirChange(e.target.value)}
+            />
+            {pickerSupported ? (
+              <button type="button" style={S.ghostBtn} onClick={onChooseDir}>
+                {t('community.action.chooseDir')}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              style={S.ghostBtn}
+              disabled={!dir.trim() || busy}
+              onClick={onScan}
+            >
+              {t('community.action.scan')}
+            </button>
+          </div>
+          {/* 没有系统选择器就明说，别让用户以为是自己没点到 */}
+          {pickerSupported ? null : <div style={S.hint}>{t('community.exchange.noPicker')}</div>}
+          <div style={S.hint}>{t('community.exchange.uploadNote')}</div>
+
+          {files === null ? (
+            <div style={S.hint}>{t('community.exchange.notScanned')}</div>
+          ) : files.length === 0 ? (
+            <div style={S.hint}>{t('community.exchange.noReviewFiles')}</div>
+          ) : (
+            <div style={{ ...S.list, maxHeight: 220, overflowY: 'auto' }}>
+              {files.map((f) => (
+                <label
+                  key={f.relPath}
+                  style={{ ...S.listRow, cursor: 'pointer', alignItems: 'center' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(f.relPath)}
+                    onChange={() => onToggle(f.relPath)}
+                  />
+                  <span style={{ ...S.hint, flex: '1 1 auto', minWidth: 0 }}>{f.relPath}</span>
+                  <span style={S.hint}>{formatBytes(f.size)}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {notice ? (
+            <div
+              style={{
+                ...S.hint,
+                color:
+                  notice.tone === 'success'
+                    ? 'var(--dsw-alias-label-secondary)'
+                    : 'var(--dsw-alias-state-error-primary)',
+              }}
+            >
+              {notice.text}
+            </div>
+          ) : null}
+          <div style={S.footer}>
+            <span style={{ flex: '1 1 auto' }} />
+            <button type="button" style={S.ghostBtn} onClick={onClose}>
+              {t('community.action.close')}
+            </button>
+            <button
+              type="button"
+              style={{ ...S.primaryBtn, opacity: selected.size && !busy ? 1 : 0.55 }}
+              disabled={selected.size === 0 || busy}
+              onClick={onUpload}
+            >
+              {busy ? t('community.action.loading') : t('community.action.upload')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * **刷新图标按钮**（账号行 + 研究工作三个 Tab 共用）。
+ *
+ * 抽出来的理由：这段本来抄了四遍（我的 / 可指导 / 指导中 / 账号），只有 loading 与
+ * 回调不同；四份"刷新"文案各改一次是迟早写歪的写法。
+ *
+ * 图标化后**忙碌状态靠 `title` 传达**（"读取中…"），再加上变灰与禁用 ——
+ * 没有可见文案时，这三样是用户唯一能得到的反馈。
+ */
+function RefreshIconButton({
+  t,
+  busy,
+  onClick,
+}: {
+  t: Translate
+  busy: boolean
+  onClick: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      style={{ ...S.iconBtn, flex: '0 0 auto', opacity: busy ? 0.55 : 1 }}
+      disabled={busy}
+      title={busy ? t('community.action.loading') : t('community.action.refresh')}
+      aria-label={t('community.action.refresh')}
+      onClick={onClick}
+    >
+      ↻
+    </button>
+  )
+}
+
 function CommunityTab({
   send,
   initial,
@@ -1874,8 +2501,7 @@ function CommunityTab({
   send: SettingsSend
   initial: HostAccountState | null
   t: Translate
-}): JSX.Element {
-  const [state, setState] = React.useState<HostAccountState | null>(initial)
+}): JSX.Element {  const [state, setState] = React.useState<HostAccountState | null>(initial)
   const [phase, setPhase] = React.useState<'loading' | 'ready'>('loading')
   const [busy, setBusy] = React.useState(false)
   /** 正在单独刷新 Token 余额。 */
@@ -1898,7 +2524,7 @@ function CommunityTab({
 
   /* ── 研究工作：两个视图（我的 / 可指导）───────────────────────────── */
   /** 当前视图。「我的」在前：所有人都可能**被**指导，先看自己的。 */
-  const [workTab, setWorkTab] = React.useState<'mine' | 'mentor'>('mine')
+  const [workTab, setWorkTab] = React.useState<'mine' | 'mentor' | 'mentorship'>('mine')
   /** 本机研究项目（不联网、不需要登录）。 */
   const [mine, setMine] = React.useState<HostLocalWork[] | null>(null)
   const [mineLoading, setMineLoading] = React.useState(false)
@@ -1954,6 +2580,87 @@ function CommunityTab({
    * 不会重复扣费；换成新 key 就会再扣一次（`INTEGRATION.md` §8 的硬要求）。
    */
   const [intents, setIntents] = React.useState<Record<string, string>>({})
+
+  /* ── 指导关系（第三个 Tab「指导中」）───────────────────────────────── */
+  /**
+   * 我涉及的指导提案（我发起的 + 我收到的）。
+   *
+   * `null` = 还没读过（不是"没有"）—— 同 `mine` / `works` 的纪律：
+   * 拿不到就如实说拿不到，不能显示成"没有指导关系"。
+   */
+  const [proposals, setProposals] = React.useState<HostProposal[] | null>(null)
+  const [proposalsLoading, setProposalsLoading] = React.useState(false)
+  const [proposalsError, setProposalsError] = React.useState<{ code: string; message: string } | null>(null)
+  /** 指导关系区的业务回执（接受成功 / 拒绝成功 / 失败原因），只在业务发生时出现。 */
+  const [mentorNotice, setMentorNotice] = React.useState<{ tone: 'success' | 'error'; text: string } | null>(null)
+  /** 正在接受 / 拒绝的提案 id（按钮转圈用）。 */
+  const [mentorBusy, setMentorBusy] = React.useState<{ id: string; action: 'accept' | 'reject' } | null>(null)
+  /**
+   * 待确认的**接受指导**。
+   *
+   * ⚠️ 非空 = 确认对话框开着，此时**没有**发出请求、也**没有**冻结任何 Token。
+   * 接受会冻结押金（available → frozen），属于"花钱类"操作，不能点击即生效
+   * （2026-09 用户规则：所有扣费操作都要先提醒）。
+   */
+  const [acceptConfirm, setAcceptConfirm] = React.useState<HostProposal | null>(null)
+  /**
+   * 接受指导的**幂等键**（每条提案一个"接受意图"）。
+   *
+   * ⚠️ 402（押金不足）之后拿到 Token 再点，必须复用同一个 key —— 服务端据此回放，
+   * 不会重复冻结押金（同简报 `intents` 的道理）。
+   */
+  const [acceptIntents, setAcceptIntents] = React.useState<Record<string, string>>({})
+
+  /* ── 发起指导（导师视角，从【可指导】列表打开）────────────────────── */
+  /**
+   * 本会话内**已经读过详情**的项目 id。
+   *
+   * 用途：【发起指导】只在读过详情之后出现 —— 业务上不允许"没看内容就发指导申请"
+   * （设计文档 §18：Mentor 阅读 Brief 后如果愿意指导，才发起）。
+   *
+   * ⚠️ 它只覆盖**本会话**；跨会话由 `briefFree(w)` 兜底：`brief_paid`/本地记忆为真
+   * 说明这个 viewer 早就买过这一项的详情 —— 那时候把按钮收回去反而变成 bug
+   * （付过费、读过，一刷新按钮没了）。
+   */
+  const [detailRead, setDetailRead] = React.useState<Set<string>>(new Set())
+  /**
+   * Split Button 的**下拉展开态**（当前只有【拒绝】一项）。
+   *
+   * 存按钮的 `getBoundingClientRect()` 是因为菜单用 `position: fixed` 渲染 ——
+   * 见行内注释：外层卡片 `overflow: hidden`，absolute 会被裁掉。
+   */
+  const [menuFor, setMenuFor] = React.useState<{
+    id: string
+    proposal: HostProposal
+    x: number
+    y: number
+  } | null>(null)
+  /**
+   * 文件交换对话框（指导关系建立之后才有）：下载对方的工作区快照 / 上传指导结果。
+   * 非空 = 对话框开着。
+   */
+  const [exchange, setExchange] = React.useState<{
+    proposal: HostProposal
+    mode: 'upload'
+  } | null>(null)
+  /** 上传对话框里的工作区目录（导师解压快照后写指导意见的地方）。 */
+  const [uploadDir, setUploadDir] = React.useState('')
+  /** 当前环境有没有可用的**系统**目录选择器（没有就只给手填输入框）。 */
+  const [pickerSupported, setPickerSupported] = React.useState(false)
+  const [exchangeBusy, setExchangeBusy] = React.useState(false)
+  const [exchangeNotice, setExchangeNotice] = React.useState<{ tone: 'success' | 'error'; text: string } | null>(null)
+  /** 扫描到的 `review/` 文件（null = 还没扫描过，与"扫到 0 个"不同）。 */
+  const [reviewFiles, setReviewFiles] = React.useState<Array<{ relPath: string; size: number }> | null>(null)
+  /** 勾选要上传的 review 文件（按相对路径）。 */
+  const [reviewSelected, setReviewSelected] = React.useState<Set<string>>(new Set())
+  /** 正在查看导师信息的提案（非空 = 导师信息对话框开着）。 */
+  const [profileTarget, setProfileTarget] = React.useState<HostProposal | null>(null)
+  /** 正在对它发起指导的那项研究工作（非空 = 提案对话框开着）。 */
+  const [proposeTarget, setProposeTarget] = React.useState<HostWork | null>(null)
+  /** 提案对话框里的费用预填（默认 100 / 20 / 80）。 */
+  const [proposeFee, setProposeFee] = React.useState<HostFeeSuggestion | null>(null)
+  const [proposeBusy, setProposeBusy] = React.useState(false)
+  const [proposeError, setProposeError] = React.useState<string | null>(null)
 
   // 服务器地址随宿主状态同步（登录成功后宿主会把归一后的地址写回来）
   React.useEffect(() => {
@@ -2083,7 +2790,266 @@ function CommunityTab({
       return
     }
     setWorks((res.value as { items: HostWork[] }).items ?? [])
+    // 顺带刷新"我发起的提案"：【可指导】每行要靠它显示「等待响应」角标，
+    // 而提案状态只有 `mentor/list` 知道 —— 不刷新的话角标一刷新页面就丢。
+    // 失败**不清空**已有提案（拿不到 ≠ 没发起过）。
+    const mine = await post('mentor/list', {})
+    if (mine.ok) setProposals((mine.value as { proposals: HostProposal[] }).proposals ?? [])
   }, [post])
+
+  /* ── 指导关系（第三个 Tab）──────────────────────────────────────────── */
+
+  /**
+   * 读我涉及的指导提案（`mentor/list`：我发起的 + 我收到的）。
+   *
+   * ⚠️ 读失败**不能**显示成"没有指导关系" —— 同 `loadMine` 的纪律。
+   * 旧宿主没有这个端点时明说"需重启"。
+   */
+  const loadProposals = React.useCallback(async (): Promise<void> => {
+    setProposalsLoading(true)
+    setProposalsError(null)
+    const res = await post('mentor/list', {})
+    setProposalsLoading(false)
+    if (!res.ok) {
+      setProposals(null)
+      setProposalsError(
+        res.error?.code === 'unknown-endpoint'
+          ? { code: 'host-restart', message: t('community.error.hostRestart') }
+          : (res.error ?? { code: 'unknown', message: t('community.error.readMentor') }),
+      )
+      return
+    }
+    setProposals((res.value as { proposals: HostProposal[] }).proposals ?? [])
+  }, [post])
+
+  /**
+   * 点【接受指导】= 打开**确认框**（不直接发请求）。
+   *
+   * 接受会把押金从 `available` 转到 `frozen` —— 是真正动 Token 的操作，
+   * 所以必须先让用户看清"冻多少、还剩多少"再确认。
+   */
+  const requestAccept = (p: HostProposal): void => {
+    setMentorNotice(null)
+    setAcceptConfirm(p)
+  }
+
+  /** 确认接受：发 `mentor/accept`（带幂等键），成功后刷新提案与余额。 */
+  const confirmAccept = async (): Promise<void> => {
+    const target = acceptConfirm
+    if (!target) return
+    // 幂等键：同一次"接受意图"复用（402 后充值再试不重复冻结押金）
+    const intentKey = acceptIntents[target.id] ?? crypto.randomUUID()
+    setAcceptIntents((prev) => ({ ...prev, [target.id]: intentKey }))
+    setMentorBusy({ id: target.id, action: 'accept' })
+    const res = await post('mentor/accept', { proposalId: target.id, intentKey })
+    setMentorBusy(null)
+    setAcceptConfirm(null)
+    if (!res.ok) {
+      // 押金不足是可预期的业务失败：说清"差多少"，不要只说"失败了"
+      setMentorNotice({
+        tone: 'error',
+        text:
+          res.error?.code === 'insufficient-tokens'
+            ? t('community.mentor.acceptNoTokens', { deposit: target.depositAmount })
+            : (res.error?.message ?? t('community.error.unknown')),
+      })
+      // 提案状态在操作期间变了（别人已处理 / 已过期 / 项目已有关系）→ 列表刷新一下，
+      // 否则界面还停在一条已经不能接受的提案上，点几次都是同一个错。
+      if (res.error?.code === 'proposal-state') await loadProposals()
+      return
+    }
+    setMentorNotice({
+      tone: 'success',
+      text: t('community.mentor.acceptDone', { deposit: target.depositAmount }),
+    })
+    // 提案状态已变（ACCEPTED），押金也冻结了 —— 两处都得刷新
+    await Promise.all([loadProposals(), refreshBalance()])
+  }
+
+  /** 拒绝指导（研究者）。不冻 Token，但会终止导师的这次提议，直接执行并给回执。 */
+  const rejectProposal = async (p: HostProposal): Promise<void> => {
+    setMentorNotice(null)
+    setMentorBusy({ id: p.id, action: 'reject' })
+    const res = await post('mentor/reject', { proposalId: p.id })
+    setMentorBusy(null)
+    if (!res.ok) {
+      setMentorNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
+      return
+    }
+    setMentorNotice({ tone: 'success', text: t('community.mentor.rejectDone') })
+    await loadProposals()
+  }
+
+  /**
+   * 点【发起指导】= 打开提案对话框（免费操作，对话框即确认）。
+   *
+   * 费用建议**当场取**而不是预先缓存：默认值属于服务器策略（将来可能按领域/阶段浮动），
+   * 抄一份到客户端只会在两边悄悄漂移。取不到就退回对话框里的内置默认值，不拦着用户。
+   */
+  const openPropose = async (w: HostWork): Promise<void> => {
+    setProposeError(null)
+    setProposeFee(null)
+    setProposeTarget(w)
+    const res = await post('mentor/fee-suggestion', {})
+    if (res.ok) setProposeFee((res.value as { suggestion: HostFeeSuggestion }).suggestion ?? null)
+  }
+
+  /** 提交提案：成功 → 关框、给回执、刷新提案（该行立刻显示「等待响应」角标）。 */
+  const submitPropose = async (input: {
+    totalFee: number
+    depositAmount: number
+    successPaymentAmount: number
+  }): Promise<void> => {
+    const target = proposeTarget
+    if (!target) return
+    setProposeBusy(true)
+    setProposeError(null)
+    // 导师只定总费用；指导范围与成功条件见 PROPOSE_SCOPE_PLACEHOLDER 的说明（过渡值）
+    const res = await post('mentor/propose', {
+      projectId: target.projectId,
+      guidanceScope: PROPOSE_SCOPE_PLACEHOLDER,
+      successCondition: { type: PROPOSE_DEFAULT_CONDITION, description: null },
+      ...input,
+    })
+    setProposeBusy(false)
+    if (!res.ok) {
+      // 不关对话框：用户填的内容要留着改（重复提案 409 是唯一常见的可预期失败）
+      setProposeError(res.error?.message ?? t('community.error.unknown'))
+      return
+    }
+    setProposeTarget(null)
+    setMentorNotice({ tone: 'success', text: t('community.mentor.proposeDone') })
+    await loadProposals()
+  }
+
+  /* ── 指导闭环：下载工作区快照 / 上传指导结果 ───────────────────────── */
+
+  const openExchange = async (p: HostProposal): Promise<void> => {
+    setExchangeNotice(null)
+    setReviewFiles(null)
+    setReviewSelected(new Set())
+    setExchange({ proposal: p, mode: 'upload' })
+    // 先只问能力（不开窗）：决定要不要显示【选择目录…】
+    const res = await post('mentor/pickDirectory', { probe: true })
+    setPickerSupported(res.ok && Boolean((res.value as { supported?: boolean } | undefined)?.supported))
+  }
+
+  /**
+   * 点【下载】：让**浏览器原生下载**服务器上的工作区快照（2026-09 用户拍板）。
+   *
+   * 流程：先 `mentor/archiveInfo` 预检（有没有文件、多大）→ 再用一个同源 GET
+   * 触发浏览器自己的保存流程（`Content-Disposition: attachment` 由宿主的代理回给浏览器）。
+   *
+   * 为什么必须预检：浏览器下载失败时**只会把错误响应当文件存下来**，用户得到一个坏
+   * zip；而且页面拿不到"下载成功/失败"的回执。所以在导航之前把失败说清楚。
+   */
+  const requestDownload = async (p: HostProposal): Promise<void> => {
+    setMentorNotice(null)
+    const res = await post('mentor/archiveInfo', { projectId: p.projectId })
+    if (!res.ok) {
+      setMentorNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
+      return
+    }
+    const info = res.value as { files: number; bytes: number }
+    if (info.files === 0) {
+      setMentorNotice({ tone: 'error', text: t('community.exchange.noFilesYet') })
+      return
+    }
+    const title = p.projectTitle ?? t('community.mentor.untitledProject')
+    const url = `${SETTINGS_ROUTE_PREFIX}/mentor/archive?projectId=${encodeURIComponent(p.projectId)}&title=${encodeURIComponent(title)}`
+    // 用 `<a download>` 而不是 `window.location=`：后者会把整个设置页导航走，
+    // 而 `window.open` 会被弹窗拦截（这里虽然来自点击，但多一层保险更省事）。
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${title}.zip`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setMentorNotice({
+      tone: 'success',
+      text: t('community.exchange.downloadStarted', {
+        files: info.files,
+        size: formatBytes(info.bytes),
+      }),
+    })
+  }
+
+  /** 对话框里的【选择目录…】（只有非 native 环境才会走到这里）。 */
+  const chooseDir = async (): Promise<void> => {
+    const res = await post('mentor/pickDirectory', {})
+    if (!res.ok) {
+      setExchangeNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
+      return
+    }
+    const v = res.value as { supported?: boolean; path?: string | null }
+    if (!v.supported) {
+      setPickerSupported(false)
+      return
+    }
+    // path 为 null = 用户取消（**不是错误**）：什么都不做，别弹提示
+    if (v.path) setUploadDir(v.path)
+  }
+
+  /** 扫描所选工作区里的 `review/`（上传源）。 */
+  const scanReview = async (): Promise<void> => {
+    setExchangeNotice(null)
+    setReviewFiles(null)
+    setReviewSelected(new Set())
+    const res = await post('mentor/scanReview', { dir: uploadDir.trim() })
+    if (!res.ok) {
+      setExchangeNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
+      return
+    }
+    const v = res.value as { files?: Array<{ relPath: string; size: number }> }
+    const files = v.files ?? []
+    setReviewFiles(files)
+    // 默认全选：导师刚写完的指导意见，通常就是要全传上去
+    setReviewSelected(new Set(files.map((f) => f.relPath)))
+  }
+
+  const toggleReview = (relPath: string): void => {
+    setReviewSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(relPath)) next.delete(relPath)
+      else next.add(relPath)
+      return next
+    })
+  }
+
+  const runUpload = async (): Promise<void> => {
+    const target = exchange?.proposal
+    if (!target) return
+    setExchangeBusy(true)
+    setExchangeNotice(null)
+    const res = await post('mentor/upload', {
+      projectId: target.projectId,
+      dir: uploadDir.trim(),
+      paths: Array.from(reviewSelected),
+    })
+    setExchangeBusy(false)
+    if (!res.ok) {
+      setExchangeNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
+      return
+    }
+    const v = res.value as { uploaded?: unknown[] }
+    setReviewFiles(null)
+    setReviewSelected(new Set())
+    setExchangeNotice({
+      tone: 'success',
+      text: t('community.exchange.uploadDone', { count: v.uploaded?.length ?? 0 }),
+    })
+  }
+
+  /* ── 列表加载：**只有登录后才联网**；未登录显示示例数据 ─────────────── */
+  /* ── 指导关系（第三个 Tab）──────────────────────────────────────────── */
+
+  /**
+   * 读我涉及的指导提案（`mentor/list`：我发起的 + 我收到的）。
+   *
+   * ⚠️ 读失败**不能**显示成"没有指导关系" —— 同 `loadMine` 的纪律。
+   * 旧宿主没有这个端点时明说"需重启"。
+   */
+
 
   /**
    * 读**本机**研究项目（`work/mine`）。
@@ -2261,6 +3227,8 @@ function CommunityTab({
     const brief = (res.value as { brief: HostWorkBrief }).brief
     setDetail({ projectId: w.projectId, work: brief, brief })
     setOpen({ projectId: w.projectId, kind: 'brief' })
+    // 读过详情 ⇒ 这一项可以【发起指导】了（本会话内记住）
+    setDetailRead((prev) => new Set(prev).add(w.projectId))
     // 读到了 ⇒ 这一项已经"解锁"（服务器按 (viewer, project) 只收一次）：
     // 本会话立刻不再弹确认框；下次启动由宿主的本地记忆回答（`work/list` 的 briefOpened）。
     setWorks((prev) =>
@@ -2388,6 +3356,52 @@ function CommunityTab({
     return tokens.available
   }
 
+  // 指导提案分栏：我在哪一边决定能做什么 —— 我是 researcher 就是我收到的（可接受/拒绝），
+  // 我是 mentor 就是我发起的（等对方响应）。身份缺失时宿主已回退成 id，短 id 也能对上 account.id。
+  const myAccountId = account?.id ?? ''
+  const incomingProposals = (proposals ?? []).filter((p) => p.researcher?.id === myAccountId)
+  const outgoingProposals = (proposals ?? []).filter((p) => p.mentor?.id === myAccountId)
+
+  /**
+   * 我发起的提案按项目索引 —— 【可指导】每行据此显示状态角标（发起后变「等待响应」）。
+   *
+   * 同一项目可能有历史提案（被拒之后又发了一次），所以取**最需要用户注意**的那条：
+   * `PROPOSED`（等对方响应）优先于 `ACCEPTED`，都优先于终态（已拒绝 / 已过期 / 已取消）。
+   */
+  const myProposalByProject = new Map<string, HostProposal>()
+  {
+    const rank: Record<string, number> = { PROPOSED: 0, ACCEPTED: 1 }
+    for (const p of outgoingProposals) {
+      const current = myProposalByProject.get(p.projectId)
+      if (!current || (rank[p.status] ?? 9) < (rank[current.status] ?? 9)) {
+        myProposalByProject.set(p.projectId, p)
+      }
+    }
+  }
+
+  /** 费用数字（只给数，不做解释性描述）。 */
+  const feeText = (p: HostProposal): string =>
+    t('community.mentor.feeText', {
+      total: p.totalFee,
+      deposit: p.depositAmount,
+      success: p.successPaymentAmount,
+    })
+
+  /**
+   * 「指导中」的**统一列表**：我收到的 + 我发起的合成一条，按"要不要我动作"排序。
+   *
+   * 排序：`PROPOSED`（等我处理 / 等对方响应）→ `ACCEPTED`（跟踪中）→ 终态；
+   * 同一档内新的在前。这一页的主职就是**跟踪状态**，所以把还需要动作的顶上去。
+   */
+  const trackItems = [
+    ...incomingProposals.map((p) => ({ p, incoming: true })),
+    ...outgoingProposals.map((p) => ({ p, incoming: false })),
+  ].sort((a, b) => {
+    const rank: Record<string, number> = { PROPOSED: 0, ACCEPTED: 1 }
+    const byStatus = (rank[a.p.status] ?? 9) - (rank[b.p.status] ?? 9)
+    return byStatus !== 0 ? byStatus : (b.p.createdAt ?? '').localeCompare(a.p.createdAt ?? '')
+  })
+
   return (
     <>
       {/* ══ 用户信息区（内部 Tabs：账号 / 服务器设置）══════════════════════ */}
@@ -2433,17 +3447,41 @@ function CommunityTab({
           {userTab === 'account' ? (
             account ? (
               /* 已登录：一行账号 + 右侧操作，没有多余说明文字 */
+              /*
+               * 一行放下：账号名 + 邮箱 + 角色·状态 + 余额 + 两个按钮。
+               *
+               * ⚠️ 这行是 `flexWrap: 'wrap'` 的（窄了会换行）。所以必须指定**谁让位**：
+               * 邮箱是唯一可牺牲的元素（自己的邮箱，且悬浮能看到全的），
+               * 其余（余额徽章、按钮）一律 `flex: 0 0 auto` 不许被压。
+               * 曾经因为余额徽章里多了「（+30 冻结）」把两个按钮挤到第二行。
+               */
               <div style={S.inlineRow}>
-                <span style={S.accountName}>{account.displayName}</span>
-                <span style={S.mono}>{account.email}</span>
-                <span style={S.hint}>
+                <span style={{ ...S.accountName, flex: '0 0 auto' }}>{account.displayName}</span>
+                <span
+                  style={{
+                    ...S.mono,
+                    flex: '0 1 auto',
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={account.email}
+                >
+                  {account.email}
+                </span>
+                <span style={{ ...S.hint, flex: '0 0 auto' }}>
                   {roleText(t, account.roles)} · {enumText(t, STATUS_LABEL_KEYS, account.status)}
                 </span>
                 {/* Token 余额：点了就刷新（花掉 Token 之后不用整页重载） */}
                 {state?.tokens ? (
                   <button
                     type="button"
-                    style={{ ...S.tokenBadge, opacity: refreshingBalance || busy ? 0.55 : 1 }}
+                    style={{
+                      ...S.tokenBadge,
+                      flex: '0 0 auto',
+                      opacity: refreshingBalance || busy ? 0.55 : 1,
+                    }}
                     disabled={refreshingBalance || busy}
                     title={
                       state.tokens.frozen > 0
@@ -2456,29 +3494,28 @@ function CommunityTab({
                     onClick={() => void refreshBalance()}
                   >
                     ◎ {state.tokens.available} Token
-                    {state.tokens.frozen > 0
-                      ? t('community.balance.frozenNote', { count: state.tokens.frozen })
-                      : ''}
+                    {/* 冻结部分只留最短标记（完整解释在悬浮提示里）——它曾经把整行挤成两行 */}
+                    {state.tokens.frozen > 0 ? (
+                      <span style={{ fontWeight: 400, opacity: 0.7 }}>
+                        {t('community.balance.frozenNote', { count: state.tokens.frozen })}
+                      </span>
+                    ) : null}
                   </button>
                 ) : null}
                 <span style={{ flex: '1 1 auto' }} />
+                {/* 刷新：与研究工作三个 Tab 同一个组件（图标 + 悬浮说明） */}
+                <RefreshIconButton t={t} busy={busy} onClick={() => void verify()} />
                 <button
                   type="button"
-                  style={{ ...S.ghostBtn, opacity: busy ? 0.55 : 1 }}
-                  disabled={busy}
-                  onClick={() => void verify()}
-                >
-                  {busy ? t('community.action.reverifying') : t('community.action.reverify')}
-                </button>
-                <button
-                  type="button"
-                  style={{ ...S.ghostBtn, opacity: busy || fromEnv ? 0.55 : 1 }}
+                  style={{ ...S.iconBtn, flex: '0 0 auto', opacity: busy || fromEnv ? 0.55 : 1 }}
                   disabled={busy || fromEnv}
-                  title={fromEnv ? t('community.tip.envKey') : undefined}
+                  // 凭据来自环境变量时无法在界面里清除 —— 悬浮说明说出原因
+                  title={fromEnv ? t('community.tip.envKey') : t('community.action.signOut')}
+                  aria-label={t('community.action.signOut')}
                   onClick={() => void logout()}
                 >
-                  
-                  {t('community.action.signOut')}</button>
+                  ⏏
+                </button>
               </div>
             ) : (
               /* 未登录：默认只展示**一条**登录路径 */
@@ -2698,15 +3735,119 @@ function CommunityTab({
         />
       ) : null}
 
+      {/* ══ 发起指导提案（点【发起指导】时出现；免费操作，对话框即确认）══════ */}
+      {proposeTarget ? (
+        <ProposeDialog
+          t={t}
+          title={proposeTarget.title}
+          fee={proposeFee}
+          busy={proposeBusy}
+          error={proposeError}
+          onCancel={() => {
+            setProposeTarget(null)
+            setProposeError(null)
+          }}
+          onSubmit={(input) => void submitPropose(input)}
+        />
+      ) : null}
+
       {/*
-       * ══ 研究工作（两个视图）══════════════════════════════════════════════
+        * ══ Split Button 的下拉（【拒绝】收在这里）══════════════════════════
+        *
+        * `position: fixed` + 按钮 rect 定位（外层卡片 overflow:hidden，absolute 会被裁）。
+        * 一层全屏透明背板负责"点别处关闭" —— 比给整页挂 document 监听简单，也不会漏解绑。
+        * zIndex 压在 1000 的对话框**之下**：真开了对话框就不该再看到这个菜单。
+        */}
+      {menuFor ? (
+        <>
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 998 }}
+            onClick={() => setMenuFor(null)}
+          />
+          <div
+            style={{
+              position: 'fixed',
+              left: Math.max(8, menuFor.x - 110),
+              top: menuFor.y + 4,
+              minWidth: 110,
+              zIndex: 999,
+              background: 'var(--dsw-alias-bg-layer-1)',
+              border: '1px solid var(--dsw-alias-border-l2)',
+              borderRadius: 8,
+              boxShadow: '0 6px 18px rgba(0,0,0,.18)',
+              overflow: 'hidden',
+            }}
+          >
+            <button
+              type="button"
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '7px 12px',
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--dsw-alias-label-primary)',
+                fontSize: 12.5,
+                cursor: 'pointer',
+              }}
+              onClick={() => {
+                const target = menuFor.proposal
+                setMenuFor(null)
+                void rejectProposal(target)
+              }}
+            >
+              {t('community.action.reject')}
+            </button>
+          </div>
+        </>
+      ) : null}
+
+      {/* ══ 文件交换：【下载】工作区快照 / 【上传】指导结果 ══════════════════ */}
+      {exchange?.mode === 'upload' ? (
+        <UploadDialog
+          t={t}
+          proposal={exchange.proposal}
+          dir={uploadDir}
+          pickerSupported={pickerSupported}
+          files={reviewFiles}
+          selected={reviewSelected}
+          busy={exchangeBusy}
+          notice={exchangeNotice}
+          onDirChange={setUploadDir}
+          onChooseDir={() => void chooseDir()}
+          onScan={() => void scanReview()}
+          onToggle={toggleReview}
+          onUpload={() => void runUpload()}
+          onClose={() => setExchange(null)}
+        />
+      ) : null}
+
+      {/* ══ 导师信息（点【导师】时出现；数据来自提案内嵌的 profile）══════════ */}
+      {profileTarget ? (
+        <MentorProfileDialog t={t} proposal={profileTarget} onClose={() => setProfileTarget(null)} />
+      ) : null}
+
+      {/* ══ 接受指导确认（点【接受指导】时出现；确认前不发请求、不冻结押金）════ */}
+      {acceptConfirm ? (
+        <AcceptConfirmDialog
+          t={t}
+          proposal={acceptConfirm}
+          balance={state?.tokens?.available ?? null}
+          onCancel={() => setAcceptConfirm(null)}
+          onConfirm={() => void confirmAccept()}
+        />
+      ) : null}
+
+      {/*
+       * ══ 研究工作（三个视图）══════════════════════════════════════════════
        *
        *   我的   —— **本机**的研究项目（有效 research workspace 的工作区）。
        *            不联网、不需要登录；所有用户都能看到自己的。
        *   可指导 —— 研究网络里已公开的研究工作（导师视角）。需要导师角色。
+       *   指导中 —— 我发起的（等对方响应）+ 我收到的（接受 / 拒绝）。
        *
-       * 「我的」在前（2026-09 用户拍板）：所有人都可能**被**指导，先看自己的；
-       * 导师才需要另一个视图去找可指导的研究。
+       * 「我的」在最前（2026-09 用户拍板）：所有人都可能**被**指导，先看自己的。
        */}
       <div style={S.card}>
         <div style={S.cardHead}>
@@ -2718,35 +3859,31 @@ function CommunityTab({
           <MiniTab active={workTab === 'mentor'} onClick={() => setWorkTab('mentor')}>
             
             {t('community.tab.mentor')}</MiniTab>
+          {/* 「指导中」= 我发起的 + 我收到的指导提案（发起 / 接受 / 拒绝都在这里） */}
+          <MiniTab active={workTab === 'mentorship'} onClick={() => setWorkTab('mentorship')}>
+            {t('community.tab.mentorship')}</MiniTab>
           <span style={{ flex: '1 1 auto' }} />
           {workTab === 'mine' ? (
-            <button
-              type="button"
-              style={{ ...S.ghostBtn, opacity: mineLoading ? 0.55 : 1 }}
-              disabled={mineLoading}
-              onClick={() => void loadMine()}
-            >
-              {mineLoading ? t('community.action.loading') : t('community.action.refresh')}
-            </button>
+            <RefreshIconButton t={t} busy={mineLoading} onClick={() => void loadMine()} />
           ) : null}
           {workTab === 'mentor' && account ? (
-            <button
-              type="button"
-              style={{ ...S.ghostBtn, opacity: worksLoading ? 0.55 : 1 }}
-              disabled={worksLoading}
-              onClick={() => void loadWorks()}
-            >
-              {worksLoading ? t('community.action.loading') : t('community.action.refresh')}
-            </button>
+            <RefreshIconButton t={t} busy={worksLoading} onClick={() => void loadWorks()} />
+          ) : null}
+          {workTab === 'mentorship' && account ? (
+            <RefreshIconButton t={t} busy={proposalsLoading} onClick={() => void loadProposals()} />
           ) : null}
           {workTab === 'mentor' && !account ? <Badge tone="neutral">{t('community.badge.sample')}</Badge> : null}
         </div>
         <div style={S.cardBody}>
           {/*
-           * 下一步（用户已拍板要做，等登录链路测试通过后再接）：
-           *   Level 3「完整研究状态」+「申请导师指导」，即设计文档 §1708-1740 的商业闭环：
-           *   POST /projects/{id}/mentorship-proposals → 接受（押金冻结）→ GET /projects/{id}/full。
-           * 现在**不加**入口：宁可先没有，也不要一个点了没反应的按钮。
+           * 三个视图（2026-09 用户拍板）：我的 / 可指导 / 指导中。
+           *
+           * 「指导中」承载整条商业闭环：POST /projects/{id}/mentorship-proposals（发起）
+           * → POST /mentorship-proposals/{id}/accept（接受 → **冻结押金** + 建合同 + 建关系）。
+           * 关系建立后导师即可读 Level 3 `GET /projects/{id}/full`（服务器已实现，插件后续接）。
+           *
+           * ⚠️ 不再在「我的」「可指导」列表里加内联按钮（用户：有第三个 Tab 时这些可忽略）——
+           * 发起与接受都收在一处，列表行保持只读。
            */}
           {/* 列表级失败（列表 / 摘要 / 简报共用一处提示，按 code 给出不同说法） */}
           {publishNotice ? (
@@ -2783,6 +3920,25 @@ function CommunityTab({
               <span style={S.hint}>{chargeNotice}</span>
             </div>
           ) : null}
+          {/* 指导关系的业务回执（接受成功 → 押金已冻结；失败 → 说清原因） */}
+          {mentorNotice ? (
+            <div style={S.inlineRow}>
+              <Badge tone={mentorNotice.tone === 'success' ? 'success' : 'error'}>
+                {mentorNotice.tone === 'success'
+                  ? t('community.mentor.badgeDone')
+                  : t('community.mentor.badgeFailed')}
+              </Badge>
+              <span
+                style={
+                  mentorNotice.tone === 'success'
+                    ? S.hint
+                    : { ...S.hint, color: 'var(--dsw-alias-state-error-primary)' }
+                }
+              >
+                {mentorNotice.text}
+              </span>
+            </div>
+          ) : null}
           {worksError ? (
             <div style={S.inlineRow}>
               <Badge tone="error">{worksError.code}</Badge>
@@ -2800,7 +3956,200 @@ function CommunityTab({
             </div>
           ) : null}
 
-          {workTab === 'mine' ? (
+          {workTab === 'mentorship' ? (
+            /* ── 指导中：**一个**列表跟踪指导关系状态（不再分「我收到的 / 我发起的」）──
+             *
+             * 用户拍板（2026-09）：这一页的主职是**跟踪状态**，所以只留三样东西 ——
+             *   ① 对方是谁（我收到的 → 导师姓名；我发起的 → 项目标题）
+             *   ② 状态角标
+             *   ③ 费用数字
+             * 指导范围 / 成功条件 / 导师简介 / 机构 / 研究方向这些**描述性文字全部去掉**
+             * （导师简介留在「接受指导」的确认框里 —— 那是真正要做判断的地方）。
+             */
+            !account ? (
+              <div style={S.inlineRow}>
+                <Badge tone="warn">{t('community.badge.signInRequired')}</Badge>
+                <span style={S.hint}>{t('community.hint.mentorSignIn')}</span>
+              </div>
+            ) : proposalsError ? (
+              <div style={S.inlineRow}>
+                <Badge tone="error">{proposalsError.code}</Badge>
+                <span
+                  style={{
+                    color: 'var(--dsw-alias-state-error-primary)',
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    flex: '1 1 320px',
+                    minWidth: 0,
+                  }}
+                >
+                  {proposalsError.message}
+                </span>
+                <button type="button" style={S.ghostBtn} onClick={() => void loadProposals()}>
+                  {t('community.action.retry')}
+                </button>
+              </div>
+            ) : proposals === null ? (
+              <div style={S.hint}>
+                {proposalsLoading ? t('community.hint.loading') : t('community.hint.noData')}
+              </div>
+            ) : trackItems.length === 0 ? (
+              <div style={S.hint}>{t('community.hint.mentorEmpty')}</div>
+            ) : (
+              <div style={S.list}>
+                {trackItems.map(({ p, incoming }, i) => (
+                  <div
+                    key={p.id}
+                    style={i === 0 ? undefined : { borderTop: '1px solid var(--dsw-alias-border-l1)' }}
+                  >
+                    {/*
+                      两栏：左 = 名称 + 费用**竖排**；右 = 状态 + 按钮（`flex: 0 0 auto`）。
+
+                      ⚠️ 名称和费用原来并排，加上费用数字后整行太长，右侧的
+                      【下载】【上传】被挤到第二行（2026-09 用户反馈）。竖排后左侧
+                      自己消化宽度，右侧按钮永远一行。
+                    */}
+                    <div style={S.listRow}>
+                      <div
+                        style={{
+                          minWidth: 0,
+                          flex: '1 1 auto',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 2,
+                        }}
+                      >
+                        {/* 对方是谁：我收到的看导师，我发起的看项目（粗体、单行） */}
+                        <div style={S.listTitle}>
+                          {incoming
+                            ? (p.mentor?.displayName ?? t('community.mentor.unknownParty'))
+                            : (p.projectTitle ?? t('community.mentor.untitledProject'))}
+                        </div>
+                        {/* 费用数字（不做解释性描述）—— 名称之下一行 */}
+                        <div style={S.hint}>{feeText(p)}</div>
+                      </div>
+                      {/* 右侧：状态 + 操作，整组不许被压缩、不许换行 */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          flex: '0 0 auto',
+                          flexWrap: 'nowrap',
+                        }}
+                      >
+                      <Badge tone={proposalTone(p.status)}>
+                        {translateOr(t, progressLabelKey(p, incoming), p.status)}
+                      </Badge>
+                      {/*
+                        指导关系建立之后才有文件交换：
+                          【下载】两端都显示 —— 导师取学生的工作区做分析，学生取回（含
+                          导师上传的 mentorship/ 产物）继续推进研究；
+                          【上传】只有导师侧 —— 学生自己的工作区本来就在服务器上（用【我的】里的【更新】）。
+                      */}
+                      {canDownloadProposal(p, incoming) ? (
+                        <button
+                          type="button"
+                          style={S.ghostBtn}
+                          title={t('community.tip.download')}
+                          onClick={() => void requestDownload(p)}
+                        >
+                          {t('community.action.download')}
+                        </button>
+                      ) : null}
+                      {p.status === 'ACCEPTED' && !incoming ? (
+                        <button
+                          type="button"
+                          style={{ ...S.accentBtn, opacity: 0.85 }}
+                          title={t('community.tip.upload')}
+                          onClick={() => void openExchange(p)}
+                        >
+                          {t('community.action.upload')}
+                        </button>
+                      ) : null}
+                      {/* 我作为学生时，看得到"是谁在申请指导我"（标签压短，见下方 Split Button 注释） */}
+                      {incoming ? (
+                        <button
+                          type="button"
+                          style={S.ghostBtn}
+                          title={t('community.mentor.profileTitle')}
+                          onClick={() => setProfileTarget(p)}
+                        >
+                          {t('community.action.viewMentor')}
+                        </button>
+                      ) : null}
+                      {/*
+                        * 只有"等我处理"的这一条才给动作 —— 其余状态纯跟踪。
+                        *
+                        * ⚠️ 做成 **Split Button**（2026-09 用户要求）：一行里塞三个按钮时
+                        * 宽度不够、右侧信息被挤掉。【拒绝】收进 ▾ 的下拉里，行上只剩
+                        * 「导师 + 接受 ▾」两段。
+                        *
+                        * 下拉用 `position: fixed` 按按钮位置定位，而不是 `absolute`：
+                        * 外层卡片有 `overflow: hidden`（圆角需要），absolute 菜单会被裁掉。
+                        */}
+                      {incoming && p.status === 'PROPOSED' ? (
+                        /*
+                         * `alignItems: 'stretch'` 让右段**自动**跟左段等高。
+                         *
+                         * 为什么不能用 padding 硬凑：`▾`（U+25BE）的字形行高和中文不同，
+                         * 两段各自按内容撑高就会一高一低，看着不齐；写死 height 又要跟着
+                         * 字号/内边距维护。stretch 让高度由左段决定，右下段没有纵向 padding。
+                         */
+                        <div style={{ display: 'inline-flex', alignItems: 'stretch' }}>
+                          <button
+                            type="button"
+                            style={{
+                              ...S.accentBtn,
+                              borderTopRightRadius: 0,
+                              borderBottomRightRadius: 0,
+                              opacity: mentorBusy !== null ? 0.55 : 1,
+                            }}
+                            disabled={mentorBusy !== null}
+                            onClick={() => {
+                              setMenuFor(null)
+                              requestAccept(p)
+                            }}
+                          >
+                            {mentorBusy?.id === p.id && mentorBusy.action === 'accept'
+                              ? t('community.action.loading')
+                              : t('community.action.accept')}
+                          </button>
+                          <button
+                            type="button"
+                            style={{
+                              ...S.accentBtn,
+                              borderTopLeftRadius: 0,
+                              borderBottomLeftRadius: 0,
+                              // 纵向 padding 归零（高度靠 stretch 撑），横向加宽到近方形，
+                              // 免得箭头段细成一条、跟左段不成比例
+                              padding: '0 11px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              opacity: mentorBusy !== null ? 0.55 : 1,
+                            }}
+                            disabled={mentorBusy !== null}
+                            title={t('community.action.more')}
+                            aria-label={t('community.action.more')}
+                            onClick={(e) => {
+                              const r = e.currentTarget.getBoundingClientRect()
+                              setMenuFor((prev) =>
+                                prev?.id === p.id ? null : { id: p.id, proposal: p, x: r.right, y: r.bottom },
+                              )
+                            }}
+                          >
+                            ▾
+                          </button>
+                        </div>
+                      ) : null}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : workTab === 'mine' ? (
             /* ── 我的：本机研究项目 ── */
             mineError ? (
               <div style={S.inlineRow}>
@@ -2949,6 +4298,16 @@ function CommunityTab({
               {works.map((w, i) => {
                 const expanded = open?.projectId === w.projectId
                 const busyKind = detailBusy?.projectId === w.projectId ? detailBusy.kind : null
+                /** 我已经对这项工作发起过的提案（有 → 按钮禁用 + 显示状态角标）。 */
+                const mine = myProposalByProject.get(w.projectId)
+                /**
+                 * 【发起指导】的显示规则：**读过详情之后**才出现。
+                 *
+                 * 本会话读过 → 显示；本会话没读过但这一项的详情早就解锁了
+                 * （`brief_paid` / 本地记忆，见 `briefFree`）→ 也显示：
+                 * 那说明这个 viewer 之前就付过费、看过，再把按钮藏起来是 bug 不是保护。
+                 */
+                const canPropose = detailRead.has(w.projectId) || briefFree(w)
                 return (
                   <div
                     key={w.projectId}
@@ -2967,6 +4326,36 @@ function CommunityTab({
                       briefFree={briefFree(w)}
                       onSummary={() => void toggleSummary(w)}
                       onBrief={() => requestBrief(w)}
+                      /* 第二行：发起指导 + 发起之后的状态角标（等待响应 / 已接受 / …） */
+                      below={
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          {/*
+                            状态角标在**前**、按钮在**后**（2026-09 用户要求）：
+                            发起过之后按钮就只是"灰掉的残影"，真正要读的是状态；
+                            先给信息、再给不可用的动作。与【指导中】的排法一致。
+
+                            ⚠️ 用 `progressLabelKey(..., false)` 而不是提案状态原值：
+                            这里 `mine` 恒为**我发起**的提案（我是导师），接受之后
+                            提案状态不再变化，直接显示会永远停在「已接受」。
+                          */}
+                          {mine ? (
+                            <Badge tone={proposalTone(mine.status)}>
+                              {translateOr(t, progressLabelKey(mine, false), mine.status)}
+                            </Badge>
+                          ) : null}
+                          {canPropose ? (
+                            <button
+                              type="button"
+                              style={{ ...S.accentBtn, opacity: mine ? 0.55 : 1 }}
+                              disabled={Boolean(mine) || proposeBusy}
+                              title={mine ? t('community.tip.proposed') : t('community.tip.propose')}
+                              onClick={() => void openPropose(w)}
+                            >
+                              {t('community.action.propose')}
+                            </button>
+                          ) : null}
+                        </div>
+                      }
                     />
                     {expanded && detail?.projectId === w.projectId ? (
                       <WorkDetail t={t} work={detail.work} brief={detail.brief} />

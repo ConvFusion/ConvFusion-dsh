@@ -2005,6 +2005,225 @@ section('[8] 响应解析健壮性')
   assertEq(acc.email, 'a@b.com', '保留 email')
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+ * [9] 指导关系（mentor/*）：费用建议 / 发起 / 列表 / 接受（冻结押金）/ 拒绝
+ *
+ * 商业闭环：导师发起提案 → 研究者接受（**冻结押金** + 建合同 + 建关系）。
+ * 这里断言宿主侧的三个约定：
+ *   1. 请求形状正确（路径 / 方法 / 鉴权头 / 幂等键 / body 字段名）；
+ *   2. **身份缺失时能降级**（后端还没 enrich `mentor` / `researcher` 内嵌对象时，
+ *      退回顶层 `mentor_id` / `researcher_id`，界面至少能分出"哪边是我"）；
+ *   3. 402（押金不足）等业务失败被如实映射，且**不谎报成功**。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[9] 指导关系（mentor/*）')
+{
+  const LOGGED_IN = { convfusionApiKey: KEY, serverUrl: 'http://localhost:8000' }
+  const MENTOR_ID = 'a79d3f52-0000-4000-8000-000000000001'
+  const RESEARCHER_ID = 'eed5abd6-b2d9-4a80-b0ad-4d7fffd27a6c'
+  const PROJECT_ID = '6a628fdc-86e4-4935-b619-8b479b0e6218'
+  /** 后端 enrich 之后的形状（含内嵌身份 + 项目标题）。 */
+  const ENRICHED = {
+    id: '22885792-0000-4000-8000-000000000002',
+    mentor_id: MENTOR_ID,
+    researcher_id: RESEARCHER_ID,
+    project_id: PROJECT_ID,
+    project_title: 'Retrieval-Augmented Reasoning',
+    mentor: {
+      id: MENTOR_ID,
+      display_name: '张老师',
+      profile: {
+        institution: '某大学',
+        department: '计算机系',
+        bio: 'long-context reasoning',
+        research_fields: ['LLM'],
+        research_interests: ['retrieval'],
+        research_expertise: ['long context'],
+      },
+    },
+    researcher: { id: RESEARCHER_ID, display_name: '李同学' },
+    guidance_scope: '指导实验设计与论文写作',
+    total_fee: 100,
+    deposit_amount: 20,
+    success_payment_amount: 80,
+    success_condition: { type: 'MUTUAL_COMPLETION', description: '双方确认完成' },
+    status: 'PROPOSED',
+    expires_at: '2026-10-03T00:00:00Z',
+    created_at: '2026-09-19T00:00:00Z',
+  }
+
+  // ── 费用建议：GET /mentorship-proposals/fee-suggestion ──
+  const fee = makeHost({
+    config: LOGGED_IN,
+    handler: async (call) => {
+      assert(call.url.endsWith('/api/v1/mentorship-proposals/fee-suggestion'), '费用建议走 fee-suggestion')
+      return { status: 200, body: { suggested_fee: 100, suggested_deposit: 20, suggested_success_payment: 80 } }
+    },
+  })
+  const feeRes = await fee.handler('mentor/fee-suggestion', {})
+  assert(feeRes.ok, 'mentor/fee-suggestion 成功')
+  assertEq(feeRes.value.suggestion.suggestedFee, 100, 'suggested_fee → suggestedFee')
+  assertEq(feeRes.value.suggestion.suggestedDeposit, 20, 'suggested_deposit → suggestedDeposit')
+  assertEq(feeRes.value.suggestion.suggestedSuccessPayment, 80, 'suggested_success_payment → suggestedSuccessPayment')
+
+  // ── 发起提案：POST /projects/{id}/mentorship-proposals（免费，不扣 Token）──
+  const propose = makeHost({
+    config: LOGGED_IN,
+    handler: async (call) => {
+      assert(call.method === 'POST', '发起提案用 POST')
+      assert(
+        call.url.endsWith(`/api/v1/projects/${PROJECT_ID}/mentorship-proposals`),
+        '发起提案走 /projects/{id}/mentorship-proposals',
+      )
+      return { status: 201, body: ENRICHED }
+    },
+  })
+  const proposeRes = await propose.handler('mentor/propose', {
+    projectId: PROJECT_ID,
+    guidanceScope: '指导实验设计与论文写作',
+    totalFee: 100,
+    depositAmount: 20,
+    successPaymentAmount: 80,
+    successCondition: { type: 'MUTUAL_COMPLETION', description: '双方确认完成' },
+  })
+  assert(proposeRes.ok, 'mentor/propose 成功')
+  {
+    const sent = JSON.parse(propose.calls[0].body)
+    assertEq(sent.guidance_scope, '指导实验设计与论文写作', 'body 用 snake_case：guidance_scope')
+    assertEq(sent.total_fee, 100, 'body：total_fee')
+    assertEq(sent.deposit_amount, 20, 'body：deposit_amount')
+    assertEq(sent.success_payment_amount, 80, 'body：success_payment_amount')
+    assertEq(sent.success_condition.type, 'MUTUAL_COMPLETION', 'body：success_condition.type')
+    assertEq(propose.calls[0].headers.authorization, `Bearer ${KEY}`, '发起提案带 Bearer 凭据')
+  }
+  assertEq(proposeRes.value.proposal.status, 'PROPOSED', '新提案状态 = PROPOSED')
+  assertEq(proposeRes.value.proposal.mentor.displayName, '张老师', '内嵌导师身份 → mentor.displayName')
+  assertEq(proposeRes.value.proposal.mentor.profile.institution, '某大学', '导师机构带出')
+  assertEq(proposeRes.value.proposal.projectTitle, 'Retrieval-Augmented Reasoning', 'project_title → projectTitle')
+  keyLeak(proposeRes.value, 'mentor/propose')
+
+  // 本地校验：押金 + 成功付款必须等于总额（发出去之前就拦，别浪费一次往返）
+  const badSum = await propose.handler('mentor/propose', {
+    projectId: PROJECT_ID,
+    guidanceScope: 'x',
+    totalFee: 100,
+    depositAmount: 10,
+    successPaymentAmount: 10,
+    successCondition: { type: 'MUTUAL_COMPLETION' },
+  })
+  assert(!badSum.ok && badSum.error.code === 'bad-request', '押金+成功付款≠总额 → 本地就拒（bad-request）')
+  assertEq(propose.calls.length, 1, '被本地拦下的请求**没有**发到服务器')
+
+  // ── 列表：GET /mentorship-proposals ──
+  const list = makeHost({
+    config: LOGGED_IN,
+    handler: async (call) => {
+      assert(call.url.endsWith('/api/v1/mentorship-proposals'), '列表走 /mentorship-proposals')
+      return { status: 200, body: [ENRICHED] }
+    },
+  })
+  const listRes = await list.handler('mentor/list', {})
+  assert(listRes.ok, 'mentor/list 成功')
+  assertEq(listRes.value.proposals.length, 1, '返回 1 条提案')
+  assertEq(listRes.value.proposals[0].researcher.displayName, '李同学', '研究者身份带出')
+  assertEq(listRes.value.proposals[0].successCondition.type, 'MUTUAL_COMPLETION', '成功条件类型带出')
+
+  // ── **降级**：后端还没 enrich 时，退回顶层 mentor_id / researcher_id ──
+  //
+  // 这是必须做的兼容：身份内嵌是后端后加的字段，旧响应只有两个 UUID。
+  // 没有这个回退，界面就分不出"哪条是我收到的"，接受按钮会长在错误的一边。
+  const legacy = makeHost({
+    config: LOGGED_IN,
+    handler: async () => ({
+      status: 200,
+      body: [{ ...ENRICHED, mentor: undefined, researcher: undefined, project_title: undefined }],
+    }),
+  })
+  const legacyRes = await legacy.handler('mentor/list', {})
+  assertEq(legacyRes.value.proposals[0].mentor.id, MENTOR_ID, '没 enrich → 导师 id 退回顶层 mentor_id')
+  assertEq(legacyRes.value.proposals[0].researcher.id, RESEARCHER_ID, '没 enrich → 研究者 id 退回顶层 researcher_id')
+  assertEq(legacyRes.value.proposals[0].projectTitle, null, '没 enrich → projectTitle = null（不是 undefined）')
+  assert(
+    legacyRes.value.proposals[0].mentor.displayName.length > 0,
+    '没 enrich → 用短 id 当显示名（界面仍有东西可显示，不显示 undefined）',
+  )
+
+  // ── 接受：POST /mentorship-proposals/{id}/accept（**冻结押金**）──
+  const CONTRACT = {
+    id: 'b916b821-0000-4000-8000-000000000003',
+    researcher_id: RESEARCHER_ID,
+    mentor_id: MENTOR_ID,
+    project_id: PROJECT_ID,
+    total_fee: 100,
+    deposit_amount: 20,
+    success_payment_amount: 80,
+    guidance_scope: '指导实验设计与论文写作',
+    success_condition: { type: 'MUTUAL_COMPLETION', description: null },
+    status: 'ACCEPTED',
+    created_at: '2026-09-19T00:00:00Z',
+    accepted_at: '2026-09-19T00:00:00Z',
+    started_at: '2026-09-19T00:00:00Z',
+    completed_at: null,
+    settled_at: null,
+  }
+  const accept = makeHost({
+    config: LOGGED_IN,
+    handler: async (call) => {
+      assert(call.method === 'POST', '接受用 POST')
+      assert(call.url.endsWith(`/api/v1/mentorship-proposals/${ENRICHED.id}/accept`), '接受走 /accept')
+      return { status: 200, body: CONTRACT }
+    },
+  })
+  const acceptRes = await accept.handler('mentor/accept', { proposalId: ENRICHED.id, intentKey: 'intent-1' })
+  assert(acceptRes.ok, 'mentor/accept 成功')
+  assertEq(acceptRes.value.contract.status, 'ACCEPTED', '合同状态 = ACCEPTED')
+  assertEq(acceptRes.value.contract.depositAmount, 20, '合同带出押金（界面据此报"冻了多少"）')
+  assertEq(
+    accept.calls[0].headers['idempotency-key'],
+    'intent-1',
+    '接受带 Idempotency-Key（402 之后重试不重复冻结押金）',
+  )
+  // 缺幂等键必须本地就拒（服务器那边无法安全重放）
+  const noKey = await accept.handler('mentor/accept', { proposalId: ENRICHED.id })
+  assert(!noKey.ok && noKey.error.code === 'bad-request', '缺 intentKey → 本地拒（bad-request）')
+  assertEq(accept.calls.length, 1, '缺幂等键的请求**没有**发到服务器')
+
+  // 402 押金不足：必须映射成 insufficient-tokens（界面据此说"先获取 Token"）
+  const poor = makeHost({
+    config: LOGGED_IN,
+    handler: async () => ({
+      status: 402,
+      body: err('INSUFFICIENT_TOKENS', 'not enough', { required: 20, available: 0 }),
+    }),
+  })
+  const poorRes = await poor.handler('mentor/accept', { proposalId: ENRICHED.id, intentKey: 'intent-2' })
+  assertEq(poorRes.ok, false, '押金不足 → 不算成功')
+  assertEq(poorRes.error.code, 'insufficient-tokens', '402 → insufficient-tokens（界面的"先获取 Token"分支）')
+
+  // ── 拒绝：POST /mentorship-proposals/{id}/reject ──
+  const reject = makeHost({
+    config: LOGGED_IN,
+    handler: async (call) => {
+      assert(call.url.endsWith(`/api/v1/mentorship-proposals/${ENRICHED.id}/reject`), '拒绝走 /reject')
+      return { status: 200, body: { ...ENRICHED, status: 'REJECTED' } }
+    },
+  })
+  const rejectRes = await reject.handler('mentor/reject', { proposalId: ENRICHED.id })
+  assert(rejectRes.ok, 'mentor/reject 成功')
+  assertEq(rejectRes.value.proposal.status, 'REJECTED', '拒绝后状态 = REJECTED')
+
+  // ── 未登录时一律 not-configured（不该发出没有凭据的请求）──
+  const anon = makeHost({ config: {}, handler: async () => ({ status: 200, body: [] }) })
+  for (const endpoint of ['mentor/fee-suggestion', 'mentor/list', 'mentor/propose', 'mentor/accept', 'mentor/reject']) {
+    const res = await anon.handler(endpoint, {})
+    assertEq(res.ok, false, `未登录调用 ${endpoint} → 失败`)
+  }
+  assertEq(anon.calls.length, 0, '未登录时**一个请求都没发**（没有凭据就不该请求服务器）')
+
+  // 幂等键 / 明文凭据纪律同样适用于这一组端点
+  keyLeak(listRes.value, 'mentor/list')
+  keyLeak(acceptRes.value, 'mentor/accept')
+}
+
 console.log(`\n${failed === 0 ? '✅' : '❌'} server-login: ${passed} passed, ${failed} failed`)
 if (failed > 0) {
   console.log('failures:\n' + failures.map((f) => `  - ${f}`).join('\n'))

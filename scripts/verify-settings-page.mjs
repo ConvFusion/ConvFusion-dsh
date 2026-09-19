@@ -275,7 +275,32 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   // 登录的两条入口（次要入口折叠）
   dictHas('community.login.keyLabel', 'API Key 登录', 'Sign in with API key', 'API Key 登录入口')
   dictHas('community.action.inviteShow', '使用邀请码注册', 'Register with an invitation', '邀请码注册入口')
-  dictHas('community.action.reverify', '重新验证', 'Re-verify', '重新验证')
+  // 账号区那个按钮叫【刷新】（曾叫【重新验证】）：与页面其它刷新按钮统一
+  dictHas('community.action.refresh', '刷新', 'Refresh', '账号刷新入口')
+
+  // 账号行的【刷新】【登出】是**图标按钮**：宽度可预测，账号行不会被文案挤成两行。
+  // 代价是失去可见文案 → title 与 aria-label 缺一不可（读屏与悬浮都靠它）。
+  assert(/iconBtn: \{[\s\S]{0,320}?width: 26,[\s\S]{0,80}?height: 26,/.test(src), '有固定方形的图标按钮样式')
+  // 刷新抽成一个组件，四处共用（账号行 + 研究工作三个 Tab）
+  assert(src.includes('function RefreshIconButton('), '刷新图标按钮是独立组件')
+  assertEq((src.match(/<RefreshIconButton /g) ?? []).length, 4, '四处都在用它（账号 + 我的 + 可指导 + 指导中）')
+  assert(
+    /title=\{busy \? t\('community\.action\.loading'\) : t\('community\.action\.refresh'\)\}[\s\S]{0,120}?aria-label=\{t\('community\.action\.refresh'\)\}/.test(src),
+    '刷新图标同时有 title 与 aria-label（忙碌时 title 说"读取中"）',
+  )
+  // 旧的四份文字刷新按钮必须绝迹（否则改一处漏三处）
+  assert(
+    !/\{mineLoading \? t\('community\.action\.loading'\) : t\('community\.action\.refresh'\)\}/.test(src),
+    '不再有文字版刷新按钮（已全部图标化）',
+  )
+  assert(
+    /title=\{fromEnv \? t\('community\.tip\.envKey'\) : t\('community\.action\.signOut'\)\}/.test(src),
+    '登出图标同样带说明（来自环境变量时说明为什么点不了）',
+  )
+  assert(
+    !/\{t\('community\.action\.signOut'\)\}<\/button>/.test(src),
+    '登出不再渲染成文字按钮',
+  )
   dictHas('community.action.signOut', '登出', 'Sign out', '登出')
   assert(/account\/login/.test(community) && /account\/register/.test(community), '两个入口各自走对应端点')
   assert(!/cf_live_[0-9a-f]{16}/.test(community), '不得把任何 API Key 写死进源码')
@@ -436,6 +461,25 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   // 花钱的那一刻要给出回执（用户会问"扣了没、扣了几次"）
   dictHas('community.notice.charged', '已读取详情，消耗 {tokens} Token（余额 {balance}）', 'Token charged', '扣费回执')
   assert(/chargeNotice/.test(community) && /refreshBalance\(\)/.test(community), '扣费回执 + 读详情后刷新余额')
+  // 账号行必须**给"谁让位"定规矩**：这一行是 flexWrap:wrap 的，不定规矩就会换行。
+  // 实际踩过：余额徽章里多了「（+30 冻结）」之后，两个按钮被挤到第二行。
+  assert(
+    /\.\.\.S\.mono,[\s\S]{0,200}?textOverflow: 'ellipsis'/.test(src),
+    '邮箱可省略（窄窗口唯一让位的元素，完整地址在 title 里）',
+  )
+  assert(/title=\{account\.email\}/.test(src), '被省略的邮箱仍有完整悬浮提示')
+  assert(
+    /\.\.\.S\.tokenBadge,[\s\S]{0,120}?flex: '0 0 auto'/.test(src),
+    '余额徽章不许被压（它是关键数字）',
+  )
+  // 两个动作现在是图标按钮，同样不许被压（`flex: 0 0 auto` 跟着样式一起换）
+  assertEq(
+    (src.match(/\.\.\.S\.iconBtn, flex: '0 0 auto'/g) ?? []).length,
+    2,
+    '两个图标按钮都不许被压（刷新 + 登出）',
+  )
+  assert(zhDict.includes("'community.balance.frozenNote': '（冻 {count}）'"), '冻结标记压到最短（详情在 tooltip）')
+
   // Token 余额：登录后要显示"我还剩多少"（点了可刷新）
   assert(/state\?\.tokens \?/.test(community) && /community\.tip\.balance/.test(community), '登录后显示 Token 余额并可刷新')
   assert(/account\/tokens/.test(community), '余额刷新走 account/tokens')
@@ -1257,6 +1301,334 @@ console.log('\n[11] 已买过的简报不再重复提醒')
     'work/list 用本地记忆标注 briefOpened',
   )
   assert(rpc.includes('if (!accountId) return items'), '账号未知 → 不标注（保守：界面仍提醒）')
+}
+/* ════════════════════════════════════════════════════════════════════════
+ * [12] 指导关系：第三个 Tab + 接受必须二次确认（押金冻结）
+ *
+ * 结构定稿（2026-09 用户拍板）：三个 Tab —— 我的 / 可指导 / **指导中**。
+ * 发起与接受都收在「指导中」，列表行**不加**内联按钮（有第三个 Tab 时那些可忽略）。
+ * 接受会冻结押金 = 真正动 Token → 必须先弹确认框（沿用扣费确认规则）。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二次确认')
+{
+  const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+  const zhDict = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
+
+  // ① 三个 Tab：workTab 类型含 'mentorship'，且有对应 MiniTab
+  assert(src.includes("useState<'mine' | 'mentor' | 'mentorship'>"), 'workTab 类型含第三个视图')
+  assert(inlineCount(src, "setWorkTab('mentorship')") === 1, '有「指导中」Tab 按钮')
+  assert(src.includes("t('community.tab.mentorship')"), 'Tab 文案走 i18n（指导中）')
+
+  // ② **一个**列表跟踪状态（用户拍板：不再分「我收到的 / 我发起的」）
+  assert(src.includes('const trackItems = ['), '两方向合成一个统一列表')
+  assert(!src.includes("t('community.mentor.incomingTitle')"), '没有「我收到的」分栏标题')
+  assert(!src.includes("t('community.mentor.outgoingTitle')"), '没有「我发起的」分栏标题')
+  assert(/trackItems\.map\(\(\{ p, incoming \}, i\)/.test(src), '统一列表每行带方向标记')
+  // 排序：还要动作的顶上去
+  assert(/PROPOSED: 0, ACCEPTED: 1/.test(src), '按"还要不要动作"排序（等待响应在前）')
+  // 只留状态 + 费用数字：描述性文字必须消失
+  assert(src.includes('feeText(p)'), '每行显示费用数字')
+  // 版式：名称与费用**竖排**（曾经并排导致整行太长，右侧【下载】【上传】被挤成两行）
+  assert(
+    /flexDirection: 'column',\s*gap: 2,[\s\S]{0,400}?S\.listTitle[\s\S]{0,400}?feeText\(p\)/.test(src),
+    '名称与费用竖排（左侧自己消化宽度）',
+  )
+  // 右侧（状态 + 操作）整组不许被压、不许换行
+  assert(
+    /flex: '0 0 auto',\s*flexWrap: 'nowrap',/.test(src),
+    '右侧整组 flex: 0 0 auto + nowrap（按钮永远一行）',
+  )
+  for (const gone of ['scopeText', 'conditionPlain', 'conditionWithNote', 'affiliationText', 'researcherText']) {
+    assert(!src.includes(gone), `描述性文字已去掉：${gone}`)
+  }
+  // 状态不再永远停在「已接受」：关系建立后按"导师传了没有"分两个**进展**状态，
+  // 并按角色换称呼（导师看自己的行不该写"导师已指导"）。
+  assert(src.includes('function progressLabelKey('), 'ACCEPTED 有独立的进展文案')
+  assert(
+    /if \(incoming\) return hasReview \? 'community\.mentor\.progress\.studentGot' : 'community\.mentor\.progress\.studentWaiting'/.test(src),
+    '学生侧：等待指导意见 / 导师已指导',
+  )
+  assert(
+    /hasReview \? 'community\.mentor\.progress\.mentorDone' : 'community\.mentor\.progress\.mentorWaiting'/.test(src),
+    '导师侧：我已指导 / 待我指导',
+  )
+  for (const k of ['studentWaiting', 'studentGot', 'mentorWaiting', 'mentorDone']) {
+    assert(zhDict.includes(`'community.mentor.progress.${k}'`), `进展文案有中文：${k}`)
+  }
+
+  // 动作只长在「我收到的 + 等待响应」那一行（其余状态纯跟踪）
+  assert(
+    /\{incoming && p\.status === 'PROPOSED' \? \(/.test(src),
+    '只有"等我处理"的那条给接受/拒绝按钮',
+  )
+  // 学生侧要能看清"是谁在申请指导我"：查看导师信息 → Profile 介绍
+  assert(src.includes("t('community.action.viewMentor')"), '有【查看导师信息】按钮')
+  assert(
+    /\{incoming \? \(\s*<button[\s\S]{0,300}?setProfileTarget\(p\)/.test(src),
+    '【导师】按钮只在我作为学生的那一侧',
+  )
+  assert(src.includes('function MentorProfileDialog('), '存在导师信息对话框')
+  assert(src.includes("t('community.mentor.profileTitle')"), '对话框标题走 i18n')
+  assert(src.includes("t('community.mentor.profileEmpty')"), '导师没填 profile 时如实说明（不编内容）')
+  for (const f of ['profileBio', 'profileFields', 'profileInterests', 'profileExpertise']) {
+    assert(src.includes(`community.mentor.${f}`), `Profile 字段有展示位：${f}`)
+  }
+  assert(/<MentorProfileDialog t=\{t\} proposal=\{profileTarget\}/.test(src), '对话框被渲染')
+  // 导师信息来自提案内嵌的 profile → 不该为它多发一次请求
+  const mp = src.slice(src.indexOf('function MentorProfileDialog('), src.indexOf('function CommunityTab('))
+  assert(!mp.includes('post('), '导师信息不额外发请求（数据已在提案响应里）')
+
+  // 【接受】用与【发起指导】同一个品牌色风格，不用实心主按钮（用户：不要黑色）
+  assert(
+    /\.\.\.S\.accentBtn[\s\S]{0,420}?requestAccept\(p\)/.test(src),
+    '【接受】用 accentBtn（与【发起指导】一致）',
+  )
+  assert(
+    !/style=\{S\.primaryBtn\}[\s\S]{0,200}?requestAccept\(p\)/.test(src),
+    '【接受】不再是实心主按钮',
+  )
+  // Split Button：【拒绝】收进 ▾ 的下拉，行上只留「导师 + 接受 ▾」
+  assert(src.includes("'community.action.viewMentor'"), '标签已压短（导师）')
+  assert(zhDict.includes("'community.action.accept': '接受'"), '标签已压短（接受）')
+  assert(/setMenuFor\(\(prev\) =>/.test(src), '▾ 切换下拉展开态')
+  // 两段必须等高：靠 flex stretch，不靠魔法数字 / 硬凑 padding
+  assert(
+    /display: 'inline-flex', alignItems: 'stretch'/.test(src),
+    'Split 容器用 stretch（右段自动跟左段等高）',
+  )
+  assert(
+    /padding: '0 11px',\s*display: 'inline-flex',\s*alignItems: 'center'/.test(src),
+    '箭头段纵向 padding 归零（高度来自 stretch）+ 横向加宽（近方形）',
+  )
+  assert(/aria-label=\{t\('community.action.more'\)\}/.test(src), '▾ 有可访问名')
+  assert(/menuFor\.proposal[\s\S]{0,120}?rejectProposal\(target\)/.test(src), '【拒绝】在下拉里')
+  assert(!/style=\{S\.ghostBtn\}[\s\S]{0,120}?rejectProposal\(p\)/.test(src), '【拒绝】不再直接占用行内宽度')
+  // 下拉必须 fixed 定位：外层卡片 overflow:hidden，absolute 会被裁掉
+  const menu = src.slice(src.indexOf('Split Button 的下拉'), src.indexOf('════ 导师信息'))
+  assert(menu.includes("position: 'fixed'"), '下拉用 fixed 定位（卡片 overflow:hidden 会裁掉 absolute）')
+  assert(menu.includes('zIndex: 998') && menu.includes('zIndex: 999'), '下拉的 zIndex 压在对话框之下')
+  assert(menu.includes('setMenuFor(null)'), '有"点别处关闭"的背板')
+
+  // ③ 接受**必须先确认**：按钮只调 requestAccept，只有 confirmAccept 里发请求
+  assert(/setMenuFor\(null\)\s*requestAccept\(p\)/.test(src), '【接受】只打开确认框（不直连请求）')
+  assert(!src.includes('onClick={() => void confirmAccept('), '【接受指导】不直连 confirmAccept')
+  assertEq(inlineCount(src, "post('mentor/accept'"), 1, 'mentor/accept 只有一处调用点（在 confirmAccept 内）')
+  assert(src.includes('function AcceptConfirmDialog('), '存在接受确认对话框组件')
+  // 确认框必须说清"冻多少"（只说"确认？"等于没提醒）
+  assert(src.includes('acceptFreezeNote'), '确认框说明冻结语义（钱还是你的，只是不可用）')
+  assert(src.includes('acceptBalance'), '确认框显示当前可用余额')
+  assert(src.includes("t('community.mentor.acceptConfirmBadge'"), '确认框角标写明冻结数量')
+
+  // ④ 幂等键：接受也复用（402 押金不足后重试不重复冻结）
+  const ca = src.slice(src.indexOf('const confirmAccept ='), src.indexOf('const rejectProposal ='))
+  assert(ca.includes('acceptIntents[target.id] ?? crypto.randomUUID()'), '接受复用自己的幂等键')
+  assert(ca.includes("code === 'insufficient-tokens'"), '押金不足单独给说法（不是笼统"失败"）')
+  assert(ca.includes('refreshBalance()'), '接受后刷新余额（押金已从 available 转冻结）')
+  assert(ca.includes('loadProposals()'), '接受后刷新提案列表（状态变 ACCEPTED）')
+
+  // ⑤ 拒绝：不冻 Token，直接执行 + 回执
+  assert(src.includes('const rejectProposal = async'), '有拒绝处理')
+  assertEq(inlineCount(src, "post('mentor/reject'"), 1, 'mentor/reject 只有一处调用点')
+
+  // ⑥ 发起指导：在【可指导】列表的【概览】【详情】下面一行，发起后显示状态角标
+  //
+  // ⚠️ 这一条**修过一次**：最初按"有第三个 Tab 就忽略内联按钮"把发起入口整个去掉了，
+  // 结果**没有任何地方能发起指导**（「指导中」只做了接受/拒绝）。用户一看就发现
+  // "没有发起指导的按钮"。教训：把入口收进 Tab 时，必须确认**每个动作都还有家**。
+  assert(src.includes("t('community.action.propose')"), '有【发起指导】按钮（入口不能再丢）')
+  assert(src.includes("post('mentor/propose'"), '发起走 mentor/propose')
+  assert(src.includes('function ProposeDialog('), '存在提案对话框组件')
+  assert(src.includes("t('community.mentor.proposeTitle')"), '对话框标题走 i18n')
+  // 第二行插槽：挂在 WorkRow 的按钮**下面**
+  assert(src.includes('below={'), 'WorkRow 有第二行动作插槽')
+  assert(src.includes('{below}'), 'WorkRow 真的渲染这个插槽')
+  // 导师侧只填**总费用**：指导范围已删、成功条件不由导师定、押金比例由平台定
+  const pd = src.slice(src.indexOf('function ProposeDialog('), src.indexOf('function UploadDialog('))
+  assertEq((pd.match(/<input/g) ?? []).length, 1, '提案对话框只剩一个输入框（总费用）')
+  assert(!pd.includes('scopeLabel') && !pd.includes('scopePlaceholder'), '对话框不再采集指导范围')
+  assert(!pd.includes('conditionLabel') && !pd.includes('conditionPlaceholder'), '对话框不再采集成功条件')
+  // 钱怎么分 + 成功条件谁定 = **一段话**（分两行会让对话框多一行高）
+  assertEq((pd.match(/feeNote/g) ?? []).length, 1, '费用说明只占一段')
+  assert(!pd.includes('conditionByStudent'), '不再有独立的成功条件说明行')
+  assert(zhDict.includes('成功条件由对方确认'), '这一段里说明了成功条件由对方确认')
+  // 押金比例来自**平台建议**（不写死 20%），推导而非让用户填
+  assert(
+    /fee\.suggestedDeposit \/ fee\.suggestedFee/.test(pd),
+    '押金比例取自平台建议（suggested_deposit / suggested_fee）',
+  )
+  assert(/DEFAULT_DEPOSIT_RATIO/.test(pd), '取不到建议时退回文档默认比例')
+  assert(!/0\.2\s*\/\/ *20|Math\.round\(totalNum \* 0\.2\)/.test(pd), '没有把 20% 写死在计算里')
+  assert(/deposit = valid \? Math\.max\(1, Math\.round\(totalNum \* ratio\)\)/.test(pd), '押金按比例推导')
+  assert(/success = valid \? totalNum - deposit/.test(pd), '成功付款 = 总额 − 押金（和恒成立）')
+  assert(pd.includes('percent: Math.round(ratio * 100)'), '界面显示的百分比来自同一比例')
+  // 服务器仍要求非空 → 送过渡值；展示端遇占位符整行不显示
+  assert(/PROPOSE_SCOPE_PLACEHOLDER = '-'/.test(src), '指导范围送占位符（服务器仍必填）')
+  assert(/PROPOSE_DEFAULT_CONDITION = 'MUTUAL_COMPLETION'/.test(src), '成功条件送平台默认值')
+  // 指导范围已彻底不展示（导师不采集 → 展示它是死代码）
+  assert(!src.includes('scopeRow'), '列表/对话框都不再渲染指导范围')
+  // 显示规则：**读过详情**之后才出现（业务上不允许没看内容就发指导申请）
+  assert(
+    /const canPropose = detailRead\.has\(w\.projectId\) \|\| briefFree\(w\)/.test(src),
+    '【发起指导】只在读过详情后显示（跨会话用 briefFree 兜底）',
+  )
+  assert(/canPropose \? \(\s*<button/.test(src), '按钮按 canPropose 条件渲染')
+  assert(/setDetailRead\(\(prev\) => new Set\(prev\)\.add\(w\.projectId\)\)/.test(src), '读到详情时记下来')
+  // 样式：这是页面的商业动作 → 用品牌色主行动按钮，不是中性 ghostBtn
+  assert(/accentBtn: \{[\s\S]{0,300}?state-business-primary/.test(src), '主行动按钮用品牌色（与 Badge brand 同一套变量）')
+  assert(/style=\{\{ \.\.\.S\.accentBtn/.test(src), '【发起指导】用主行动按钮样式')
+  // tooltip 要把"读后可发起"说出来，否则入口藏起来没人找得到
+  assert(zhDict.includes('读后可发起指导'), '详情 tooltip 说明读后可发起指导')
+
+  // 已发起过 → 按钮禁用 + 状态角标（不发第二次，服务器也会 409）
+  assert(/const mine = myProposalByProject\.get\(w\.projectId\)/.test(src), '按项目索引我发起的提案')
+  assert(src.includes('disabled={Boolean(mine) || proposeBusy}'), '已发起过 → 按钮禁用')
+  assert(/mine \? \(\s*<Badge tone=\{proposalTone\(mine\.status\)\}>/.test(src), '发起后显示状态角标')
+  // 角标在**前**、按钮在**后**（发起过之后按钮只是灰掉的残影，先给信息）
+  assert(
+    /mine \? \(\s*<Badge[\s\S]{0,200}?<\/Badge>\s*\) : null\}\s*\{canPropose \? \(/.test(src),
+    '状态角标排在【发起指导】按钮之前',
+  )
+  // 这里的 mine 恒为"我发起"（我是导师）→ 也要用进展文案，不能停在「已接受」
+  assert(
+    /translateOr\(t, progressLabelKey\(mine, false\), mine\.status\)/.test(src),
+    '【可指导】的角标同样用进展文案（待我指导 / 我已指导）',
+  )
+  // 刷新【可指导】时顺带刷新提案，否则角标一刷新就丢
+  assert(/post\('mentor\/list'[\s\S]{0,240}?setProposals/.test(src), '刷新可指导时回填提案状态（角标不丢）')
+  // 费用建议是**开框之后**才到的（fetch 要一次往返），useState 初值只算一次 ——
+  // 必须有个 effect 把它同步进去，否则预填永远是兜底的 100/20。
+  assert(
+    /React\.useEffect\(\(\) => \{\s*if \(!fee \|\| touched\.current\) return/.test(src),
+    '费用建议到达后同步进对话框（否则预填等于没取到）',
+  )
+  assert(src.includes('touched.current = true'), '用户改动后不覆盖（touched 防线）')
+
+  // ⑦ 读失败不能显示成"没有指导关系"
+  assert(
+    /res\.error\?\.code === 'unknown-endpoint'[\s\S]{0,200}?hostRestart/.test(src),
+    '旧宿主没这个端点 → 提示重启（不是"没有数据"）',
+  )
+
+  // ⑧ 词典：状态与成功条件都要有中文（界面不显示英文枚举）
+  for (const k of ['PROPOSED', 'ACCEPTED', 'REJECTED', 'EXPIRED', 'CANCELLED']) {
+    assert(zhDict.includes(`'community.mentor.status.${k}'`), `提案状态 ${k} 有中文文案`)
+  }
+  for (const k of [
+    'PAPER_ACCEPTED',
+    'PAPER_PUBLISHED',
+    'RESEARCH_COMPLETED',
+    'PATENT_GRANTED',
+    'TECHNICAL_OUTCOME',
+    'MUTUAL_COMPLETION',
+  ]) {
+    assert(zhDict.includes(`'community.mentor.condition.${k}'`), `成功条件 ${k} 有中文文案`)
+  }
+  // 等待响应是**导师视角**最关心的状态词（发起之后按钮旁边就显示它）
+  assert(zhDict.includes("'community.mentor.status.PROPOSED': '等待响应'"), 'PROPOSED 显示为「等待响应」')
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * [13] 指导闭环的文件交换
+ *
+ * 【下载】= **浏览器原生下载**：宿主带凭据做同源 GET 代理，浏览器走自己的保存流程
+ * （插件不落盘、不解压、不注册工作区 —— 浏览器存到哪页面无从得知）。
+ * 【上传】= 扫描本地 `workspace/review/`，按原相对路径回传。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[13] 指导闭环：下载 / 上传')
+{
+  const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+  const zhDict = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
+
+  // ① 两个动作都长在 **ACCEPTED** 的行上
+  assert(
+    /canDownloadProposal\(p, incoming\) \? \(\s*<button[\s\S]{0,260}?requestDownload\(p\)/.test(src),
+    '【下载】按 canDownloadProposal 显示',
+  )
+  // ⚠️ 学生侧：导师还没传东西时不该能点（下回来的就是自己已发布的那份）
+  //    但 `reviewFiles === null`（探测失败）必须保留 —— 拿不到 ≠ 没有
+  assert(src.includes('function canDownloadProposal('), '下载可用性有独立判据')
+  assert(
+    /if \(p\.reviewFiles === null \|\| p\.reviewFiles === undefined\) return true/.test(src),
+    '查不到导师是否上传时保留【下载】（不能因探测失败藏掉可能可用的动作）',
+  )
+  assert(/return p\.reviewFiles > 0/.test(src), '确认没有指导结果 → 不给【下载】')
+  assert(
+    /if \(!incoming\) return true/.test(src),
+    '导师侧始终可下载（它要的是学生的工作区，关系一建立就该能用）',
+  )
+  assert(
+    /p\.status === 'ACCEPTED' && !incoming \? \(\s*<button[\s\S]{0,300}?openExchange\(p\)/.test(src),
+    '【上传】只在导师侧（学生的工作区本来就在服务器上）',
+  )
+  assert(!src.includes('function DownloadDialog('), '下载不再有对话框（浏览器原生下载）')
+  assert(src.includes('function UploadDialog('), '有上传对话框')
+
+  // ② 点【下载】= **浏览器原生下载**：预检 → 同源 GET → 浏览器自己的保存框
+  assert(
+    /const requestDownload = async \(p: HostProposal\)[\s\S]{0,300}?post\('mentor\/archiveInfo'/.test(src),
+    '【下载】先预检（失败要在导航前说清，否则浏览器会把错误存成坏 zip）',
+  )
+  assert(
+    /if \(info\.files === 0\)[\s\S]{0,160}?noFilesYet/.test(src),
+    '服务器上没有文件 → 不起下载',
+  )
+  assert(
+    /\$\{SETTINGS_ROUTE_PREFIX\}\/mentor\/archive\?projectId=/.test(src),
+    '走同源 GET 代理（凭据由宿主持有，不进浏览器）',
+  )
+  assert(
+    /a\.download = `\$\{title\}\.zip`/.test(src),
+    '用 <a download> 触发（window.location 会把设置页导航走）',
+  )
+  assert(src.includes("t('community.exchange.downloadStarted',"), '起下载后给一句回执（带文件数与体积）')
+  assert(src.includes("t('community.exchange.uploadTitle')"), '上传对话框标题走 i18n')
+  // 插件不再解压/注册工作区：那些组件和端点都必须消失
+  assert(!src.includes('function DownloadDialog('), '下载对话框已删除（不再选目录、不再解压）')
+  assert(!/post\('mentor\/download'/.test(src), '不再调用带 dir 的下载端点')
+  assert(src.includes("t('community.exchange.noPicker')"), '上传选目录要说明没有选择器时的退路')
+
+  // ③ 上传：选目录 → 扫描 review/ → 勾选 → 按**原相对路径**上传
+  //
+  // 为什么不是"选文件"：服务器要求 relative_paths 保留目录层次
+  // （review/figures/x.png），浏览器文件选择器拿不到相对路径；走宿主读盘还顺带
+  // 绕开了 RPC 的请求体上限（原来 base64 传字节，4MB 就打住）。
+  assert(/post\('mentor\/scanReview'/.test(src), '先扫描工作区的 review/')
+  assert(/setReviewSelected\(new Set\(files\.map/.test(src), '扫描后默认全选（刚写完就是要传）')
+  assert(/post\('mentor\/upload',[\s\S]{0,200}?paths: Array\.from\(reviewSelected\)/.test(src), '上传按相对路径列表')
+  assert(!/readAsDataURL/.test(src), '不再走 base64（目录扫描取代了它）')
+  // 只查**代码**：注释里还会提到 base64（解释为什么不用它），那不算违规
+  assert(!/base64\s*:/.test(src) && !/atob\(/.test(src), '界面里没有 base64 编解码代码')
+  // 没有 review/ 文件时是"还没有指导结果"，不是错误
+  assert(src.includes("t('community.exchange.noReviewFiles')"), '空 review/ 有专门说法')
+
+  // ④ 宿主侧（host）：下载是**代理**，上传是**扫描 + 原路径回传**
+  const rpc = readFileSync(join(PKG, 'src', 'settings-rpc.ts'), 'utf8')
+  assert(/case 'mentor\/archive':/.test(rpc), '有内部归档端点（只给 GET 分支用）')
+  assert(/content-disposition/.test(rpc), '回给浏览器时带 Content-Disposition: attachment')
+  assert(!/materializeWorkspaceSnapshot/.test(rpc), 'RPC 层不再解包落盘')
+  assert(!/registerWorkspace/.test(rpc), '不再由插件注册 DSH 工作区')
+  assert(/uploadReviewFiles\(base, apiKey, projectId, payload/.test(rpc), '回传走 uploadReviewFiles（review/ 前缀）')
+  assert(/scanReviewFiles\(dir\)/.test(rpc), '上传源来自扫描（不接受任意路径）')
+  assert(/allowed\.has\(rel\)/.test(rpc), '只上传扫描得到的文件（界面不能递任意路径读盘）')
+  // ⚠️ RPC 层不做文件写入（既有分层纪律）：断言在 [7] 里，这里确认写入确实在别处
+  const sync = readFileSync(join(PKG, 'src', 'research', 'workspace-sync.ts'), 'utf8')
+  assert(/export function scanReviewFiles/.test(sync), 'workspace-sync 保留 review/ 扫描（上传要用）')
+  assert(/export function safeJoin/.test(sync), '保留路径安全校验')
+  assert(!existsSync(join(PKG, 'src', 'research', 'zip.ts')), 'ZIP 解包器已删除（A 方案下不再需要）')
+
+  // ⑤ 词典：新文案中英齐全
+  for (const k of [
+    'community.action.download',
+    'community.action.upload',
+    'community.action.chooseDir',
+    'community.exchange.downloadStarted',
+    'community.exchange.noFilesYet',
+    'community.exchange.uploadTitle',
+    'community.exchange.uploadDone',
+    'community.exchange.noPicker',
+  ]) {
+    assert(zhDict.includes(`'${k}'`), `中文字典含 ${k}`)
+  }
 }
 console.log(`\n${failed === 0 ? '✅' : '❌'} settings-page: ${passed} passed, ${failed} failed`)
 if (failed > 0) {

@@ -81,6 +81,17 @@ export const zh = {
   'community.publish.remember': '记住这次选择',
   'community.publish.confirm': '发布',
   'community.action.cancel': '取消',
+  'community.action.close': '关闭',
+  'community.action.viewMentor': '导师',
+  // 列表行的标签压到最短：一行要塞下"导师 + 接受 + ▾"，字长了会把左侧信息挤掉
+  'community.action.accept': '接受',
+  'community.action.propose': '发起指导',
+  'community.action.download': '下载',
+  'community.action.upload': '上传',
+  'community.action.chooseDir': '选择目录…',
+  'community.action.scan': '扫描',
+  'community.action.more': '更多操作',
+  'community.action.reject': '拒绝',
 
 
   'upload.category.state': '研究状态与定义',
@@ -118,6 +129,7 @@ export const zh = {
   'community.work.title': '研究工作',
   'community.tab.mine': '我的',
   'community.tab.mentor': '可指导',
+  'community.tab.mentorship': '指导中',
   'community.login.keyLabel': 'API Key 登录',
   'community.server.address': '服务器地址',
   'community.server.title': '留空 = 跟随环境配置（本环境默认 {url}）；带 /api 或 /docs 的地址会自动归一。',
@@ -132,6 +144,7 @@ export const zh = {
   'community.badge.charged': '已计费',
   'community.badge.registryUnavailable': '注册表不可用',
   'community.badge.mentorRequired': '需要导师角色',
+  'community.badge.signInRequired': '需要登录',
   'community.badge.addressChanged': '地址已改',
   // 两级披露的界面术语（对齐业务：先免费判断相关性，再付费深入了解）：
   //   概览 = 研究主题 + 工作说明，任何人都能看，用来判断"跟不跟我相关"；
@@ -146,8 +159,6 @@ export const zh = {
   'community.action.loading': '读取中…',
   'community.action.refresh': '刷新',
   'community.action.retry': '重试',
-  'community.action.reverify': '重新验证',
-  'community.action.reverifying': '处理中…',
   'community.action.retryVerify': '重试验证',
   'community.action.signIn': '登录',
   'community.action.signingIn': '登录中…',
@@ -158,8 +169,84 @@ export const zh = {
   'community.action.inviteHide': '收起邀请码注册',
   'community.tip.summary': '免费：研究主题与工作说明，先看是否与你相关',
   'community.tip.briefDisabled': '登录后可查看详情',
-  'community.tip.briefCost': '深入了解：动机 / 核心想法 / 假设 / 方法 / 证据 / 待解问题（首次读取 1 Token）',
-  'community.tip.briefUnlocked': '已解锁：这一项重读不再扣费',
+  // 详情按钮的 tooltip 顺带说明"读后可发起指导"：发起按钮在读过详情之后才出现，
+  // 不说一句的话这个入口就没人找得到（零版面成本的提示位）。
+  'community.tip.briefCost': '深入了解：动机 / 核心想法 / 假设 / 方法 / 证据 / 待解问题（首次读取 1 Token；读后可发起指导）',
+  'community.tip.briefUnlocked': '已解锁：这一项重读不再扣费，可直接发起指导',
+  // ── 指导关系（第三个 Tab「指导中」）────────────────────────────────
+  // 商业闭环：导师发起提案 → 研究者接受（**冻结押金**）→ 建立研究关系 → 导师可读完整状态。
+  // 发起提案对话框（导师视角；发起免费，对话框即确认）
+  'community.mentor.proposeTitle': '发起指导申请',
+  'community.mentor.proposeFree': '发起免费',
+  'community.mentor.proposeDone': '已发起，等待对方响应。',
+  // 导师侧只填总费用：押金比例由平台定（界面按平台建议算比例，不写死 20%）
+  'community.mentor.feeTotal': '总费用',
+  // 一段话说完"钱怎么分 + 成功条件谁定"：分两行会让对话框多一行高（2026-09 用户微调）
+  'community.mentor.feeNote':
+    '押金 {percent}%（{deposit} Token）接受时冻结，成功条件由对方确认，其余 {success} Token 成果验证后支付。',
+  'community.mentor.feeInvalid': '总费用请填正整数。',
+  'community.tip.propose': '向这项工作发起指导申请（免费，对方接受后才冻结押金）',
+  'community.tip.proposed': '已经发起过：这条申请正在等待对方响应',
+  // 导师信息（Profile）：接受之前总得知道要跟谁合作
+  'community.mentor.profileTitle': '导师信息',
+  'community.mentor.profileEmpty': '该导师尚未填写研究简介。',
+  'community.mentor.profileBio': '简介',
+  'community.mentor.profileFields': '研究领域',
+  'community.mentor.profileInterests': '研究兴趣',
+  'community.mentor.profileExpertise': '研究专长',
+  'community.mentor.unknownParty': '未知用户',
+  'community.mentor.untitledProject': '未命名项目',
+  'community.mentor.mentorIs': '导师：{name}',
+  // 「指导中」只留状态 + 费用数字：描述性文字（指导范围 / 成功条件 / 简介 / 机构）全部去掉
+  'community.mentor.feeText': '{total} Token（押金 {deposit} · 成功 {success}）',
+  // 关系建立之后的**进展**（提案状态接受后就不再变了，光看它永远是"已接受"）：
+  // 按角色换称呼 —— 导师看自己的行不该写"导师已指导"。
+  'community.mentor.progress.studentWaiting': '等待指导意见',
+  'community.mentor.progress.studentGot': '导师已指导',
+  'community.mentor.progress.mentorWaiting': '待我指导',
+  'community.mentor.progress.mentorDone': '我已指导',
+  'community.mentor.status.PROPOSED': '等待响应',
+  'community.mentor.status.ACCEPTED': '已接受',
+  'community.mentor.status.REJECTED': '已拒绝',
+  'community.mentor.status.EXPIRED': '已过期',
+  'community.mentor.status.CANCELLED': '已取消',
+  'community.mentor.condition.PAPER_ACCEPTED': '论文被接收',
+  'community.mentor.condition.PAPER_PUBLISHED': '论文发表',
+  'community.mentor.condition.RESEARCH_COMPLETED': '研究完成',
+  'community.mentor.condition.PATENT_GRANTED': '专利授权',
+  'community.mentor.condition.TECHNICAL_OUTCOME': '技术成果',
+  'community.mentor.condition.MUTUAL_COMPLETION': '双方确认完成',
+  'community.mentor.badgeDone': '已处理',
+  'community.mentor.badgeFailed': '未完成',
+  'community.mentor.acceptDone': '已接受指导，冻结押金 {deposit} Token。',
+  'community.mentor.acceptNoTokens': '可用 Token 不足 {deposit}，先获取 Token 再试。',
+  'community.mentor.rejectDone': '已拒绝这次申请。',
+  // 接受指导的确认框（押金冻结 = 真正动 Token，不能点击即生效）
+  'community.mentor.acceptConfirmTitle': '接受指导会冻结押金',
+  'community.mentor.acceptConfirmBadge': '冻结 {deposit} Token',
+  'community.mentor.acceptConfirm': '确认接受',
+  'community.mentor.acceptFreezeNote': '接受后冻结押金 {deposit} Token（仍是你的，只是暂不可用）。',
+  'community.mentor.acceptBalance': '当前可用余额：{balance} Token',
+  // 指导闭环的文件交换（关系建立之后）
+  // 下载是**浏览器原生下载**：宿主代理 GET，浏览器弹自己的保存框。
+  // 页面拿不到成败回执，所以只有"已开始"这句 + 失败在导航前说清。
+  'community.exchange.downloadStarted': '已开始下载（{files} 个文件，{size}）。',
+  'community.exchange.noFilesYet': '服务器上还没有可下载的文件。',
+  'community.exchange.dirLabel': '工作区目录',
+  'community.exchange.notScanned': '点【扫描】列出 review/ 下的文件。',
+  'community.exchange.noReviewFiles': '还没有 review/ 文件（指导意见放在 workspace/review/）。',
+  'community.exchange.dirPlaceholder': '/绝对路径/到/工作区',
+  'community.exchange.noPicker': '没有系统目录选择器，请填绝对路径。',
+  'community.exchange.uploadTitle': '上传指导结果',
+  'community.exchange.noFiles': '还没有选择文件。',
+  'community.exchange.uploadNote': '按原路径上传到项目的 review/，学生下载时一并取回。',
+  'community.exchange.uploadDone': '已上传 {count} 个文件。',
+  'community.tip.download': '下载这个项目的工作区快照（ZIP）',
+  'community.tip.upload': '把指导结果传到服务器，供学生取回',
+  'community.hint.mentorSignIn': '登录后可发起或接受指导。',
+  'community.hint.mentorEmpty': '还没有指导申请 —— 在【可指导】里发起。',
+  'community.error.readMentor': '读取指导申请失败。',
+
   // 扣费确认：点【详情】先弹这个对话框，点「确认读取」才真的发请求、才扣费
   'community.briefConfirm.title': '查看详情会消耗 Token',
   'community.briefConfirm.scope': '包含：动机 / 核心想法 / 假设 / 方法概览 / 关键证据 / 待解问题',
@@ -172,7 +259,8 @@ export const zh = {
   'community.tip.balanceDetail': '可用 {available} · 冻结 {frozen}（冻结仍是你的，只是锁住了）',
   'community.tip.keyPrivacy': '凭据只保存在本机（DSH 设置），不会回传浏览器，也不会写进对话内容。',
   'community.tip.envKey': '凭据来自环境变量，请修改环境变量后重启 DSH',
-  'community.balance.frozenNote': '（+{count} 冻结）',
+  // 只留最短标记：完整解释在 community.tip.balanceDetail 里（悬浮可见）
+  'community.balance.frozenNote': '（冻 {count}）',
   'community.detail.researchQuestion': '研究问题',
   'community.detail.summary': '摘要',
   'community.detail.motivation': '动机',

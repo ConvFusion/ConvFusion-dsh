@@ -157,6 +157,24 @@ interface ConnectionLike {
  */
 interface WorkspaceRegistryLike {
   list: () => Array<{ id?: unknown; title?: unknown; path?: unknown; updatedAt?: unknown }>
+  /**
+   * 在一个**已存在目录**上创建/复用工作区（`dsh-workspace` 的公开 API）。
+   *
+   * 幂等：同一规范化路径重复调用返回既有实体、不改标题；新建的插到注册表最前。
+   * 只按结构声明，不 import 宿主包 —— 与 `list` 同样的处理。
+   */
+  create?: (path: string, title?: string) => Promise<{ title?: unknown; created?: unknown }>
+}
+
+/**
+ * `ctx.directoryPicker` 的**能力 seam**（只取需要的形状）。
+ *
+ * `native` 才有"打开系统选择器拿绝对路径"；`browse` 只有列目录/建目录原语；
+ * 未知种类按 DSH 的约定**隐藏选择入口**，不要拿 browse 硬凑成"选目录"。
+ */
+interface DirectoryPickerLike {
+  capability?: () => { kind?: unknown }
+  pick?: (signal?: AbortSignal) => Promise<string | null>
 }
 
 interface WebServerLike {
@@ -394,6 +412,28 @@ export function apply(ctx: Context, rawConfig: Partial<ConfigShape> = {}): void 
   // "注册表不可用"。这与给 dsh-additive 诊断出的 `apply()` 里一次性 `ctx.get('webServer')`
   // 是同一个毛病：**可选服务只能"等到"或"每次现取"，不能"开机探一次就记死"。**
   let workspaceRegistryRef: WorkspaceRegistryLike | undefined
+  /**
+   * 目录选择器（可选能力）。
+   *
+   * 与注册表同样**现取**：`directory-picker-auto` 是在 boot 时按环境（bind host /
+   * SSH / 有无显示）决定挂 native 还是 browse 的，可能比本插件晚就绪。
+   * 拿不到就让界面退回手填路径 —— 不假装有选择器。
+   */
+  const findDirectoryPicker = (): DirectoryPickerLike | undefined => {
+    const candidates = ['directoryPicker', 'directoryPickerController'] as const
+    for (const name of candidates) {
+      try {
+        const svc = ctx.get(name as never) as unknown
+        if (svc && typeof svc === 'object') {
+          const picker = svc as DirectoryPickerLike
+          if (typeof picker.capability === 'function' || typeof picker.pick === 'function') return picker
+        }
+      } catch {
+        /* 继续找下一处 */
+      }
+    }
+    return undefined
+  }
   ctx.inject(['workspaceRegistry'], (rctx) => {
     const registry = rctx.get('workspaceRegistry') as WorkspaceRegistryLike | undefined
     if (!registry || typeof registry.list !== 'function') return
@@ -515,6 +555,41 @@ export function apply(ctx: Context, rawConfig: Partial<ConfigShape> = {}): void 
         }
         // 归一 + 去重是**同一个函数**（`normalizeWorkspaceEntities`），由离线验证直接覆盖
         return { available: true, items: normalizeWorkspaceEntities(entities) }
+      },
+      // 指导闭环：探测"有没有可用的系统选择器"（不开窗）
+      probeDirectoryPicker: async () => {
+        const picker = findDirectoryPicker()
+        if (!picker) return { supported: false, path: null }
+        let kind: string | undefined
+        try {
+          const cap = picker.capability?.()
+          kind = typeof cap?.kind === 'string' ? cap.kind : undefined
+        } catch {
+          /* 探测失败按"不可用"处理 */
+        }
+        // 非 native 能力：只有列目录/建目录原语，凑不出"用户选一个目录"，如实说不支持
+        const supported = kind === 'native' && typeof picker.pick === 'function'
+        return { supported, path: null, ...(kind ? { kind } : {}) }
+      },
+      // 让用户选保存目录（native 能力才有；否则界面退回手填路径）
+      pickDirectory: async () => {
+        const picker = findDirectoryPicker()
+        if (!picker) return { supported: false, path: null }
+        const probe = await (async () => {
+          let kind: string | undefined
+          try {
+            kind = picker.capability?.()?.kind as string | undefined
+          } catch {
+            /* 探测失败按不可用处理 */
+          }
+          return { supported: kind === 'native' && typeof picker.pick === 'function', kind }
+        })()
+        if (!probe.supported) {
+          return { supported: false, path: null, ...(probe.kind ? { kind: probe.kind } : {}) }
+        }
+        const controller = new AbortController()
+        const path = await picker.pick!(controller.signal)
+        return { supported: true, path: path ?? null, kind: probe.kind }
       },
       // 【ConvFusion.com】登录：保存凭据（走 settings 用户层）
       setConfig: (patch) => persistConfig(patch),
