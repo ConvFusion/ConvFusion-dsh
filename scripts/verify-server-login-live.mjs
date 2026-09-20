@@ -528,6 +528,40 @@ console.log('\n[live.5] 本插件 account/* 端点 × 真实服务器')
   assertEq(probeDown.value.reachable, false, '没人监听的端口 → reachable:false')
   assert(String(probeDown.value.reason ?? '').length > 0, '带回失败原因（悬停里能看懂为什么）')
 
+  // ⑤-3c 续费申请：真实落库一条（不改余额），并能读回来
+  // 先记下当前余额 —— 提交申请**绝不能**改变它（这正是"只记意向"的验证）
+  const beforeRecharge = await handler('account/tokens', {})
+  const balanceBefore = beforeRecharge.value?.tokens?.available ?? null
+  assert(typeof balanceBefore === 'number', '拿到提交前的余额')
+
+  const submitRecharge = await handler('account/recharge-request', {
+    amount: 100,
+    reason: 'live 验证：续费申请落库',
+  })
+  assertEq(submitRecharge.ok, true, '提交续费申请成功')
+  assertEq(submitRecharge.value.request.status, 'PENDING', '新建申请是 PENDING')
+  assertEq(submitRecharge.value.request.amount, 100, '申请的金额原样带回')
+  assertEq(submitRecharge.value.request.grantTxId, null, '还没批准 → 没有发放流水')
+  assert(String(submitRecharge.value.request.id ?? '').length > 0, '服务器给了申请 id')
+
+  // 余额**没有**因为申请而改变（只记意向，管理员批准才发 Token）
+  const afterRecharge = await handler('account/tokens', {})
+  assertEq(afterRecharge.value.tokens.available, balanceBefore, '提交申请**不改变**余额')
+
+  // 读回来：本人记录里能找到刚刚那条
+  const myRecharges = await handler('account/recharge-requests', {})
+  assertEq(myRecharges.ok, true, '查看续费记录成功')
+  const found = (myRecharges.value.items ?? []).find((r) => r.id === submitRecharge.value.request.id)
+  assert(found !== undefined, '刚提交的申请出现在本人的记录里')
+  assertEq(found?.status, 'PENDING', '读回来的仍是 PENDING')
+  assertEq(found?.amount, 100, '读回来的金额一致')
+  assert(!JSON.stringify(myRecharges.value).includes(adminKey), '续费记录里没有凭据明文')
+
+  // 非法数量在宿主侧就被拦住（不打扰服务器）
+  const badRecharge = await handler('account/recharge-request', { amount: 0 })
+  assertEq(badRecharge.ok, false, 'amount=0 → 失败')
+  assertEq(badRecharge.error.code, 'bad-request', 'amount=0 是 bad-request')
+
   // ⑤-4 邀请码注册（真实 accept + 新 Key 自检）
   const register = await handler('account/register', {
     invitationCode,

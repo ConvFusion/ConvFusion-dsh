@@ -268,8 +268,26 @@ export const zh = {
   'community.briefConfirm.balanceUnknown': '余额未知',
   'community.briefConfirm.idempotent': '同一项研究不会重复扣费',
   'community.briefConfirm.confirm': '确认读取',
-  'community.tip.balance': '点击刷新余额',
-  'community.tip.balanceDetail': '可用 {available} · 冻结 {frozen}（冻结仍是你的，只是锁住了）',
+  'community.tip.balance': '点击查看余额与续费',
+  // ── Token 余额弹窗 + 续费申请（2026-09 用户要求）──
+  'community.token.dialogTitle': 'Token 余额',
+  'community.token.available': '可用',
+  'community.token.frozen': '冻结',
+  'community.token.total': '合计',
+  'community.token.renewHint':
+    '目前 Token 由管理员发放。提交申请后，管理员会在服务器上处理；暂未开通自助付费。',
+  'community.token.pendingLine': '已申请 {amount} Token，等待管理员处理。',
+  'community.token.amountLabel': '申请数量',
+  'community.token.amountPlaceholder': '如 100',
+  'community.token.reasonLabel': '申请理由',
+  'community.token.reasonPlaceholder': '可选，最多 500 字',
+  'community.token.apply': '申请续费',
+  'community.token.applying': '提交中…',
+  'community.token.close': '知道了',
+  'community.token.amountInvalid': '申请数量必须是正整数。',
+  'community.token.receipt': '已提交续费申请（{amount} Token），等待管理员处理。',
+  'community.tip.balanceDetail':
+    '可用 {available} · 冻结 {frozen}（冻结仍是你的，只是锁住了）；点击查看余额与续费',
   'community.tip.keyPrivacy': '凭据只保存在本机（DSH 设置），不会回传浏览器，也不会写进对话内容。',
   'community.tip.envKey': '凭据来自环境变量，请修改环境变量后重启 DSH',
   // 只留最短标记：完整解释在 community.tip.balanceDetail 里（悬浮可见）

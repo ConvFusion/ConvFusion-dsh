@@ -207,6 +207,23 @@ interface HostAccountState {
   tokens?: { available: number; frozen: number; total: number } | null
 }
 
+/**
+ * 一条续费申请（宿主 `account/recharge-requests` 的镜像）。
+ *
+ * `PENDING` = 等管理员处理；`APPROVED` = 已发放（`grantTxId` 指向账本那条 `GRANT`）；
+ * `REJECTED` = 被拒。弹窗据此告诉用户"我申请到哪一步了"。
+ */
+interface HostRechargeRequest {
+  id: string
+  amount: number
+  reason: string | null
+  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  note: string | null
+  reviewedAt: string | null
+  grantTxId: string | null
+  createdAt: string
+}
+
 /** 一个本地外部依赖的检测结果（与 host 的 LocalDependencyStatus 对应）。 */
 interface HostDependency {
   name: string
@@ -574,7 +591,7 @@ const S = {
     color: 'var(--dsw-alias-label-primary)',
     fontSize: 12,
   } as React.CSSProperties,
-  /** Token 余额徽章：既是数字也是按钮（点了刷新）。 */
+  /** Token 余额徽章：既是数字也是按钮（点了打开余额弹窗）。 */
   tokenBadge: {
     display: 'inline-flex',
     alignItems: 'center',
@@ -588,6 +605,20 @@ const S = {
     fontSize: 11,
     fontWeight: 700,
     cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  } as React.CSSProperties,
+  /** 余额弹窗里的**一行明细**：左边名目、右边数字（两端对齐）。 */
+  rowBetween: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 12,
+  } as React.CSSProperties,
+  /** 余额弹窗里的**数字**：等宽、不换行，三行数字右侧对齐。 */
+  tokenNum: {
+    fontSize: 13,
+    fontWeight: 600,
+    fontVariantNumeric: 'tabular-nums',
     whiteSpace: 'nowrap',
   } as React.CSSProperties,
   /**
@@ -2159,6 +2190,159 @@ function AcceptConfirmDialog({
 }
 
 /**
+ * **Token 余额弹窗**（点账号行的余额徽章打开，2026-09 用户要求）。
+ *
+ * 三件事：① 余额明细（可用 / 冻结 / 合计）；② **续费说明**（目前由管理员发放，
+ * 暂未开通自助付费）；③ **申请续费** —— 往服务器写一条申请记录，管理员事后在服务器上
+ * 处理（本插件不接真实付费）。
+ *
+ * ⚠️ **防重复申请**：服务器 `POST /tokens/recharge-requests` **不幂等**（每次调用新增一条
+ * `PENDING`），所以这里在打开时读一次自己的申请记录，有 `PENDING` 就**不再给表单**
+ * （显示"已申请 N Token，等待管理员处理"）。不靠按钮禁用来兜 —— 用户重开弹窗也必须挡住。
+ *
+ * 数量是**必填**的：服务器 `RechargeRequestCreate.amount` 是 `gt=0` 的必填字段，
+ * 申请得说清要多少（这正是管理员批准时的依据）。
+ */
+function TokenDialog({
+  t,
+  tokens,
+  requests,
+  loading,
+  amount,
+  reason,
+  submitting,
+  error,
+  receipt,
+  onAmount,
+  onReason,
+  onApply,
+  onRefresh,
+  onClose,
+}: {
+  t: Translate
+  tokens: { available: number; frozen: number; total: number } | null
+  requests: HostRechargeRequest[] | null
+  loading: boolean
+  amount: string
+  reason: string
+  submitting: boolean
+  error: string | null
+  receipt: string | null
+  onAmount: (v: string) => void
+  onReason: (v: string) => void
+  onApply: () => void
+  onRefresh: () => void
+  onClose: () => void
+}): JSX.Element {
+  // 还没有处理完的申请 = 不能再提交（服务器不幂等，重复提交会产生多条垃圾记录）
+  const pending = (requests ?? []).find((r) => r.status === 'PENDING') ?? null
+  const parsed = Number(amount)
+  const amountValid = Number.isInteger(parsed) && parsed > 0
+  const canApply = !pending && amountValid && !submitting && !loading
+
+  return (
+    <div style={S.overlay} role="dialog" aria-modal="true">
+      <div style={{ ...S.card, width: 'min(460px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
+        <div style={S.cardHead}>
+          {t('community.token.dialogTitle')}
+          <span style={{ flex: '1 1 auto' }} />
+          <RefreshIconButton t={t} busy={loading} onClick={onRefresh} />
+        </div>
+        <div style={{ ...S.cardBody, gap: 9 }}>
+          {/* ① 余额明细 */}
+          {tokens ? (
+            <>
+              <div style={S.rowBetween}>
+                <span style={S.hint}>{t('community.token.available')}</span>
+                <span style={S.tokenNum}>{tokens.available}</span>
+              </div>
+              <div style={S.rowBetween}>
+                <span style={S.hint}>{t('community.token.frozen')}</span>
+                <span style={S.tokenNum}>{tokens.frozen}</span>
+              </div>
+              <div style={S.rowBetween}>
+                <span style={S.hint}>{t('community.token.total')}</span>
+                <span style={{ ...S.tokenNum, fontWeight: 700 }}>{tokens.total}</span>
+              </div>
+            </>
+          ) : (
+            <div style={S.hint}>{t('community.briefConfirm.balanceUnknown')}</div>
+          )}
+
+          {/* ② 续费说明：只在弹窗里出现（§6.2 文案原则：不常驻在账号行） */}
+          <div style={S.hint}>{t('community.token.renewHint')}</div>
+
+          {/* ③ 已有待处理的申请 → 不给表单（防重复；服务器不幂等） */}
+          {pending ? (
+            <div style={{ ...S.hint, color: 'var(--dsw-alias-state-business-primary)' }}>
+              {t('community.token.pendingLine', { amount: pending.amount })}
+            </div>
+          ) : (
+            <>
+              <div style={S.inlineRow}>
+                <span style={S.label}>{t('community.token.amountLabel')}</span>
+                <input
+                  style={S.compactInput}
+                  type="text"
+                  inputMode="numeric"
+                  spellCheck={false}
+                  autoComplete="off"
+                  value={amount}
+                  placeholder={t('community.token.amountPlaceholder')}
+                  onChange={(e) => onAmount(e.target.value)}
+                />
+              </div>
+              <div style={S.inlineRow}>
+                <span style={S.label}>{t('community.token.reasonLabel')}</span>
+                <input
+                  style={S.compactInput}
+                  type="text"
+                  spellCheck={false}
+                  autoComplete="off"
+                  maxLength={500}
+                  value={reason}
+                  placeholder={t('community.token.reasonPlaceholder')}
+                  onChange={(e) => onReason(e.target.value)}
+                />
+              </div>
+            </>
+          )}
+
+          {/* 失败原因 / 成功回执：都在**动作发生之后**才出现 */}
+          {error ? (
+            <div style={{ fontSize: 11.5, lineHeight: 1.6, color: 'var(--dsw-alias-state-error-primary)' }}>
+              {error}
+            </div>
+          ) : null}
+          {receipt ? (
+            <div style={{ fontSize: 11.5, lineHeight: 1.6, color: 'var(--dsw-alias-state-success-primary)' }}>
+              {receipt}
+            </div>
+          ) : null}
+
+          <div style={S.footer}>
+            <span style={{ flex: '1 1 auto' }} />
+            <button type="button" style={S.ghostBtn} onClick={onClose}>
+              {t('community.token.close')}
+            </button>
+            {!pending ? (
+              <button
+                type="button"
+                style={{ ...S.primaryBtn, opacity: canApply ? 1 : 0.55 }}
+                disabled={!canApply}
+                onClick={onApply}
+              >
+                {submitting ? t('community.token.applying') : t('community.token.apply')}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
  * 发起指导的**提案对话框**（导师视角，从【可指导】列表打开）。
  *
  * 为什么这个不用"二次确认"那一套：发起提案**不花 Token**（服务器只在接受时冻结押金），
@@ -2754,6 +2938,20 @@ function CommunityTab({
   const [busy, setBusy] = React.useState(false)
   /** 正在单独刷新 Token 余额。 */
   const [refreshingBalance, setRefreshingBalance] = React.useState(false)
+
+  /* ── Token 余额弹窗（点余额徽章打开）+ 续费申请 ─────────────────────────
+   *
+   * 弹窗打开时读一次自己的续费记录：有 `PENDING` 就不给表单 —— 服务器 `submit`
+   * **不幂等**（每次 POST 新增一条），防重复只能靠"先看再决定要不要给入口"。
+   */
+  const [tokenDialog, setTokenDialog] = React.useState(false)
+  const [rechargeRequests, setRechargeRequests] = React.useState<HostRechargeRequest[] | null>(null)
+  const [rechargeLoading, setRechargeLoading] = React.useState(false)
+  const [rechargeAmount, setRechargeAmount] = React.useState('')
+  const [rechargeReason, setRechargeReason] = React.useState('')
+  const [rechargeSubmitting, setRechargeSubmitting] = React.useState(false)
+  const [rechargeError, setRechargeError] = React.useState<string | null>(null)
+  const [rechargeReceipt, setRechargeReceipt] = React.useState<string | null>(null)
   /** 最近一次账号类失败（登录 / 注册 / 验证）。宿主已经把它翻成可读中文。 */
   const [failure, setFailure] = React.useState<{ code: string; message: string } | null>(null)
 
@@ -3687,6 +3885,59 @@ function CommunityTab({
     return tokens.available
   }
 
+  /**
+   * 读自己的续费申请记录（弹窗打开 / 刷新 / 提交成功后都走它）。
+   *
+   * 失败**不清空**已有记录：宁可显示上一次读到的状态，也不要因为一次网络抖动就把
+   * "已申请"变回"可以再申请"（那会诱发重复提交）。
+   */
+  const loadRechargeRequests = async (): Promise<void> => {
+    setRechargeLoading(true)
+    const res = await post('account/recharge-requests', {})
+    setRechargeLoading(false)
+    if (!res.ok) return
+    const items = (res.value as { items: HostRechargeRequest[] }).items
+    setRechargeRequests(items)
+  }
+
+  /** 打开余额弹窗：立刻读一次续费记录（决定给不给申请表单）。 */
+  const openTokenDialog = (): void => {
+    setTokenDialog(true)
+    setRechargeError(null)
+    setRechargeReceipt(null)
+    setRechargeRequests(null)
+    void loadRechargeRequests()
+  }
+
+  /**
+   * 提交续费申请（只记录意向，服务器不改余额）。
+   *
+   * 成功后：**重读**申请记录（让"待处理"状态来自服务器，而不是本地猜），并给回执。
+   * 失败：把宿主的可读原因显示在弹窗里 —— 没有具体理由的"申请失败"没法让人采取动作。
+   */
+  const applyRecharge = async (): Promise<void> => {
+    const amount = Number(rechargeAmount)
+    if (!Number.isInteger(amount) || amount <= 0) {
+      setRechargeError(t('community.token.amountInvalid'))
+      return
+    }
+    setRechargeSubmitting(true)
+    setRechargeError(null)
+    const res = await post('account/recharge-request', {
+      amount,
+      ...(rechargeReason.trim() ? { reason: rechargeReason.trim() } : {}),
+    })
+    setRechargeSubmitting(false)
+    if (!res.ok) {
+      setRechargeError(res.error?.message ?? t('community.error.unknown'))
+      return
+    }
+    setRechargeReceipt(t('community.token.receipt', { amount }))
+    setRechargeAmount('')
+    setRechargeReason('')
+    void loadRechargeRequests()
+  }
+
   // 指导提案分栏：我在哪一边决定能做什么 —— 我是 researcher 就是我收到的（可接受/拒绝），
   // 我是 mentor 就是我发起的（等对方响应）。身份缺失时宿主已回退成 id，短 id 也能对上 account.id。
   const myAccountId = account?.id ?? ''
@@ -3804,16 +4055,17 @@ function CommunityTab({
                 <span style={{ ...S.hint, flex: '0 0 auto' }}>
                   {roleText(t, account.roles)} · {enumText(t, STATUS_LABEL_KEYS, account.status)}
                 </span>
-                {/* Token 余额：点了就刷新（花掉 Token 之后不用整页重载） */}
+                {/* Token 余额：点了打开余额弹窗（明细 + 续费说明 + 申请续费）。
+                    刷新余额挪进弹窗里 —— 徽章现在只负责"打开"，一个按钮一个动作 */}
                 {state?.tokens ? (
                   <button
                     type="button"
                     style={{
                       ...S.tokenBadge,
                       flex: '0 0 auto',
-                      opacity: refreshingBalance || busy ? 0.55 : 1,
+                      opacity: busy ? 0.55 : 1,
                     }}
-                    disabled={refreshingBalance || busy}
+                    disabled={busy}
                     title={
                       state.tokens.frozen > 0
                         ? t('community.tip.balanceDetail', {
@@ -3822,7 +4074,7 @@ function CommunityTab({
                           })
                         : t('community.tip.balance')
                     }
-                    onClick={() => void refreshBalance()}
+                    onClick={openTokenDialog}
                   >
                     ◎ {state.tokens.available} Token
                     {/* 冻结部分只留最短标记（完整解释在悬浮提示里）——它曾经把整行挤成两行 */}
@@ -4214,6 +4466,34 @@ function CommunityTab({
           balance={state?.tokens?.available ?? null}
           onCancel={() => setAcceptConfirm(null)}
           onConfirm={() => void confirmAccept()}
+        />
+      ) : null}
+
+      {/*
+       * ══ Token 余额弹窗（点账号行余额徽章打开，2026-09 用户要求）════════
+       *
+       * 明细 + 续费说明 + 申请续费。刷新按钮同时重读**余额**与**申请记录**：
+       * 管理员在服务器上批准之后，用户点一下就能看到余额变了、申请变成 APPROVED。
+       */}
+      {tokenDialog ? (
+        <TokenDialog
+          t={t}
+          tokens={state?.tokens ?? null}
+          requests={rechargeRequests}
+          loading={rechargeLoading || refreshingBalance}
+          amount={rechargeAmount}
+          reason={rechargeReason}
+          submitting={rechargeSubmitting}
+          error={rechargeError}
+          receipt={rechargeReceipt}
+          onAmount={setRechargeAmount}
+          onReason={setRechargeReason}
+          onApply={() => void applyRecharge()}
+          onRefresh={() => {
+            void refreshBalance()
+            void loadRechargeRequests()
+          }}
+          onClose={() => setTokenDialog(false)}
         />
       ) : null}
 

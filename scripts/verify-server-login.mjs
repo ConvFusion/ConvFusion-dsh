@@ -1063,6 +1063,136 @@ section('[6c] Token 余额')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+ * 6c2. 续费申请（account/recharge-request + account/recharge-requests）
+ *
+ * 服务器 `POST /tokens/recharge-requests` **只记意向、不改余额**（管理员事后批准才发
+ * Token）。这里钉住三件事：请求体正确（snake_case）、鉴权带头、**失败有话可说**。
+ * ⚠️ 服务器 `submit` 不幂等 → 防重复是**客户端**的责任（先 list 再决定给不给入口）。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[6c2] 续费申请：提交 + 查看自己的记录')
+{
+  const REQ = {
+    id: '3f6a1e2c-0d4b-4a7e-9c1f-2b8d5e6a7c90',
+    user_id: 'eed5abd6-b2d9-4a80-b0ad-4d7fffd27a6c',
+    amount: 100,
+    reason: '实验跑不完了',
+    status: 'PENDING',
+    note: null,
+    reviewed_by: null,
+    reviewed_at: null,
+    grant_tx_id: null,
+    created_at: '2026-09-24T10:00:00Z',
+    updated_at: '2026-09-24T10:00:00Z',
+  }
+
+  // ── ① 提交：请求体必须是服务器要的 snake_case 形状 ──
+  const sub = makeHost({
+    config: { convfusionApiKey: KEY },
+    handler: async (call) => {
+      if (call.url.endsWith('/api/v1/tokens/recharge-requests')) return { status: 201, body: REQ }
+      return { status: 404, body: err('RESOURCE_NOT_FOUND', 'nope') }
+    },
+  })
+  const subRes = await sub.handler('account/recharge-request', { amount: 100, reason: '实验跑不完了' })
+  assert(subRes.ok, '提交续费申请成功')
+  assertEq(sub.calls.length, 1, '只发一次请求')
+  assertEq(sub.calls[0].method, 'POST', '用 POST')
+  assertEq(sub.calls[0].url, 'http://localhost:8000/api/v1/tokens/recharge-requests', '打到 /tokens/recharge-requests')
+  assertEq(sub.calls[0].headers.authorization, `Bearer ${KEY}`, '带凭据（这是需要身份的接口）')
+  const sent = JSON.parse(sub.calls[0].body)
+  assertEq(sent.amount, 100, '请求体带 amount')
+  assertEq(sent.reason, '实验跑不完了', '请求体带 reason')
+  // 解析：snake_case → camelCase
+  assertEq(subRes.value.request.status, 'PENDING', '新建申请是 PENDING')
+  assertEq(subRes.value.request.amount, 100, '带回申请数量')
+  assertEq(subRes.value.request.grantTxId, null, '还没批准 → 没有发放流水')
+  keyLeak(subRes.value, 'account/recharge-request')
+
+  // ── ② 只在有理由时才带 reason（服务器 reason 可空）──
+  const noReason = makeHost({
+    config: { convfusionApiKey: KEY },
+    handler: async () => ({ status: 201, body: { ...REQ, reason: null } }),
+  })
+  await noReason.handler('account/recharge-request', { amount: 50 })
+  const bare = JSON.parse(noReason.calls[0].body)
+  assertEq(bare.amount, 50, '没理由也能提交')
+  assert(!('reason' in bare), '没填理由就不带 reason 字段（不塞空串）')
+
+  // ── ③ 宿主侧就拦住非法数量：不白跑一趟网络 ──
+  for (const [bad, label] of [
+    [0, '0'],
+    [-5, '负数'],
+    [2.5, '小数'],
+    ['abc', '非数字'],
+    [undefined, '缺字段'],
+  ]) {
+    const h = makeHost({ config: { convfusionApiKey: KEY } })
+    const r = await h.handler('account/recharge-request', { amount: bad })
+    assertEq(r.ok, false, `数量 ${label} → 失败`)
+    assertEq(r.error.code, 'bad-request', `数量 ${label} 的错误码是 bad-request`)
+    assertEq(h.calls.length, 0, `数量 ${label} 时**没有**发网络请求`)
+  }
+  // 超长理由同样在本地拦（服务器 max_length=500）
+  const longH = makeHost({ config: { convfusionApiKey: KEY } })
+  const longR = await longH.handler('account/recharge-request', { amount: 10, reason: 'x'.repeat(501) })
+  assertEq(longR.error?.code, 'bad-request', '理由 501 字 → bad-request')
+  assertEq(longH.calls.length, 0, '超长理由不发网络请求')
+
+  // ── ④ 查看自己的记录（列表）──
+  const list = makeHost({
+    config: { convfusionApiKey: KEY },
+    handler: async (call) => {
+      if (call.url.endsWith('/api/v1/tokens/recharge-requests'))
+        return { status: 200, body: { items: [REQ, { ...REQ, id: 'x2', amount: 30, status: 'APPROVED', grant_tx_id: 'tx-1' }] } }
+      return { status: 404, body: err('RESOURCE_NOT_FOUND', 'nope') }
+    },
+  })
+  const listRes = await list.handler('account/recharge-requests', {})
+  assert(listRes.ok, '查看续费记录成功')
+  assertEq(list.calls[0].method, 'GET', '用 GET')
+  assertEq(listRes.value.items.length, 2, '带回两条记录')
+  assertEq(listRes.value.items[0].status, 'PENDING', '第一条待处理')
+  assertEq(listRes.value.items[1].status, 'APPROVED', '第二条已批准')
+  assertEq(listRes.value.items[1].grantTxId, 'tx-1', '已批准的那条带回账本流水 id')
+  keyLeak(listRes.value, 'account/recharge-requests')
+
+  // ── ⑤ 未登录：本地拒绝，不发请求 ──
+  const anonSub = makeHost()
+  assertEq(
+    (await anonSub.handler('account/recharge-request', { amount: 10 })).error.code,
+    'not-configured',
+    '未登录提交 → not-configured',
+  )
+  assertEq(anonSub.calls.length, 0, '未登录不发请求（提交）')
+  const anonList = makeHost()
+  assertEq(
+    (await anonList.handler('account/recharge-requests', {})).error.code,
+    'not-configured',
+    '未登录查看 → not-configured',
+  )
+  assertEq(anonList.calls.length, 0, '未登录不发请求（查看）')
+
+  // ── ⑥ 服务器拒绝时，理由要能传到界面（401 换 Key 是另一回事）──
+  const rejected = makeHost({
+    config: { convfusionApiKey: KEY },
+    handler: async () => ({ status: 400, body: err('BAD_REQUEST', 'amount must be positive') }),
+  })
+  const rejRes = await rejected.handler('account/recharge-request', { amount: 10 })
+  assertEq(rejRes.ok, false, '服务器 400 → 失败')
+  assert(String(rejRes.error?.message ?? '').length > 0, '带回可显示的原因')
+  // 凭据失效：必须是 invalid-key（要让用户去换 Key，而不是以为申请写错了）
+  const revokedSub = makeHost({
+    config: { convfusionApiKey: KEY },
+    handler: async () => ({ status: 401, body: err('API_KEY_REVOKED', 'revoked') }),
+  })
+  assertEq(
+    (await revokedSub.handler('account/recharge-request', { amount: 10 })).error.code,
+    'invalid-key',
+    '401 → invalid-key',
+  )
+}
+
+/* ════════════════════════════════════════════════════════════════════════
  * 6d. 【研究工作 · 我的】：本机研究项目（不联网、不需要登录）
  *
  * 数据源 = DSH 工作区注册表；过滤条件 = "该工作区里存在有效的 research workspace"。

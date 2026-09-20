@@ -281,9 +281,13 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   // 账号行的【刷新】【登出】是**图标按钮**：宽度可预测，账号行不会被文案挤成两行。
   // 代价是失去可见文案 → title 与 aria-label 缺一不可（读屏与悬浮都靠它）。
   assert(/iconBtn: \{[\s\S]{0,320}?width: 26,[\s\S]{0,80}?height: 26,/.test(src), '有固定方形的图标按钮样式')
-  // 刷新抽成一个组件，四处共用（账号行 + 研究工作三个 Tab）
+  // 刷新抽成一个组件，五处共用（账号行 + 研究工作三个 Tab + Token 余额弹窗）
   assert(src.includes('function RefreshIconButton('), '刷新图标按钮是独立组件')
-  assertEq((src.match(/<RefreshIconButton /g) ?? []).length, 4, '四处都在用它（账号 + 我的 + 可指导 + 指导中）')
+  assertEq(
+    (src.match(/<RefreshIconButton /g) ?? []).length,
+    5,
+    '五处都在用它（账号 + 我的 + 可指导 + 指导中 + 余额弹窗）',
+  )
   assert(
     /title=\{busy \? t\('community\.action\.loading'\) : t\('community\.action\.refresh'\)\}[\s\S]{0,120}?aria-label=\{t\('community\.action\.refresh'\)\}/.test(src),
     '刷新图标同时有 title 与 aria-label（忙碌时 title 说"读取中"）',
@@ -787,6 +791,89 @@ console.log('\n[1i] 服务器快捷按钮：换地址 + 测连通（绿 = 通）
     'community.server.probeFail',
   ]) {
     assert(zhDict.includes(`'${k}'`), `中文字典含 ${k}`)
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 1j. Token 余额弹窗 + 申请续费（2026-09 用户要求）
+ *
+ * 点账号行的余额徽章 → 弹窗显示余额明细 + 续费说明 + 【申请续费】。
+ * 申请只往服务器写一条记录（不改余额），管理员事后在服务器上处理。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[1j] Token 余额弹窗 + 申请续费')
+{
+  const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+  const zhDict = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
+  const enDict = readFileSync(join(PKG, 'src', 'client', 'i18n', 'en.ts'), 'utf8')
+  const hostRpc = readFileSync(join(PKG, 'src', 'settings-rpc.ts'), 'utf8')
+  const serverClient = readFileSync(join(PKG, 'src', 'server-client.ts'), 'utf8')
+
+  // ① 入口：徽章点击 = 打开弹窗（不再是"点了只刷新"）
+  assert(src.includes('function TokenDialog('), '有 Token 余额弹窗组件')
+  assert(
+    /onClick=\{openTokenDialog\}/.test(src),
+    '点余额徽章打开弹窗',
+  )
+  assert(/const openTokenDialog = \(\): void => \{/.test(src), '有打开动作')
+  // ② 弹窗内容：余额明细（可用 / 冻结 / 合计）+ 续费说明
+  for (const k of ['community.token.available', 'community.token.frozen', 'community.token.total']) {
+    assert(src.includes(`t('${k}')`), `弹窗显示 ${k}`)
+  }
+  assert(/t\('community\.token\.renewHint'\)/.test(src), '弹窗里有续费说明（只在这里出现，不常驻账号行）')
+  // ③ 申请：走宿主 account/recharge-request；数量必填（服务器 amount 是 gt=0 必填）
+  assert(/post\('account\/recharge-request'/.test(src), '申请走宿主 account/recharge-request')
+  assert(/post\('account\/recharge-requests'/.test(src), '打开弹窗读自己的申请记录')
+  assert(/Number\.isInteger\(parsed\) && parsed > 0/.test(src), '数量必须是正整数才能提交')
+  assert(/maxLength=\{500\}/.test(src), '理由限长 500（与服务器 max_length 一致）')
+  // ④ 防重复：服务器 submit 不幂等 → 有 PENDING 时不给表单
+  assert(
+    /status === 'PENDING'[\s\S]{0,200}?pending/.test(src),
+    '识别待处理的申请',
+  )
+  assert(/!pending \? \(/.test(src) || /\{!pending \?/.test(src), '有待处理申请就不给申请表单')
+  // ⑤ 回执 + 失败原因都在动作发生后出现
+  assert(/community\.token\.receipt/.test(src), '提交成功给回执')
+  assert(/setRechargeError\(res\.error\?\.message/.test(src), '失败显示宿主给的具体原因')
+  // ⑥ 客户端不写死服务器地址
+  assert(!/convfusion\.com|localhost/.test(src), '客户端不写死服务器域名')
+
+  // ⑦ 宿主侧：两个端点 + 解析 + 校验
+  assert(/case 'account\/recharge-request': \{/.test(hostRpc), '宿主有 account/recharge-request')
+  assert(/case 'account\/recharge-requests': \{/.test(hostRpc), '宿主有 account/recharge-requests')
+  assert(/submitRechargeRequest\(/.test(hostRpc), '宿主调用提交函数')
+  assert(/fetchRechargeRequests\(/.test(hostRpc), '宿主调用列表函数')
+  assert(/'申请数量必须是正整数。'/.test(hostRpc), '宿主侧拦非法数量（不白跑一趟网络）')
+  assert(/reason\.length > 500/.test(hostRpc), '宿主侧拦超长理由')
+  assert(
+    /export async function submitRechargeRequest\(/.test(serverClient) &&
+      /export async function fetchRechargeRequests\(/.test(serverClient),
+    'server-client 有提交 / 列表两个函数',
+  )
+  assert(
+    /'\/tokens\/recharge-requests'/.test(serverClient),
+    '打到服务器的 /tokens/recharge-requests',
+  )
+  // 申请是"意向记录"：注释里必须说清不改余额（否则后来者会以为它发 Token）
+  assert(/不改余额|不改余额/.test(serverClient), '注释写明不改余额')
+
+  // ⑧ i18n 键中英齐备
+  for (const k of [
+    'community.token.dialogTitle',
+    'community.token.available',
+    'community.token.frozen',
+    'community.token.total',
+    'community.token.renewHint',
+    'community.token.pendingLine',
+    'community.token.amountLabel',
+    'community.token.reasonLabel',
+    'community.token.apply',
+    'community.token.applying',
+    'community.token.close',
+    'community.token.amountInvalid',
+    'community.token.receipt',
+  ]) {
+    assert(zhDict.includes(`'${k}'`), `中文字典含 ${k}`)
+    assert(enDict.includes(`'${k}'`), `英文字典含 ${k}`)
   }
 }
 

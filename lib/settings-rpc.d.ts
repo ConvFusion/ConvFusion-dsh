@@ -482,6 +482,8 @@ export interface SettingsRpcDeps {
  * | `account/verify` | `{}` | 用已保存的凭据重新验证身份（联网） |
  * | `account/logout` | `{}` | 清除凭据（账号信息随之消失） |
  * | `account/tokens` | `{}` | 重新读 Token 余额（登录后显示 / 花完 Token 后刷新） |
+ * | `account/recharge-request` | `{ amount, reason? }` | 提交**续费申请**（只记录意向，不改余额；管理员事后批准） |
+ * | `account/recharge-requests` | `{}` | 查看**本人**的续费申请记录（判断有没有待处理的） |
  * | `work/mine` | `{}` | **本机**研究工作（有效研究项目的工作区；不联网、不需登录） |
  * | `work/uploadPlan` | `{ id }` | 发布前的**上传计划**（分类/体积/默认选择）+ 用量与配额 |
  * | `work/publish` | `{ id, selection?, remember? }` | 发布：建项目 → 传状态 → **传附件** → 发布 |

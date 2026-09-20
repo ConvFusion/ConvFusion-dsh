@@ -131,6 +131,8 @@ import {
   probeServerHealth,
   publishProject,
   readStateVersion,
+  submitRechargeRequest,
+  fetchRechargeRequests,
   SERVER_TIMEOUT_MS,
   ServerError,
   uploadReviewFiles,
@@ -140,6 +142,7 @@ import {
   type FeeSuggestion,
   type MentorshipContract,
   type MentorshipProposal,
+  type RechargeRequest,
   type ServerAccount,
   type TokenBalance,
   type WorkBrief,
@@ -712,6 +715,8 @@ function asRecordLike(v: unknown): Record<string, unknown> | null {
  * | `account/verify` | `{}` | 用已保存的凭据重新验证身份（联网） |
  * | `account/logout` | `{}` | 清除凭据（账号信息随之消失） |
  * | `account/tokens` | `{}` | 重新读 Token 余额（登录后显示 / 花完 Token 后刷新） |
+ * | `account/recharge-request` | `{ amount, reason? }` | 提交**续费申请**（只记录意向，不改余额；管理员事后批准） |
+ * | `account/recharge-requests` | `{}` | 查看**本人**的续费申请记录（判断有没有待处理的） |
  * | `work/mine` | `{}` | **本机**研究工作（有效研究项目的工作区；不联网、不需登录） |
  * | `work/uploadPlan` | `{ id }` | 发布前的**上传计划**（分类/体积/默认选择）+ 用量与配额 |
  * | `work/publish` | `{ id, selection?, remember? }` | 发布：建项目 → 传状态 → **传附件** → 发布 |
@@ -1272,6 +1277,56 @@ export function createSettingsRpcHandler(
         case 'account/logout': {
           // 只清凭据，保留服务器地址（下次登录还要用）
           return await persist({ convfusionApiKey: '' }, null)
+        }
+
+        /*
+         * ── 续费申请（Token 不够时向管理员要）──────────────────────────────
+         *
+         * 两个动作都不动余额：`submit` 只往服务器的 `token_recharge_requests` 写一条
+         * `PENDING`，真正发 Token 要等管理员批准（服务器侧 `admin/users/{id}/recharge-requests/*`）。
+         *
+         * ⚠️ 服务器 `submit` **不幂等**（每次 POST 新增一条），所以防重复申请是**客户端**
+         * 的责任：先 `list` 看有没有还没处理的 `PENDING`，有就不让再提交。
+         * 这里不在宿主侧做去重 —— 宿主无状态，跨会话/多窗口去重会漏。
+         */
+        case 'account/recharge-request': {
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          // 数量在宿主侧就校验：非法值不必往服务器跑一趟（也能给出具体理由）
+          const amount = Number(p.amount)
+          if (!Number.isInteger(amount) || amount <= 0) {
+            return fail('bad-request', '申请数量必须是正整数。')
+          }
+          const reason = asString(p.reason).trim()
+          if (reason.length > 500) {
+            return fail('bad-request', '申请理由最多 500 字。')
+          }
+          const base = resolveServerUrl(config, env()).url
+          try {
+            const request = await submitRechargeRequest(
+              base,
+              apiKey,
+              { amount, ...(reason ? { reason } : {}) },
+              netOptions(),
+            )
+            return { ok: true, value: { request } }
+          } catch (e) {
+            return serverFail(e)
+          }
+        }
+
+        case 'account/recharge-requests': {
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          const base = resolveServerUrl(config, env()).url
+          try {
+            const items = await fetchRechargeRequests(base, apiKey, netOptions())
+            return { ok: true, value: { items } }
+          } catch (e) {
+            return serverFail(e)
+          }
         }
 
         /* ── 研究工作（发现网络）──────────────────────────────────────────

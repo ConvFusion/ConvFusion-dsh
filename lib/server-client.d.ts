@@ -287,6 +287,56 @@ export declare function acceptInvitation(base: string, input: {
  */
 export declare function fetchTokenBalance(base: string, apiKey: string, options?: ServerRequestOptions): Promise<TokenBalance>;
 /**
+ * 续费申请的状态（与服务器 `RechargeRequestStatus` 对齐）。
+ *
+ * `PENDING` = 等管理员处理；`APPROVED` = 已批准并发放（账本里有一条 `GRANT`）；
+ * `REJECTED` = 被拒。界面上要让用户看见"我申请的现在到哪一步了"。
+ */
+export type RechargeStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+/**
+ * 一条续费申请（`POST /api/v1/tokens/recharge-requests` 的返回，snake_case → camelCase）。
+ *
+ * ⚠️ 这只是**意向记录** —— `submit` 不改余额；只有管理员批准后才会真正发 Token
+ * （那时 `grant_tx_id` 会指向账本里那条 `GRANT` 流水）。
+ */
+export interface RechargeRequest {
+    id: string;
+    amount: number;
+    reason: string | null;
+    status: RechargeStatus;
+    /** 管理员审批时写的备注（批准 / 拒绝的理由）。 */
+    note: string | null;
+    /** 批准这条申请的管理员（未审批时为 null）。 */
+    reviewedBy: string | null;
+    reviewedAt: string | null;
+    /** 批准时发放 Token 写进账本的那条流水 id（未批准为 null）。 */
+    grantTxId: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+/**
+ * 提交续费申请（`POST /api/v1/tokens/recharge-requests`）。
+ *
+ * 只记录意向，**不改余额** —— 真正发 Token 要等管理员批准。服务器 `submit` **不幂等**
+ * （每次 POST 都新增一条 `PENDING`），所以防重复申请要靠调用方先 `fetchRechargeRequests`
+ * 看有没有还没处理的，而不是靠重试。
+ *
+ * @throws {ServerError} `bad-request`（amount 非正整数）/ `invalid-key` / `unreachable` / …
+ */
+export declare function submitRechargeRequest(base: string, apiKey: string, input: {
+    amount: number;
+    reason?: string;
+}, options?: ServerRequestOptions): Promise<RechargeRequest>;
+/**
+ * 查看自己的续费申请记录（`GET /api/v1/tokens/recharge-requests`）。
+ *
+ * 只返回**本人**的申请（服务器按当前凭据的 user_id 过滤）。界面用它判断"是否已有一条
+ * 待处理的申请"，从而阻止用户连点出多条 `PENDING`。
+ *
+ * @throws {ServerError} `invalid-key` / `unreachable` / …
+ */
+export declare function fetchRechargeRequests(base: string, apiKey: string, options?: ServerRequestOptions): Promise<RechargeRequest[]>;
+/**
  * 用量与配额（`GET /api/v1/usage`）。
  *
  * 发布前要同时回答两个问题：**这次要花多少 Token**、**还装得下多少字节**。
