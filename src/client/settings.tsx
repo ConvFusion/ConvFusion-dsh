@@ -2202,11 +2202,13 @@ function AcceptConfirmDialog({
  * 不要动态改变 viewBox——这会导致渲染异常（弧形断开）。
  */
 function TokenDonut({
+  t,
   available,
   frozen,
   total,
   size = 100,
 }: {
+  t: Translate
   available: number
   frozen: number
   total: number
@@ -2256,10 +2258,10 @@ function TokenDonut({
           transform={`rotate(90 ${cx} ${cy})`}
         />
       ) : null}
-      {/* 中间：总额 */}
+      {/* 中间：总额 + 图例 */}
       <text
         x={cx}
-        y={cy - 4}
+        y={cy - 18}
         textAnchor="middle"
         dominantBaseline="central"
         fill="var(--dsw-alias-label-primary)"
@@ -2271,7 +2273,7 @@ function TokenDonut({
       </text>
       <text
         x={cx}
-        y={cy + 14}
+        y={cy - 2}
         textAnchor="middle"
         fill="var(--dsw-alias-label-secondary)"
         fontSize="10"
@@ -2279,6 +2281,36 @@ function TokenDonut({
       >
         Token
       </text>
+      {/* 图例：可用（品牌蓝） */}
+      <circle cx={cx - 30} cy={cy + 14} r={4} fill="var(--dsw-alias-state-business-primary)" />
+      <text
+        x={cx - 22}
+        y={cy + 14}
+        textAnchor="start"
+        dominantBaseline="central"
+        fill="var(--dsw-alias-label-secondary)"
+        fontSize="9"
+        fontFamily="inherit"
+      >
+        {t('community.token.available')}
+      </text>
+      {/* 图例：冻结（灰色，仅当有冻结金额时显示） */}
+      {hasFrozen ? (
+        <>
+          <circle cx={cx + 10} cy={cy + 14} r={4} fill="var(--dsw-alias-label-secondary)" />
+          <text
+            x={cx + 18}
+            y={cy + 14}
+            textAnchor="start"
+            dominantBaseline="central"
+            fill="var(--dsw-alias-label-secondary)"
+            fontSize="9"
+            fontFamily="inherit"
+          >
+            {t('community.token.frozen')}
+          </text>
+        </>
+      ) : null}
     </svg>
   )
 }
@@ -2343,31 +2375,24 @@ function TokenDialog({
           <RefreshIconButton t={t} busy={loading} onClick={onRefresh} />
         </div>
         <div style={{ ...S.cardBody, gap: 9 }}>
-          {/* ① 左侧：余额环形图（小尺寸）；右侧：申请表单（并排节省空间） */}
+          {/* ① 左侧：环形图 + 图例（下方）；右侧：续费说明 + 申请表单 */}
           {tokens ? (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-              <div style={{ flex: '0 0 auto' }}>
+              {/* 左侧：环形图 + 下方图例 */}
+              <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <TokenDonut
+                  t={t}
                   available={tokens.available}
                   frozen={tokens.frozen}
                   total={tokens.total}
                   size={100}
                 />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: 4, background: 'var(--dsw-alias-state-business-primary)' }} />
-                    <span style={{ ...S.hint, fontSize: 11 }}>{t('community.token.available')}</span>
-                  </div>
-                  {tokens.frozen > 0 ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ width: 8, height: 8, borderRadius: 4, background: 'var(--dsw-alias-label-secondary)' }} />
-                      <span style={{ ...S.hint, fontSize: 11 }}>{t('community.token.frozen')}</span>
-                    </div>
-                  ) : null}
-                </div>
               </div>
+              {/* 右侧：续费说明 + 申请表单 */}
               <div style={{ flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {/* ③ 已有待处理的申请 → 不给表单（防重复；服务器不幂等） */}
+                {/* 续费说明 */}
+                <div style={S.hint}>{t('community.token.renewHint')}</div>
+                {/* 申请表单 */}
                 {pending ? (
                   <div style={{ ...S.hint, color: 'var(--dsw-alias-state-business-primary)' }}>
                     {t('community.token.pendingLine', { amount: pending.amount })}
@@ -2407,8 +2432,6 @@ function TokenDialog({
           ) : (
             <div style={S.hint}>{t('community.briefConfirm.balanceUnknown')}</div>
           )}
-          {/* ② 续费说明：只在弹窗里出现（§6.2 文案原则：不常驻在账号行） */}
-          <div style={S.hint}>{t('community.token.renewHint')}</div>
 
           {/* 失败原因 / 成功回执：都在**动作发生之后**才出现 */}
           {error ? (
