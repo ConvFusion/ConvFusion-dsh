@@ -3355,6 +3355,13 @@ function CommunityTab({
   const account = state?.account ?? null
   const configured = state?.keyConfigured ?? false
   /**
+   * **生效的服务器地址**（宿主解析后的那个）—— "这些数据该问哪台服务器"的唯一判据。
+   *
+   * ⚠️ 用它而不是账号判断"换服务器了"：① 没登录时【我的】也要重读（它不依赖登录）；
+   * ② 两台服务器上都有账号时，账号对象看起来可能差不多，地址才是可靠信号。
+   */
+  const activeServer = state?.serverUrl ?? ''
+  /**
    * 能否用「可指导」视图。
    *
    * 由**服务器给的角色**决定（`MENTOR`；`ADMIN` 一并放行，否则管理员无法自查这一页）。
@@ -3704,9 +3711,35 @@ function CommunityTab({
     setMineRegistry(value.registry ?? null)
   }, [post])
 
+  /**
+   * **换服务器 → 以服务器为准的数据全部重读**（2026-09 用户报的问题）。
+   *
+   * 【我的】/【可指导】/【指导中】的内容都有一半来自服务器（"已在网络中"的发布状态、
+   * 公开研究工作、指导提案）。这些 effect 早先只在挂载时跑一次，于是切到另一台服务器后
+   * 界面还显示上一台的数据 —— 用户看到的和实际连的**不是同一台服务器**。
+   *
+   * 依赖里放**生效地址**：宿主一旦把归一后的新地址写回来，这里就重读。
+   */
   React.useEffect(() => {
+    if (!activeServer) return
+    // 【我的】不依赖登录（本机项目 + 服务器给的"已在网络中"），所以不按 configured 拦
     void loadMine()
-  }, [loadMine])
+  }, [activeServer, loadMine])
+
+  /**
+   * 【指导中】：服务器上的指导提案。
+   *
+   * 未登录时**清空**而不是留着 —— 那些提案属于上一台服务器，留着就是"显示别的服务器的
+   * 数据"。也不调 `loadProposals`（它会因为 not-configured 报错，把"没登录"渲染成故障）。
+   */
+  React.useEffect(() => {
+    if (!activeServer || !configured) {
+      setProposals(null)
+      setProposalsError(null)
+      return
+    }
+    void loadProposals()
+  }, [activeServer, configured, loadProposals])
 
   /**
    * 点「寻找指导」/「更新」：**先取上传计划**，再决定是直接更新还是弹对话框。
@@ -3796,7 +3829,9 @@ function CommunityTab({
   }
 
   React.useEffect(() => {
-    if (!account) {
+    // ⚠️ 依赖里有**生效地址**：换服务器后【可指导】必须重读，否则显示的是上一台的列表。
+    // 未登录 / 没换到新地址时清空（不能把上一台的条目当成本机的）。
+    if (!activeServer || !account) {
       setWorks(null)
       setWorksError(null)
       setOpen(null)
@@ -3804,7 +3839,7 @@ function CommunityTab({
       return
     }
     void loadWorks()
-  }, [account, loadWorks])
+  }, [account, activeServer, loadWorks])
 
   /** 展开 / 收起一项研究工作的摘要（免费）。 */
   const toggleSummary = async (w: HostWork): Promise<void> => {

@@ -69,7 +69,7 @@ import {
   type ConvFusionEnvironment,
 } from './server-env.js'
 
-export { serverUrlPresets, serverSlotOf } from './server-env.js'
+export { serverUrlPresets, serverSlotOf, serverAddressKey } from './server-env.js'
 
 /** 设置里没配 OpenAlex Key 时回退的环境变量名。 */
 export const OPENALEX_API_KEY_ENV = 'OPENALEX_API_KEY'

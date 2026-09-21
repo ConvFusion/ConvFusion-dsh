@@ -82,6 +82,7 @@ import {
   defaultServerUrl,
   serverUrlPresets,
   serverSlotOf,
+  serverAddressKey,
 } from './config.js'
 import { HOST_PROTOCOL, HOST_PROTOCOL_FIELD } from './protocol.js'
 import type { SkillCustomizationStore } from './research/skill-customization.js'
@@ -1025,9 +1026,22 @@ export function createSettingsRpcHandler(
     apiKey: string | null,
     base: string,
   ): Promise<LocalWorkItem[]> => {
-    if (!apiKey) return items
-    const targets = items.filter((it) => it.published && it.published.serverUrl === base)
-    if (targets.length === 0) return items
+    /*
+     * ① 先按**当前服务器**归位，这一步**与有没有凭据无关**。
+     *
+     * ⚠️ 早先的写法是"没凭据就直接原样返回"，于是切到另一台服务器（那里还没登录）时，
+     * 【我的】仍然带着**上一台服务器**的发布记录 —— 界面显示"已在网络中"，
+     * 而当前这台服务器上其实什么都没有。用户看到的和服务实际连的不是同一台。
+     */
+    const baseKey = serverAddressKey(base)
+    const scoped = items.map((it) =>
+      !it.published || serverAddressKey(it.published.serverUrl) === baseKey
+        ? it
+        : { ...it, published: null },
+    )
+    if (!apiKey) return scoped
+    const targets = scoped.filter((it) => it.published)
+    if (targets.length === 0) return scoped
     const checkedAt = new Date().toISOString()
     const checks = await Promise.all(
       targets.map(async (it) => {
@@ -1055,13 +1069,29 @@ export function createSettingsRpcHandler(
       if (c.gone) publishedStore.remove(c.root)
       else publishedStore.set(c.root, { ...record, serverVisibility: c.visibility!, checkedAt })
     }
-    return items.map((it) => {
+    return scoped.map((it) => {
       const c = byId.get(it.id)
       if (!c) return it
       if (c.gone) return { ...it, published: null }
       if (c.visibility && c.visibility !== 'PUBLISHED') return { ...it, published: null }
       return it
     })
+  }
+
+  /**
+   * 读**当前服务器**的发布记录（服务器不匹配就等于"没发布过"）。
+   *
+   * ⚠️ 发布记录是**绑定在服务器上**的（`record.serverUrl`）。同一个工作区在两台服务器上
+   * 都发布过时，拿另一台的记录去做"增量上传"会**漏传** —— `previousFiles[relPath]` 里那些
+   * 指纹是在**另一台**上传出来的，新服务器上根本没有这些附件，但比对结果是"没变化"，
+   * 于是被跳过。界面上的"已在网络中"同样会是假的。
+   *
+   * 地址比较走 `serverAddressKey`：配置文件里可能带末尾斜杠，字符串直接比会错判成两台。
+   */
+  const recordOn = (root: string, base: string): PublishedRecord | undefined => {
+    const record = publishedStore.get(root)
+    if (!record) return undefined
+    return serverAddressKey(record.serverUrl) === serverAddressKey(base) ? record : undefined
   }
 
   /**
@@ -1479,7 +1509,9 @@ export function createSettingsRpcHandler(
           const source = listed.sources.get(id)
           if (!source) return fail('not-found', '找不到这个本机研究项目（或其研究状态读不出来）。')
           const plan: UploadPlan = buildUploadPlan(source.root)
-          const record = publishedStore.get(source.root)
+          // ⚠️ 只认**当前服务器**的记录：别的服务器的"已上传指纹"在这里不成立（会漏传）
+          const base = resolveServerUrl(deps.getConfig(), env()).url
+          const record = recordOn(source.root, base)
           // 记住的选择 ∪ 规则推荐（新文件自动并入，否则新增证据会静默漏传）
           const remembered = record?.selection ?? null
           const recommended = plan.categories
@@ -1545,7 +1577,8 @@ export function createSettingsRpcHandler(
               progress: source.progress,
               generatedAt: new Date().toISOString(),
             })
-            const previous = publishedStore.get(source.root)
+            // ⚠️ 同上：另一台服务器的记录不能当"上次传过"用（增量上传会漏文件）
+            const previous = recordOn(source.root, base)
             // 只有同一台服务器 + 同一个账号才重用项目；否则新建
             // （服务器 GET /projects/{id} 是 owner-only，重用别人的 id 只会 404）
             const reusable = previous && previous.serverUrl === base && previous.accountId === me.id

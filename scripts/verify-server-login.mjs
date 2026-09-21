@@ -2298,8 +2298,63 @@ section('[6h] 「已在网络中」以服务器为准')
       [fs.realpathSync(root)]: seededRecord({ serverUrl: PROD_URL }),
     })
     const server2 = makeServer6({ project: 'PUBLISHED' })
-    await makeHost6(server2, other)('work/mine', {})
+    const swapped = await makeHost6(server2, other)('work/mine', {})
     assertEq(server2.calls.length, 0, '记录属于别的服务器 → 不去当前服务器上核对')
+    /*
+     * ⚠️ **用户报的问题**：切到另一台服务器后，【我的】还带着上一台的「已在网络中」。
+     * 记录属于别的服务器 = 在**当前**这台服务器上根本没发布过 —— 必须显示成未发布，
+     * 否则用户看到的和服务实际连的不是同一台。
+     */
+    assertEq(
+      swapped.value.items[0].published,
+      null,
+      '记录属于别的服务器 → 这里**不算**「已在网络中」（换服务器后状态要跟着换）',
+    )
+  }
+
+  // ── 换服务器后的**增量上传**：别的服务器的指纹不能当"已传过"（会漏传）──
+  {
+    const { createHash } = await import('node:crypto')
+    const OTHER = 'http://localhost:9000'
+    // 故意造一个"内容确实没变"的场景：指纹就是当前文件的**真实**指纹。
+    // 若代码误用别的服务器的记录，这个文件会被判成"没变化"而跳过上传 ——
+    // 但它在新服务器上根本不存在（漏传）。
+    const realDigest =
+      'sha256:' + createHash('sha256').update(fs.readFileSync(path.join(root, 'project.md'))).digest('hex')
+
+    // ① 当前这台服务器上**没有**记录 → 不能把别的服务器的记录当"上次传过"
+    {
+      const store = PUB.createMemoryPublishedStore({
+        [fs.realpathSync(root)]: seededRecord({
+          serverUrl: OTHER,
+          files: { 'project.md': realDigest },
+          selection: ['project.md'],
+        }),
+      })
+      const plan = await makeHost6(makeServer6({}), store, { withKey: false })('work/uploadPlan', {
+        id: 'ws-v',
+      })
+      assert(plan.ok, 'work/uploadPlan 可用')
+      assertEq(plan.value.remembered, false, '别的服务器的记录不算"记住的选择"')
+      assert(
+        plan.value.changed.includes('project.md'),
+        '内容没变也要算"要上传"（新服务器上并没有这个附件 —— 这就是漏传）',
+      )
+    }
+    // ② 对照：记录属于**当前**这台服务器时，它才该被当作"上次传过"
+    {
+      const store = PUB.createMemoryPublishedStore({
+        [fs.realpathSync(root)]: seededRecord({
+          files: { 'project.md': realDigest },
+          selection: ['project.md'],
+        }),
+      })
+      const plan = await makeHost6(makeServer6({}), store, { withKey: false })('work/uploadPlan', {
+        id: 'ws-v',
+      })
+      assertEq(plan.value.remembered, true, '同一台服务器的记录才算"记住的选择"')
+      assert(!plan.value.changed.includes('project.md'), '同一台服务器 + 内容未变 → 不必重传')
+    }
   }
 
   // ── 【可指导】列表里出现的项目：命中的本地记录刷新为 PUBLISHED ──
