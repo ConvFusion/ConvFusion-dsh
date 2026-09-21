@@ -2190,6 +2190,100 @@ function AcceptConfirmDialog({
 }
 
 /**
+ * **Token 余额环形图**（SVG，无外部库）。
+ *
+ * 大弧 = 可用（品牌蓝），小弧 = 冻结（灰色）。比例一眼能看懂——
+ * 比三行数字传达信息更快。没有冻结时整圈都是蓝。
+ *
+ * ⚠️ 用 `stroke-dasharray` 控制弧长，这是 SVG 环形图的标准做法（不用 path，简单且
+ * 能在纯 React 里写死）。`transform` 旋转使两段衔接无缝。
+ *
+ * ⚠️ SVG 内部固定 viewBox=160x160（计算简单可靠），用 CSS width/height 控制显示尺寸。
+ * 不要动态改变 viewBox——这会导致渲染异常（弧形断开）。
+ */
+function TokenDonut({
+  available,
+  frozen,
+  total,
+  size = 100,
+}: {
+  available: number
+  frozen: number
+  total: number
+  size?: number
+}): JSX.Element {
+  const r = 64
+  const cx = 80
+  const cy = 80
+  const circumference = 2 * Math.PI * r
+  const availableFrac = total > 0 ? available / total : 1
+  const frozenFrac = total > 0 ? frozen / total : 0
+  const availableDash = circumference * availableFrac
+  const frozenDash = circumference * frozenFrac
+  // ⚠️ 绘制顺序很关键：先画**可用**（大弧，品牌蓝），再画**冻结**（小弧，灰色），
+  // 否则大弧会盖住小弧的末端（两者在 SVG 里共享同一个起点）。
+  const hasFrozen = frozen > 0
+
+  return (
+    <svg width={size} height={size} viewBox="0 0 160 160" aria-hidden="true">
+      {/* 背景轨道（完整圆圈，淡色） */}
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--dsw-alias-bg-layer-2)" strokeWidth={14} />
+      {/* 可用弧段（**品牌蓝** = 主色调，表示"这是你的钱"） */}
+      <circle
+        cx={cx}
+        cy={cy}
+        r={r}
+        fill="none"
+        stroke="var(--dsw-alias-state-business-primary)"
+        strokeWidth={14}
+        strokeLinecap="round"
+        strokeDasharray={`${availableDash} ${circumference}`}
+        strokeDashoffset={0}
+        transform={`rotate(90 ${cx} ${cy})`}
+      />
+      {/* 冻结弧段（灰色 = 次要信息；画在可用之上，保证小弧可见） */}
+      {hasFrozen ? (
+        <circle
+          cx={cx}
+          cy={cy}
+          r={r}
+          fill="none"
+          stroke="var(--dsw-alias-label-secondary)"
+          strokeWidth={14}
+          strokeLinecap="round"
+          strokeDasharray={`${frozenDash} ${circumference}`}
+          strokeDashoffset={-availableDash}
+          transform={`rotate(90 ${cx} ${cy})`}
+        />
+      ) : null}
+      {/* 中间：总额 */}
+      <text
+        x={cx}
+        y={cy - 4}
+        textAnchor="middle"
+        dominantBaseline="central"
+        fill="var(--dsw-alias-label-primary)"
+        fontSize="22"
+        fontWeight="700"
+        fontFamily="inherit"
+      >
+        {total}
+      </text>
+      <text
+        x={cx}
+        y={cy + 14}
+        textAnchor="middle"
+        fill="var(--dsw-alias-label-secondary)"
+        fontSize="10"
+        fontFamily="inherit"
+      >
+        Token
+      </text>
+    </svg>
+  )
+}
+
+/**
  * **Token 余额弹窗**（点账号行的余额徽章打开，2026-09 用户要求）。
  *
  * 三件事：① 余额明细（可用 / 冻结 / 合计）；② **续费说明**（目前由管理员发放，
@@ -2249,64 +2343,72 @@ function TokenDialog({
           <RefreshIconButton t={t} busy={loading} onClick={onRefresh} />
         </div>
         <div style={{ ...S.cardBody, gap: 9 }}>
-          {/* ① 余额明细 */}
+          {/* ① 左侧：余额环形图（小尺寸）；右侧：申请表单（并排节省空间） */}
           {tokens ? (
-            <>
-              <div style={S.rowBetween}>
-                <span style={S.hint}>{t('community.token.available')}</span>
-                <span style={S.tokenNum}>{tokens.available}</span>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+              <div style={{ flex: '0 0 auto' }}>
+                <TokenDonut
+                  available={tokens.available}
+                  frozen={tokens.frozen}
+                  total={tokens.total}
+                  size={100}
+                />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 4, background: 'var(--dsw-alias-state-business-primary)' }} />
+                    <span style={{ ...S.hint, fontSize: 11 }}>{t('community.token.available')}</span>
+                  </div>
+                  {tokens.frozen > 0 ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 4, background: 'var(--dsw-alias-label-secondary)' }} />
+                      <span style={{ ...S.hint, fontSize: 11 }}>{t('community.token.frozen')}</span>
+                    </div>
+                  ) : null}
+                </div>
               </div>
-              <div style={S.rowBetween}>
-                <span style={S.hint}>{t('community.token.frozen')}</span>
-                <span style={S.tokenNum}>{tokens.frozen}</span>
+              <div style={{ flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {/* ③ 已有待处理的申请 → 不给表单（防重复；服务器不幂等） */}
+                {pending ? (
+                  <div style={{ ...S.hint, color: 'var(--dsw-alias-state-business-primary)' }}>
+                    {t('community.token.pendingLine', { amount: pending.amount })}
+                  </div>
+                ) : (
+                  <>
+                    <div style={S.inlineRow}>
+                      <span style={S.label}>{t('community.token.amountLabel')}</span>
+                      <input
+                        style={S.compactInput}
+                        type="text"
+                        inputMode="numeric"
+                        spellCheck={false}
+                        autoComplete="off"
+                        value={amount}
+                        placeholder={t('community.token.amountPlaceholder')}
+                        onChange={(e) => onAmount(e.target.value)}
+                      />
+                    </div>
+                    <div style={S.inlineRow}>
+                      <span style={S.label}>{t('community.token.reasonLabel')}</span>
+                      <input
+                        style={S.compactInput}
+                        type="text"
+                        spellCheck={false}
+                        autoComplete="off"
+                        maxLength={500}
+                        value={reason}
+                        placeholder={t('community.token.reasonPlaceholder')}
+                        onChange={(e) => onReason(e.target.value)}
+                      />
+                    </div>
+                  </>
+                )}
               </div>
-              <div style={S.rowBetween}>
-                <span style={S.hint}>{t('community.token.total')}</span>
-                <span style={{ ...S.tokenNum, fontWeight: 700 }}>{tokens.total}</span>
-              </div>
-            </>
+            </div>
           ) : (
             <div style={S.hint}>{t('community.briefConfirm.balanceUnknown')}</div>
           )}
-
           {/* ② 续费说明：只在弹窗里出现（§6.2 文案原则：不常驻在账号行） */}
           <div style={S.hint}>{t('community.token.renewHint')}</div>
-
-          {/* ③ 已有待处理的申请 → 不给表单（防重复；服务器不幂等） */}
-          {pending ? (
-            <div style={{ ...S.hint, color: 'var(--dsw-alias-state-business-primary)' }}>
-              {t('community.token.pendingLine', { amount: pending.amount })}
-            </div>
-          ) : (
-            <>
-              <div style={S.inlineRow}>
-                <span style={S.label}>{t('community.token.amountLabel')}</span>
-                <input
-                  style={S.compactInput}
-                  type="text"
-                  inputMode="numeric"
-                  spellCheck={false}
-                  autoComplete="off"
-                  value={amount}
-                  placeholder={t('community.token.amountPlaceholder')}
-                  onChange={(e) => onAmount(e.target.value)}
-                />
-              </div>
-              <div style={S.inlineRow}>
-                <span style={S.label}>{t('community.token.reasonLabel')}</span>
-                <input
-                  style={S.compactInput}
-                  type="text"
-                  spellCheck={false}
-                  autoComplete="off"
-                  maxLength={500}
-                  value={reason}
-                  placeholder={t('community.token.reasonPlaceholder')}
-                  onChange={(e) => onReason(e.target.value)}
-                />
-              </div>
-            </>
-          )}
 
           {/* 失败原因 / 成功回执：都在**动作发生之后**才出现 */}
           {error ? (

@@ -815,9 +815,9 @@ console.log('\n[1j] Token 余额弹窗 + 申请续费')
     '点余额徽章打开弹窗',
   )
   assert(/const openTokenDialog = \(\): void => \{/.test(src), '有打开动作')
-  // ② 弹窗内容：余额明细（可用 / 冻结 / 合计）+ 续费说明
-  for (const k of ['community.token.available', 'community.token.frozen', 'community.token.total']) {
-    assert(src.includes(`t('${k}')`), `弹窗显示 ${k}`)
+  // ② 弹窗内容：环形图 + 图例（可用 / 冻结）+ 续费说明（合计在环形图中心显示）
+  for (const k of ['community.token.available', 'community.token.frozen']) {
+    assert(src.includes(`t('${k}')`), `图例显示 ${k}`)
   }
   assert(/t\('community\.token\.renewHint'\)/.test(src), '弹窗里有续费说明（只在这里出现，不常驻账号行）')
   // ③ 申请：走宿主 account/recharge-request；数量必填（服务器 amount 是 gt=0 必填）
@@ -837,7 +837,13 @@ console.log('\n[1j] Token 余额弹窗 + 申请续费')
   // ⑥ 客户端不写死服务器地址
   assert(!/convfusion\.com|localhost/.test(src), '客户端不写死服务器域名')
 
-  // ⑦ 宿主侧：两个端点 + 解析 + 校验
+  // ⑦ 余额环形图（SVG，无外部图表库）：一眼看清可用 vs 冻结的比例
+  assert(src.includes('function TokenDonut('), '有余额环形图组件')
+  assert(/<svg width=\{size\} height=\{size\}/.test(src), '环形图使用动态尺寸')
+  assert(/strokeDasharray=\{/.test(src), '用 strokeDasharray 控制弧长（React JSX 属性名）')
+  assert(/strokeLinecap="round"/.test(src), '弧段末端是圆头（美观）')
+
+  // ⑧ 宿主侧：两个端点 + 解析 + 校验
   assert(/case 'account\/recharge-request': \{/.test(hostRpc), '宿主有 account/recharge-request')
   assert(/case 'account\/recharge-requests': \{/.test(hostRpc), '宿主有 account/recharge-requests')
   assert(/submitRechargeRequest\(/.test(hostRpc), '宿主调用提交函数')
