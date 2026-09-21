@@ -155,6 +155,8 @@ export declare const zh: {
     'community.action.loading': string;
     'community.action.refresh': string;
     'community.action.retry': string;
+    'community.action.saveAddress': string;
+    'community.action.saving': string;
     'community.action.retryVerify': string;
     'community.action.signIn': string;
     'community.action.signingIn': string;

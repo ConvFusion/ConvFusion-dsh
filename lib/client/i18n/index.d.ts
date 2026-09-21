@@ -160,6 +160,8 @@ export declare const dictionaries: {
         'community.action.loading': string;
         'community.action.refresh': string;
         'community.action.retry': string;
+        'community.action.saveAddress': string;
+        'community.action.saving': string;
         'community.action.retryVerify': string;
         'community.action.signIn': string;
         'community.action.signingIn': string;
@@ -656,7 +658,7 @@ export declare const dictionaries: {
         readonly 'community.badge.registryUnavailable': "Registry unavailable";
         readonly 'community.badge.mentorRequired': "Mentor role required";
         readonly 'community.badge.signInRequired': "Sign-in required";
-        readonly 'community.badge.addressChanged': "Address changed";
+        readonly 'community.badge.addressChanged': "Address not saved";
         readonly 'community.action.summary': "Overview";
         readonly 'community.action.collapse': "Collapse";
         readonly 'community.action.brief': "Details";
@@ -665,6 +667,8 @@ export declare const dictionaries: {
         readonly 'community.action.loading': "Loading…";
         readonly 'community.action.refresh': "Refresh";
         readonly 'community.action.retry': "Retry";
+        readonly 'community.action.saveAddress': "Save";
+        readonly 'community.action.saving': "Saving...";
         readonly 'community.action.retryVerify': "Retry verification";
         readonly 'community.action.signIn': "Sign in";
         readonly 'community.action.signingIn': "Signing in…";
@@ -776,7 +780,7 @@ export declare const dictionaries: {
         readonly 'community.detail.keyEvidence': "Key evidence";
         readonly 'community.detail.openProblems': "Open problems";
         readonly 'community.hint.inviteRule': "The email must match the one the invitation was issued to; the API key issued on registration is stored on this machine automatically.";
-        readonly 'community.hint.addressChanged': "Using the new address requires signing in again (the credential is bound to the server).";
+        readonly 'community.hint.addressChanged': "Saving signs in again on the new server.";
         readonly 'community.hint.mismatchProduction': "This is the production environment but the address points at localhost — you are most likely connected to a development server on this machine.";
         readonly 'community.hint.mismatchDevelopment': "This is the development environment but the address points at the live server — acting on live data from a development machine is risky; please confirm this is intended.";
         readonly 'community.hint.sampleFootnote': "Sample data; sign in to browse and act on research work from the network.";

@@ -3919,12 +3919,14 @@ function CommunityTab({
   /** 服务器地址（留空 = 用宿主当前的地址）。 */
   const serverUrl = serverDraft.trim() || state?.serverUrl || undefined
   /**
-   * 地址是否被用户改过（且已登录）。
+   * 地址是否**还没保存**（草稿 ≠ 已生效地址）。
    *
-   * 只在**真的改了**的时候才提示"需要重新登录" —— 这是业务发生时的提示，
-   * 不是常驻说明（2026-09 用户要求：设置页不要总是堆说明文字）。
+   * ⚠️ 不要求"已登录"：地址是**登录前**就要能改的（换到试用服务器再登录是常见顺序），
+   * 早期版本把它绑在 `account` 上，未登录时连【保存】都不出现 —— 于是地址永远存不下来。
+   *
+   * 只在**真的改了**的时候才出现这一行（业务发生时提示），不做常驻说明。
    */
-  const serverChanged = Boolean(account) && Boolean(serverDraft.trim()) && serverDraft.trim() !== (state?.serverUrl ?? '')
+  const serverChanged = serverDraft.trim() !== (state?.serverUrl ?? '')
   /**
    * 快捷按钮要比对的"当前地址"：**去掉末尾斜杠**再比（宿主给的生效地址是归一过的，
    * 而配置文件里的预设可能带末尾斜杠）。留空 = 跟随环境配置 → 用生效地址。
@@ -3932,7 +3934,12 @@ function CommunityTab({
   const activeServerUrl = stripSlash(serverDraft.trim() || state?.serverUrl || '')
 
   /**
-   * 点快捷按钮 = **换地址 + 立刻测一次连通性**（2026-09 用户要求）。
+   * 点快捷按钮 = **填地址 + 测一次连通性**（2026-09 用户要求）。
+   *
+   * ⚠️ 这里**不落盘**：填进去的只是草稿，要点【保存】才写进配置（并立刻登录一次）。
+   * 曾经的 bug 是"按钮看起来保存了、刷新却打回原地址"——根因是当时的代码
+   * 只 `setServerDraft` 而没有落盘入口。现在落盘集中在一个显式动作上，
+   * 未保存的状态也由界面明确标出。
    *
    * 测的是**按钮自己那个地址**，不是输入框里的内容：用户点的就是这一边，中间不该有
    * "他改过输入框"这种歧义。探测走宿主的 `account/probe`（匿名 `/health`）——
@@ -3954,6 +3961,30 @@ function CommunityTab({
       ...prev,
       [env]: { state: v.reachable ? 'ok' : 'fail', reason: v.reason },
     }))
+  }
+
+  /**
+   * 【保存】= **落盘地址 + 立刻登录一次**（2026-09 用户要求）。
+   *
+   * 两步都要，缺一不可：
+   *   ① `account/serverUrl` 把地址写进配置 —— 否则刷新就丢（这就是原来的 bug）；
+   *   ② 紧接着 `account/verify` —— 凭据绑定在服务器上，换了服务器原来那份 Key 未必
+   *      成立。与其让用户对着"已登录"的旧状态猜，不如当场验证：通了就是真的通了，
+   *      没通就把服务器的原因显示出来（401 换 Key / 连不上查地址，动作各不相同）。
+   *
+   * 没凭据时只落盘、不发验证请求（`keyConfigured` 为假）——那种情况用户还没登录，
+   * 登录是下一步的事。
+   */
+  const saveServerAddress = async (): Promise<void> => {
+    setBusy(true)
+    // 空串 = 清除覆盖、跟随环境配置（界面清空输入框就是这个意思）
+    const saved = await call('account/serverUrl', { serverUrl: serverDraft.trim() })
+    if (saved) {
+      // 宿主把地址归一了（去掉 /api、末尾斜杠），草稿跟着归一值走，避免"已改"提示误报
+      setServerDraft(saved.serverUrl ?? '')
+      if (saved.keyConfigured) await call('account/verify', {})
+    }
+    setBusy(false)
   }
 
   const login = async (): Promise<void> => {
@@ -4361,11 +4392,19 @@ function CommunityTab({
                   </>
                 ) : null}
               </div>
-              {/* 只在**地址真的改了**（业务发生）时提示后果，不做常驻说明 */}
+              {/* 地址**还没保存**时才出现这一行：说清后果 + 一个明确的保存动作 */}
               {serverChanged ? (
                 <div style={S.inlineRow}>
                   <Badge tone="warn">{t('community.badge.addressChanged')}</Badge>
-                  <span style={S.hint}>{t('community.hint.addressChanged')}</span>
+                  <span style={{ ...S.hint, flex: '1 1 auto' }}>{t('community.hint.addressChanged')}</span>
+                  <button
+                    type="button"
+                    style={{ ...S.primaryBtn, flex: '0 0 auto', opacity: busy ? 0.55 : 1 }}
+                    disabled={busy}
+                    onClick={() => void saveServerAddress()}
+                  >
+                    {busy ? t('community.action.saving') : t('community.action.saveAddress')}
+                  </button>
                 </div>
               ) : null}
               {state?.serverUrlMismatch ? (

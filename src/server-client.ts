@@ -30,6 +30,7 @@
  */
 
 import { defaultServerUrl } from './config.js'
+import { serverAddressKey } from './server-env.js'
 
 /** 服务器 API 前缀（`ConvFusion-server/app/core/config.py` 的 `API_PREFIX`）。 */
 export const SERVER_API_PREFIX = '/api/v1'
@@ -271,7 +272,7 @@ export class ServerError extends Error {
  * http://localhost:8000/docs#/    → http://localhost:8000
  * ```
  *
- * ⚠️ 空地址回落到**当前环境**的默认地址（开发 localhost / 生产 convfusion.com），
+ * ⚠️ 空地址回落到**当前环境**的默认地址（开发 localhost / 生产 convfusion.apibrowser.com:4747），
  * 不是某个写死的地址 —— 见 `server-env.ts`。
  *
  * @throws {ServerError} `bad-url` —— 不是 http(s) 地址，或首尾有空白之外的问题
@@ -288,11 +289,9 @@ export function normalizeBaseUrl(raw: string): string {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new ServerError('bad-url', `服务器地址必须以 http:// 或 https:// 开头：${trimmed}`)
   }
-  // 丢掉文档页/前缀，只留 origin + 真实路径前缀
-  let path = url.pathname.replace(/\/+$/, '')
-  path = path.replace(/\/api\/v1$/, '').replace(/\/api$/, '').replace(/\/docs$/, '')
-  path = path.replace(/\/+$/, '')
-  return `${url.origin}${path}`
+  // 归一规则（丢文档页/前缀）集中在 `serverAddressKey` —— 配置解析（判断"当前地址是
+  // 哪个预设"）也要用同一套，否则同一个服务器在两处会算出不同字符串，凭据就发错地方了。
+  return serverAddressKey(trimmed)
 }
 
 function apiBase(base: string): string {

@@ -150,7 +150,7 @@ export const en = {
   'community.badge.registryUnavailable': 'Registry unavailable',
   'community.badge.mentorRequired': 'Mentor role required',
   'community.badge.signInRequired': 'Sign-in required',
-  'community.badge.addressChanged': 'Address changed',
+  'community.badge.addressChanged': 'Address not saved',
   // Two disclosure levels, named for what the reader is doing:
   //   Overview = topic + work note, free, to judge relevance;
   //   Details  = motivation / core idea / hypothesis / method / evidence / open problems, 1 Token.
@@ -163,6 +163,8 @@ export const en = {
   'community.action.loading': 'Loading…',
   'community.action.refresh': 'Refresh',
   'community.action.retry': 'Retry',
+  'community.action.saveAddress': 'Save',
+  'community.action.saving': 'Saving...',
   'community.action.retryVerify': 'Retry verification',
   'community.action.signIn': 'Sign in',
   'community.action.signingIn': 'Signing in…',
@@ -284,7 +286,7 @@ export const en = {
   'community.detail.keyEvidence': 'Key evidence',
   'community.detail.openProblems': 'Open problems',
   'community.hint.inviteRule': 'The email must match the one the invitation was issued to; the API key issued on registration is stored on this machine automatically.',
-  'community.hint.addressChanged': 'Using the new address requires signing in again (the credential is bound to the server).',
+  'community.hint.addressChanged': 'Saving signs in again on the new server.',
   'community.hint.mismatchProduction': 'This is the production environment but the address points at localhost — you are most likely connected to a development server on this machine.',
   'community.hint.mismatchDevelopment': 'This is the development environment but the address points at the live server — acting on live data from a development machine is risky; please confirm this is intended.',
   'community.hint.sampleFootnote': 'Sample data; sign in to browse and act on research work from the network.',

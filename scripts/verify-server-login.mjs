@@ -31,6 +31,13 @@ const ENVCFG = await import(lib('server-env.js'))
 const CUST = await import(lib('research/skill-customization.js'))
 
 /**
+ * 当前生产（ConvFusion.com）地址 —— **试运行期**指向 apibrowser 中转，正式域名
+ * `convfusion.com` 尚未启用。全脚本只此一处；切回正式域名时改这里
+ * （以及 `src/server-env.ts` 的内置兜底与两个 `convfusion.env*.json`）。
+ */
+const PROD_URL = 'https://convfusion.apibrowser.com:4747'
+
+/**
  * 测试用的"环境"。
  *
  * ⚠️ 必须显式钉住环境名：本机可能装了 `convfusion.env.json`（甚至有人 shell 里设了
@@ -184,7 +191,7 @@ section('[1] 地址与凭据归一')
     ['http://localhost:8000/api', 'http://localhost:8000'],
     ['http://localhost:8000/api/v1', 'http://localhost:8000'],
     ['http://localhost:8000/docs#/', 'http://localhost:8000'],
-    ['  https://convfusion.com/  ', 'https://convfusion.com'],
+    ['  ' + PROD_URL + '/  ', PROD_URL],
     ['http://127.0.0.1:8123', 'http://127.0.0.1:8123'],
   ]
   for (const [input, want] of cases) {
@@ -217,7 +224,7 @@ section('[1] 地址与凭据归一')
  * 1b. 环境配置：开发 / 生产的分岔**不写在代码里**
  *
  * 这是 2026-09 用户明确要求的一条：脚本里不许有机器路径与写死的服务器地址，
- * 开发（`http://localhost:8000`）与部署（`https://convfusion.com`）必须由**配置文件**
+ * 开发（`http://localhost:8000`）与部署（`https://convfusion.apibrowser.com:4747`）必须由**配置文件**
  * 按环境给出。这一节把那条规则钉成断言。
  * ════════════════════════════════════════════════════════════════════════ */
 section('[1b] 环境配置（开发 vs 生产）')
@@ -250,12 +257,12 @@ section('[1b] 环境配置（开发 vs 生产）')
   assertEq(urlOf({ ...noFile }).source, 'builtin', '来源标记为内置兜底')
   assertEq(
     urlOf({ ...noFile, CONVFUSION_ENV: 'production' }).url,
-    'https://convfusion.com',
-    '无配置文件 + 生产 → convfusion.com',
+    PROD_URL,
+    '无配置文件 + 生产 → 试运行服务器',
   )
   assertEq(
     urlOf({ ...noFile, NODE_ENV: 'production' }).url,
-    'https://convfusion.com',
+    PROD_URL,
     'env 里只设 NODE_ENV=production 也能选对生产地址',
   )
 
@@ -325,8 +332,8 @@ section('[1b] 环境配置（开发 vs 生产）')
 
   // ── 地址与环境的矛盾检测（这是"开发/生产搞混"的可见信号）──
   assertEq(ENVCFG.serverUrlMismatch('production', 'http://localhost:8000'), true, '生产 + 本机地址 = 矛盾')
-  assertEq(ENVCFG.serverUrlMismatch('production', 'https://convfusion.com'), false, '生产 + 线上地址 = 正常')
-  assertEq(ENVCFG.serverUrlMismatch('development', 'https://convfusion.com'), true, '开发 + 线上地址 = 矛盾')
+  assertEq(ENVCFG.serverUrlMismatch('production', PROD_URL), false, '生产 + 线上地址 = 正常')
+  assertEq(ENVCFG.serverUrlMismatch('development', PROD_URL), true, '开发 + 线上地址 = 矛盾')
   assertEq(ENVCFG.serverUrlMismatch('development', 'http://127.0.0.1:8123'), false, '开发 + 本机地址 = 正常')
 
   // ── serverUrl 的完整优先级：设置 > 环境变量 > 配置文件 > 内置 ──
@@ -409,7 +416,7 @@ section('[2b] serverPresets + account/probe（快捷按钮：换地址 + 测连�
   // ① 两个环境的地址：无配置文件 → 内置兜底；有配置文件 → 以文件为准
   const noFile = ENVCFG.serverUrlPresets(withEnv({ CONVFUSION_ENV_FILE: '-' }))
   assertEq(noFile.development, 'http://localhost:8000', '开发兜底地址')
-  assertEq(noFile.production, 'https://convfusion.com', '线上兜底地址')
+  assertEq(noFile.production, PROD_URL, '线上兜底地址（试运行服务器）')
   assertEq(
     ENVCFG.serverUrlPresets(withEnv({ CONVFUSION_SERVER_URL: 'http://x:1' })).development,
     'http://localhost:8000',
@@ -462,6 +469,172 @@ section('[2b] serverPresets + account/probe（快捷按钮：换地址 + 测连�
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+ * 2c. account/serverUrl：保存服务器地址（2026-09 用户报的 bug）
+ *
+ * **真实故障**：点【互联网服务器】按钮 → 地址看着变了 → 刷新又回到 `localhost`。
+ * 根因是地址只在**登录 / 注册**时才落盘，别的路径只改了输入框草稿。
+ * 这一节钉住"保存地址"这个独立动作：真的落盘、归一、可清空、非法拒绝、不动凭据。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[2c] account/serverUrl：保存地址（刷新后不再丢）')
+{
+  const TRIAL = 'https://convfusion.apibrowser.com:4747'
+
+  // ① 没配置文件 → 生效地址是开发兜底；保存后要变成新地址**并且真的落盘**
+  const h = makeHost({ lagging: false })
+  assertEq((await h.handler('account/state', {})).value.serverUrl, 'http://localhost:8000', '保存前 = 开发兜底')
+  const saved = await h.handler('account/serverUrl', { serverUrl: TRIAL })
+  assertEq(saved.ok, true, '保存成功')
+  assertEq(saved.value.serverUrl, TRIAL, '返回值里生效地址已更新')
+  assertEq(saved.value.serverUrlSource, 'settings', '来源变成设置文档（不再跟随环境配置）')
+  assertEq(h.writes.length, 1, '只写一次配置')
+  assertEq(h.writes[0].serverUrl, TRIAL, '写进配置的就是这个地址')
+  // ⚠️ 这一条就是那个 bug：重新读状态（= 刷新页面）必须还是新地址
+  assertEq((await h.handler('account/state', {})).value.serverUrl, TRIAL, '**刷新后地址不丢**（bug 回归锁）')
+  assertEq(h.calls.length, 0, '保存是**本地动作**，不发任何网络请求')
+
+  // ② 归一：用户可能粘贴带 /api、/docs 或末尾斜杠的地址
+  for (const [raw, want] of [
+    ['  ' + TRIAL + '/api/v1  ', TRIAL],
+    [TRIAL + '/', TRIAL],
+    [TRIAL + '/docs#/', TRIAL],
+  ]) {
+    const n = makeHost({ lagging: false })
+    const r = await n.handler('account/serverUrl', { serverUrl: raw })
+    assertEq(r.value.serverUrl, want, `归一 ${JSON.stringify(raw)}`)
+  }
+
+  // ③ 空串 = 清除覆盖 → 回到"跟随环境配置"（界面清空输入框的语义）
+  const cleared = makeHost({ config: { serverUrl: TRIAL }, lagging: false })
+  assertEq((await cleared.handler('account/state', {})).value.serverUrl, TRIAL, '预设：已保存的地址生效')
+  const c = await cleared.handler('account/serverUrl', { serverUrl: '  ' })
+  assertEq(c.ok, true, '清空被接受（= 跟随环境配置，不是错误）')
+  assertEq(c.value.serverUrl, 'http://localhost:8000', '清空后回到环境配置的地址')
+  assertEq(c.value.serverUrlSource, 'config', '来源回到配置文件')
+  assertEq(cleared.writes[0].serverUrl, '', '落盘的是空串（不是把地址写成 null）')
+
+  // ④ 非法地址 → bad-url，且**不写盘**（坏地址不该覆盖好地址）
+  const b = makeHost({ config: { serverUrl: TRIAL }, lagging: false })
+  const br = await b.handler('account/serverUrl', { serverUrl: 'not a url' })
+  assertEq(br.ok, false, '非法地址 → 失败')
+  assertEq(br.error?.code, 'bad-url', '错误码 bad-url')
+  assertEq(b.writes.length, 0, '非法地址不写盘（不破坏已有配置）')
+  assertEq((await b.handler('account/state', {})).value.serverUrl, TRIAL, '原地址仍然生效')
+
+  // ⑤ 只改地址、**不动凭据**（清掉 Key 是破坏性的：用户切回去还要重新输入）
+  const keep = makeHost({ config: { convfusionApiKey: KEY, serverUrl: 'http://localhost:8000' }, lagging: false })
+  const kr = await keep.handler('account/serverUrl', { serverUrl: TRIAL })
+  // ⚠️ 关键语义：那份 Key 属于**开发服务器**，切到线上后它不成立 —— 必须报 false。
+  // 报 true 的话界面会拿它去线上验证，用户看到的就是那句莫名其妙的「API Key 无效」。
+  assertEq(kr.value.keyConfigured, false, '开发 Key 不算线上服务器的凭据（否则会拿它去线上验证）')
+  assertEq(keep.writes[0].convfusionApiKey, undefined, '写入的补丁里没有 apiKey 字段（不会顺手改凭据）')
+  assertEq(keep.writes[0].convfusionDevApiKey, undefined, '也没动开发槽（改地址与改凭据是两件事）')
+  assertEq(JSON.parse(JSON.stringify(kr.value)).convfusionApiKey, undefined, '返回值里没有明文 Key')
+  keyLeak(kr.value, 'account/serverUrl')
+  // 不猜身份：换服务器后 account 为 null，由界面紧接着 verify 去实打实验
+  assertEq(kr.value.account, null, '保存地址后不猜"已登录"（account=null，等 verify）')
+  // 凭据**没有被删**：切回开发服务器，它照样生效（这就是"两把 Key"的意义）
+  await keep.handler('account/serverUrl', { serverUrl: 'http://localhost:8000' })
+  const back = await keep.handler('account/state', {})
+  assertEq(back.value.keyConfigured, true, '切回开发服务器后原凭据立即恢复可用')
+  assertEq(back.value.serverUrlSource, 'settings', '地址仍是显式保存的那个')
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 2d. 凭据按服务器分槽（2026-09 用户报的 bug 的根治）
+ *
+ * **真实现场**：用户在开发服务器上登录着，点了【互联网服务器】→【保存】，界面立刻弹
+ * 「invalid-key：API Key 无效或不存在，请核对后重试」。话没说错，但方向全错 —— 那份 Key
+ * 属于开发服务器，**本来就不该被发到线上**。凭据是绑定在服务器上的，配置里却只有一份。
+ *
+ * 修法：两个槽（`convfusionDevApiKey` / `convfusionProdApiKey`），按地址取用。
+ * 这一节钉住整条链路：不在错的服务器上用错的 Key、切回去凭据还在、登出只清当前槽、
+ * 四个 secret 字段一个都不能漏出浏览器。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[2d] 凭据按服务器分槽（切服务器不再发错 Key）')
+{
+  const DEV = 'http://localhost:8000'
+  const DEV_KEY = 'cf_live_devkey0001'
+  const PROD_KEY = 'cf_live_prodkey0002'
+
+  const stateOf = async (h) => (await h.handler('account/state', {})).value
+  const hostWith = (config) => makeHost({ config, lagging: false })
+
+  // ① 开发地址只认开发槽 —— 线上槽的 Key 在这台服务器上不算数
+  const devOnly = hostWith({ convfusionProdApiKey: PROD_KEY, serverUrl: DEV })
+  assertEq((await stateOf(devOnly)).keyConfigured, false, '只有线上 Key → 开发地址上不算已配置')
+  const devKey = hostWith({ convfusionDevApiKey: DEV_KEY, serverUrl: DEV })
+  assertEq((await stateOf(devKey)).keyConfigured, true, '开发 Key → 开发地址上算已配置')
+
+  // ② 换到线上：开发 Key **不算**线上凭据（否则就会把它发给线上）
+  const switched = hostWith({ convfusionDevApiKey: DEV_KEY, serverUrl: DEV })
+  await switched.handler('account/serverUrl', { serverUrl: PROD_URL })
+  const onProd = await stateOf(switched)
+  assertEq(onProd.keyConfigured, false, '切到线上后**不**把开发 Key 当线上凭据（bug 的直接回归锁）')
+  // 界面据此跳过 verify —— 这才是"不再弹 invalid-key"的机制
+  const verifyOnProd = await switched.handler('account/verify', {})
+  assertEq(verifyOnProd.ok, false, '没有线上凭据时 verify 直接失败')
+  assertEq(verifyOnProd.error?.code, 'not-configured', '失败原因是"未配置"（**不是** invalid-key）')
+  assertEq(switched.calls.length, 0, '并且一个请求都没发（开发 Key 没被白送到线上）')
+
+  // ③ 在线上登录 → 写线上槽，旧单值字段并入开发槽（两份凭据都保住）
+  const both = hostWith({ convfusionApiKey: DEV_KEY, serverUrl: DEV })
+  const login = await both.handler('account/login', { apiKey: PROD_KEY, serverUrl: PROD_URL })
+  assert(login.ok, '线上登录成功')
+  assertEq(both.writes[0].convfusionProdApiKey, PROD_KEY, 'Key 写进**线上槽**（地址决定槽）')
+  assertEq(both.writes[0].convfusionDevApiKey, DEV_KEY, '旧单值 Key 并入**开发槽**（迁移，不是丢掉）')
+  assertEq(both.writes[0].convfusionApiKey, '', '旧单值字段清空（迁移完成，不再两处并存）')
+  assertEq((await stateOf(both)).keyConfigured, true, '线上地址上有线上凭据')
+
+  // ④ 切回开发 → 开发 Key 立刻恢复（不用重输）
+  await both.handler('account/serverUrl', { serverUrl: DEV })
+  const backDev = await stateOf(both)
+  assertEq(backDev.keyConfigured, true, '切回开发服务器后开发凭据仍在')
+  assertEq(both.config.convfusionProdApiKey, PROD_KEY, '线上凭据没被切回开发时清掉')
+
+  // ⑤ 登出只清**当前服务器**那一槽（另一台服务器的登录态不能顺手抹掉）
+  const outDev = hostWith({ convfusionDevApiKey: DEV_KEY, convfusionProdApiKey: PROD_KEY, serverUrl: DEV })
+  await outDev.handler('account/logout', {})
+  assertEq(outDev.writes[0].convfusionDevApiKey, '', '登出清掉当前（开发）槽')
+  assertEq(outDev.writes[0].convfusionApiKey, '', '开发槽的旧单值字段一并清（否则会"复活"，登出无效）')
+  assertEq(outDev.writes[0].convfusionProdApiKey, undefined, '**不**清线上槽（那是另一台服务器的登录态）')
+  assertEq((await stateOf(outDev)).keyConfigured, false, '登出后当前服务器显示未配置')
+  const outProd = hostWith({ convfusionDevApiKey: DEV_KEY, convfusionProdApiKey: PROD_KEY, serverUrl: PROD_URL })
+  await outProd.handler('account/logout', {})
+  assertEq(outProd.writes[0].convfusionProdApiKey, '', '在线上登出 → 清线上槽')
+  assertEq(outProd.writes[0].convfusionDevApiKey, undefined, '开发槽不动')
+
+  // ⑥ 槽判定：自定义地址按"是不是本机"归类（不能把 localhost:9000 当线上）
+  const ENVCFG2 = await import(lib('server-env.js'))
+  assertEq(ENVCFG2.serverSlotOf(DEV), 'development', '开发预设 → 开发槽')
+  assertEq(ENVCFG2.serverSlotOf(PROD_URL), 'production', '互联网预设 → 互联网槽')
+  assertEq(ENVCFG2.serverSlotOf('http://localhost:9000'), 'development', '换端口的本机地址仍算开发槽')
+  assertEq(ENVCFG2.serverSlotOf('http://127.0.0.1:9000'), 'development', '127.0.0.1 也算本机')
+  assertEq(ENVCFG2.serverSlotOf('https://example.com'), 'production', '任意远程地址算互联网槽')
+  assertEq(ENVCFG2.serverSlotOf(PROD_URL + '/api/v1'), 'production', '带 /api/v1 也能判对（归一后比较）')
+
+  // ⑦ 两个槽都是 secret：一个都不能漏出浏览器
+  const CFGM = await import(lib('config.js'))
+  const redacted = CFGM.redactConfig({
+    ...CFGM.resolveConfig({}),
+    openalexApiKey: 'oa',
+    convfusionApiKey: 'legacy',
+    convfusionDevApiKey: DEV_KEY,
+    convfusionProdApiKey: PROD_KEY,
+  })
+  const redactedJson = JSON.stringify(redacted)
+  for (const [label, secret] of [
+    ['OpenAlex', 'oa'],
+    ['旧单值', 'legacy'],
+    ['开发槽', DEV_KEY],
+    ['线上槽', PROD_KEY],
+  ]) {
+    assert(!redactedJson.includes(secret), `${label} Key 被 redactConfig 剔除（漏一个就是明文回浏览器）`)
+  }
+  assertEq(redacted.convfusionDevApiKey, undefined, 'redactConfig 的返回类型里没有开发槽')
+  assertEq(redacted.convfusionProdApiKey, undefined, 'redactConfig 的返回类型里没有线上槽')
+}
+
+/* ════════════════════════════════════════════════════════════════════════
  * 3. login：成功路径
  * ════════════════════════════════════════════════════════════════════════ */
 section('[3] account/login：成功路径')
@@ -480,7 +653,9 @@ section('[3] account/login：成功路径')
 
   // 落盘：Key 与归一后的地址一起写
   assertEq(h.writes.length, 1, '只写一次设置')
-  assertEq(h.writes[0].convfusionApiKey, KEY, '凭据写入设置（本机）')
+  // localhost 命中开发预设 → 凭据写进**开发槽**（凭据按服务器分槽，见 config.ts）
+  assertEq(h.writes[0].convfusionDevApiKey, KEY, '凭据写入开发槽（本机）')
+  assertEq(h.writes[0].convfusionProdApiKey, undefined, '不碰线上槽（那是另一套账号）')
   assertEq(h.writes[0].serverUrl, 'http://localhost:8000', '服务器地址归一后写入')
 
   // 返回值：有账号、有可用性、**没有**凭据
@@ -628,7 +803,7 @@ section('[5] account/register：邀请码注册')
   assertEq(sent.email, ME.email, '带邮箱')
   assertEq(sent.display_name, 'Res', '带显示名（display_name）')
   assertEq(h.calls[1].headers.authorization, `Bearer ${NEW_KEY}`, '第二次用**新签发的** Key 自检')
-  assertEq(h.writes[0].convfusionApiKey, NEW_KEY, '服务器签发的 Key 直接落盘（用户不必复制一遍）')
+  assertEq(h.writes[0].convfusionDevApiKey, NEW_KEY, '服务器签发的 Key 直接落盘（用户不必复制一遍）')
   assertEq(res.value.account.roles, ['RESEARCHER'], '返回补充后的完整身份（含角色）')
   keyLeak(res.value, 'account/register')
 
@@ -719,7 +894,11 @@ section('[6] account/verify 与 account/logout')
   const out = makeHost({ config: { convfusionApiKey: KEY, serverUrl: 'http://localhost:9000' } })
   const outRes = await out.handler('account/logout', {})
   assert(outRes.ok, '登出成功')
-  assertEq(out.writes[0].convfusionApiKey, '', '凭据被清空')
+  assertEq(out.writes[0].convfusionDevApiKey, '', '凭据被清空（只清当前服务器那一槽）')
+  // 迁移期的旧单值字段也算开发槽凭据，必须一起清 —— 否则它会立刻"复活"，
+  // 用户点了登出却还是登录状态
+  assertEq(out.writes[0].convfusionApiKey, '', '旧单值字段一并清掉（否则登出无效）')
+  assertEq(out.writes[0].convfusionProdApiKey, undefined, '不顺手清掉线上槽的凭据')
   assert(!('serverUrl' in out.writes[0]), '登出**保留**服务器地址（下次登录还要用）')
   assertEq(out.calls.length, 0, '登出不需要联网（服务器无会话）')
   assertEq(outRes.value.keyConfigured, false, '登出后的状态显示未配置')
@@ -894,7 +1073,9 @@ section('[6b] 研究工作：列表 / 摘要 / 简报')
     const otherList = await other.handler('work/list', {})
     assertEq(otherList.value.items[0].briefOpened, false, '换账号不共用"已买过"（否则会静默扣费）')
     const otherServer = makeHost({
-      config: { ...LOGGED_IN, serverUrl: 'https://convfusion.com' },
+      // 「同一账号在另一台服务器」：凭据按服务器分槽，所以这里要给**线上槽**一把 Key，
+      // 只改地址是不够的（开发 Key 在线上不成立 —— 这正是本次修复的语义）
+      config: { ...LOGGED_IN, convfusionProdApiKey: KEY, serverUrl: PROD_URL },
       paidBriefStore: store,
       handler: async (call) =>
         call.url.endsWith('/auth/me') ? { status: 200, body: ME } : { status: 200, body: { items: [ITEM] } },
@@ -2114,7 +2295,7 @@ section('[6h] 「已在网络中」以服务器为准')
     assertEq(server.calls.length, 0, '没有凭据就不联网（离线也不会更慢）')
 
     const other = PUB.createMemoryPublishedStore({
-      [fs.realpathSync(root)]: seededRecord({ serverUrl: 'https://convfusion.com' }),
+      [fs.realpathSync(root)]: seededRecord({ serverUrl: PROD_URL }),
     })
     const server2 = makeServer6({ project: 'PUBLISHED' })
     await makeHost6(server2, other)('work/mine', {})
@@ -2149,7 +2330,27 @@ section('[6h] 「已在网络中」以服务器为准')
  * ════════════════════════════════════════════════════════════════════════ */
 section('[7] 凭据纪律：任何端点的返回值都不含明文 Key')
 {
-  const h = makeHost({ config: { convfusionApiKey: KEY, serverUrl: 'http://localhost:8000' } })
+  // 三份凭据全放上：扫一遍端点，任何一份漏出去都算失败
+  const DEV_KEY = 'cf_live_dev00000000000000000000000000000000000000000000000000000001'
+  const PROD_KEY = 'cf_live_prod0000000000000000000000000000000000000000000000000000002'
+  const leakAny = (found, where) => {
+    const text = JSON.stringify(found ?? null)
+    for (const [label, secret] of [
+      ['旧单值', KEY],
+      ['开发槽', DEV_KEY],
+      ['线上槽', PROD_KEY],
+    ]) {
+      assert(!text.includes(secret), `${where} 不含明文 Key（${label}）`)
+    }
+  }
+  const h = makeHost({
+    config: {
+      convfusionApiKey: KEY,
+      convfusionDevApiKey: DEV_KEY,
+      convfusionProdApiKey: PROD_KEY,
+      serverUrl: 'http://localhost:8000',
+    },
+  })
   const endpoints = [
     ['state', {}],
     ['dependencies/check', {}],
@@ -2157,12 +2358,15 @@ section('[7] 凭据纪律：任何端点的返回值都不含明文 Key')
     ['account/verify', {}],
     ['account/login', { apiKey: KEY }],
     ['account/logout', {}],
+    ['account/serverUrl', { serverUrl: 'http://localhost:8000' }],
     ['customization/save', { skillId: 'literature-search', section: 'Purpose', text: 'x' }],
   ]
   for (const [ep, payload] of endpoints) {
     const res = await h.handler(ep, payload)
-    keyLeak(res, `端点 ${ep} 的响应`)
+    leakAny(res, `端点 ${ep} 的响应`)
   }
+  // ⚠️ 落盘补丁**不在**这个检查范围内：登录时的补丁本来就该带凭据（那是写配置本身，
+  // 去的是本机设置存储，不是浏览器）。"别的服务器的 Key 不能被顺手带走"由 §2c/§2d 单独钉。
   // 失败信封同样不能泄漏（把 Key 放进 message 是最容易犯的错）
   const bad = makeHost({
     handler: async () => ({ status: 401, body: err('UNAUTHORIZED', `bad key ${KEY}`) }),

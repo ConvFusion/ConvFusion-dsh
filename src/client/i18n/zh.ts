@@ -154,7 +154,7 @@ export const zh = {
   'community.badge.registryUnavailable': '注册表不可用',
   'community.badge.mentorRequired': '需要导师角色',
   'community.badge.signInRequired': '需要登录',
-  'community.badge.addressChanged': '地址已改',
+  'community.badge.addressChanged': '地址未保存',
   // 两级披露的界面术语（对齐业务：先免费判断相关性，再付费深入了解）：
   //   概览 = 研究主题 + 工作说明，任何人都能看，用来判断"跟不跟我相关"；
   //   详情 = 动机 / 核心想法 / 假设 / 方法概览 / 关键证据 / 待解问题，1 Token。
@@ -168,6 +168,8 @@ export const zh = {
   'community.action.loading': '读取中…',
   'community.action.refresh': '刷新',
   'community.action.retry': '重试',
+  'community.action.saveAddress': '保存',
+  'community.action.saving': '保存中…',
   'community.action.retryVerify': '重试验证',
   'community.action.signIn': '登录',
   'community.action.signingIn': '登录中…',
@@ -301,7 +303,7 @@ export const zh = {
   'community.detail.keyEvidence': '关键证据',
   'community.detail.openProblems': '待解问题',
   'community.hint.inviteRule': '邮箱必须与邀请码签发时指定的邮箱一致；注册成功后服务器签发的 API Key 直接保存在本机。',
-  'community.hint.addressChanged': '改用新地址需要重新登录（凭据绑定在服务器上）。',
+  'community.hint.addressChanged': '保存后会在新服务器上重新登录一次。',
   'community.hint.mismatchProduction': '当前是生产环境，但地址指向本机 —— 你多半连的是自己电脑上的开发服务器。',
   'community.hint.mismatchDevelopment': '当前是开发环境，但地址指向线上服务器 —— 在开发机上操作线上数据有风险，请确认这是你想要的。',
   'community.hint.sampleFootnote': '示例数据，登录后可浏览并操作网络上的研究工作。',

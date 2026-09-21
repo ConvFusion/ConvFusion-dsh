@@ -40,6 +40,13 @@ const CFG = await import(lib('config.js'))
 // 环境配置（开发 / 生产的地址分岔）—— 只在这里断言，逻辑细节见 verify-server-login.mjs
 const ENVCFG = await import(lib('server-env.js'))
 
+/**
+ * 当前生产（ConvFusion.com）地址 —— **试运行期**指向 apibrowser 中转，正式域名
+ * `convfusion.com` 尚未启用。全脚本只此一处；切回正式域名时改这里
+ * （以及 `src/server-env.ts` 的内置兜底与两个 `convfusion.env*.json`）。
+ */
+const PROD_URL = 'https://convfusion.apibrowser.com:4747'
+
 let passed = 0
 let failed = 0
 const failures = []
@@ -461,7 +468,7 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   // 反而必须有：业务发生时才出现的提示
   dictHas('community.hint.noDiscoverable', '暂无可发现的研究工作', 'No discoverable research work', '空结果提示')
   dictHas('community.hint.inviteRule', '邮箱必须与邀请码签发时指定的邮箱一致', 'must match', '邀请码的邮箱约束')
-  dictHas('community.badge.addressChanged', '地址已改', 'Address changed', '地址真的改了才提示')
+  dictHas('community.badge.addressChanged', '地址未保存', 'Address not saved', '地址真的改了才提示')
   // 花钱的那一刻要给出回执（用户会问"扣了没、扣了几次"）
   dictHas('community.notice.charged', '已读取详情，消耗 {tokens} Token（余额 {balance}）', 'Token charged', '扣费回执')
   assert(/chargeNotice/.test(community) && /refreshBalance\(\)/.test(community), '扣费回执 + 读详情后刷新余额')
@@ -660,16 +667,20 @@ console.log('\n[1h] ConvFusion.com：服务器地址与凭据来源')
   // ⚠️ 地址**不写死在代码里**：开发 / 生产是两套环境，由 `convfusion.env.json` 按环境给出。
   // 这个常量只是"连配置文件都没有"时的开发兜底，真正的解析在 `environmentServerUrl`。
   assertEq(CFG.DEFAULT_SERVER_URL, 'http://localhost:8000', '开发兜底地址（非唯一来源）')
-  assertEq(ENVCFG.BUILTIN_SERVER_URL.production, 'https://convfusion.com', '生产兜底地址是线上域名')
+  assertEq(ENVCFG.BUILTIN_SERVER_URL.production, PROD_URL, '生产兜底地址是试运行服务器')
 
   // 默认值必须真的进 schema（否则用户在设置页看不到、也改不了）
   const schemaJson = JSON.stringify(CFG.Config.toJSON())
   assert(/serverUrl/.test(schemaJson), 'schema 含 serverUrl')
   assert(/convfusionApiKey/.test(schemaJson), 'schema 含 convfusionApiKey')
+  assert(
+    /convfusionDevApiKey/.test(schemaJson) && /convfusionProdApiKey/.test(schemaJson),
+    'schema 含两个按服务器分槽的 Key（开发 / 互联网）',
+  )
   assertEq(
     (schemaJson.match(/"role":"secret"/g) ?? []).length,
-    2,
-    '两个 secret 字段（OpenAlex Key + ConvFusion.com Key）都声明了 role=secret',
+    4,
+    '四个 secret 字段（OpenAlex Key + 两个服务器 Key + 旧单值字段）都声明了 role=secret',
   )
 
   // 地址：设置 > 环境变量 > 环境配置文件 > 内置兜底
@@ -696,8 +707,8 @@ console.log('\n[1h] ConvFusion.com：服务器地址与凭据来源')
   )
   assertEq(
     CFG.resolveServerUrl({}, { ...NOFILE, CONVFUSION_ENV: 'production' }).url,
-    'https://convfusion.com',
-    '生产环境的内置兜底是线上地址（**开发/生产不同**）',
+    PROD_URL,
+    '生产环境的内置兜底是试运行地址（**开发/生产不同**）',
   )
   assertEq(
     CFG.resolveServerUrl({ serverUrl: 'http://a:1' }, { ...NOFILE, CONVFUSION_SERVER_URL: 'http://b:2' }).source,
@@ -713,15 +724,41 @@ console.log('\n[1h] ConvFusion.com：服务器地址与凭据来源')
     '生产环境 + 本机地址 → 标记矛盾（界面要提示）',
   )
 
-  // 凭据：设置 > 环境变量 > 无；明文取值是**宿主专用**函数
-  assertEq(CFG.describeConvFusionKey({ convfusionApiKey: 'k' }, {}), { configured: true, source: 'settings' }, '设置里有 → settings')
+  /*
+   * 凭据：**该服务器的槽** > 环境变量（显式覆盖） > 旧单值字段（迁移期兜底） > 无。
+   *
+   * ⚠️ 这里的关键不是"谁优先"，而是**按服务器取**：默认环境是开发，
+   * 所以下面的断言查的都是开发槽；线上槽的键取不到时不能被算成"有凭据"。
+   */
+  assertEq(
+    CFG.describeConvFusionKey({ convfusionDevApiKey: 'k' }, {}),
+    { configured: true, source: 'settings' },
+    '开发槽里有 → settings',
+  )
   assertEq(CFG.describeConvFusionKey({}, { CONVFUSION_API_KEY: 'k' }), { configured: true, source: 'env' }, '环境变量 → env')
   assertEq(CFG.describeConvFusionKey({}, {}), { configured: false, source: 'none' }, '都没有 → 未配置')
+  // 线上槽的 Key 在开发地址上**不算数**（这正是"切到线上报 invalid-key"的根治点）
+  assertEq(
+    CFG.describeConvFusionKey({ convfusionProdApiKey: 'prod-key' }, {}),
+    { configured: false, source: 'none' },
+    '线上槽的 Key 在开发地址上不算配置（凭据绑定在服务器上）',
+  )
   assertEq(CFG.resolveConvFusionApiKey({}, { CONVFUSION_API_KEY: 'env-key' }), 'env-key', '明文取值支持环境变量回退')
   assertEq(
-    CFG.resolveConvFusionApiKey({ convfusionApiKey: 'settings-key' }, { CONVFUSION_API_KEY: 'env-key' }),
+    CFG.resolveConvFusionApiKey({ convfusionDevApiKey: 'settings-key' }, { CONVFUSION_API_KEY: 'env-key' }),
     'settings-key',
-    '明文取值：设置优先',
+    '明文取值：该服务器的槽优先于环境变量',
+  )
+  // 旧单值是**迁移期兜底**，排在显式覆盖（环境变量）之后
+  assertEq(
+    CFG.resolveConvFusionApiKey({ convfusionApiKey: 'legacy-key' }, { CONVFUSION_API_KEY: 'env-key' }),
+    'env-key',
+    '旧单值字段排在环境变量之后（显式覆盖优先于废弃字段）',
+  )
+  assertEq(
+    CFG.resolveConvFusionApiKey({ convfusionApiKey: 'legacy-key' }, {}),
+    'legacy-key',
+    '只有旧单值字段时仍可用（迁移期不能把人挡在门外）',
   )
 
   // 归一配置：空地址**保持空串**（= 跟随环境配置，不替用户填地址）
@@ -783,12 +820,42 @@ console.log('\n[1i] 服务器快捷按钮：换地址 + 测连通（绿 = 通）
   assert(/state === 'fail'[\s\S]{0,160}?S\.iconBtn\b/.test(src), '没通 = 原色（不残留上一次的绿）')
   assert(/state === 'busy'[\s\S]{0,140}?opacity: 0\.55/.test(src), '正在测 = 变灰（有反馈，防连点）')
 
+  /*
+   * 【保存】按钮（2026-09 用户报的 bug 的修复）。
+   *
+   * 故障：点【互联网服务器】→ 地址看着变了 → 刷新又回 localhost。根因是地址只在
+   * 登录 / 注册时落盘，这条路只改了输入框草稿。修法是给"改地址"一个**显式保存动作**：
+   * 落盘 + 立刻登录一次（凭据绑定在服务器上，换服务器要重新验证）。
+   */
+  assert(/const saveServerAddress = async/.test(src), '有【保存】这个显式动作')
+  assert(/call\('account\/serverUrl'/.test(src), '保存走宿主 account/serverUrl（真的落盘）')
+  assert(
+    /account\/serverUrl'[\s\S]{0,400}?account\/verify'/.test(src),
+    '落盘之后**立刻登录一次**（换服务器必须重新验证身份）',
+  )
+  assert(/saved\.keyConfigured\) await call\('account\/verify'/.test(src), '有凭据才验证（没凭据时登录是下一步）')
+  // 未保存态必须可见且能保存：早期版本把 serverChanged 绑在"已登录"上，
+  // 未登录时连【保存】都不出现 → 地址永远存不下来
+  assert(
+    /const serverChanged = serverDraft\.trim\(\) !== \(state\?\.serverUrl \?\? ''\)/.test(src),
+    '未保存 = 草稿 ≠ 已生效地址（**不要求已登录**）',
+  )
+  assert(/serverChanged \? \(/.test(src), '未保存时才出现那一行')
+  assert(/onClick=\{\(\) => void saveServerAddress\(\)\}/.test(src), '【保存】绑到保存动作上')
+  assert(/community\.action\.saveAddress/.test(src), '按钮文案走 i18n')
+  // 空地址 = 跟随环境配置（清空输入框的语义），不能被当成"没改"
+  assert(/serverUrl: serverDraft\.trim\(\)/.test(src), '空输入框也提交（= 清除覆盖、跟随环境配置）')
+
   for (const k of [
     'community.server.presetDev',
     'community.server.presetProd',
     'community.server.probing',
     'community.server.probeOk',
     'community.server.probeFail',
+    'community.action.saveAddress',
+    'community.action.saving',
+    'community.badge.addressChanged',
+    'community.hint.addressChanged',
   ]) {
     assert(zhDict.includes(`'${k}'`), `中文字典含 ${k}`)
   }

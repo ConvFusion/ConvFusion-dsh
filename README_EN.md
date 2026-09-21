@@ -129,8 +129,9 @@ never charged twice.
 ### Environment configuration (development / production)
 
 The server address is **not hard-coded**: development uses `http://localhost:8000` and
-production uses `https://convfusion.com`, supplied per environment by a config file. On a
-development machine, copy the template and edit it:
+production uses `https://convfusion.apibrowser.com:4747` (a trial address; the official domain `convfusion.com` is not
+live yet), supplied per environment by a config file. On a development machine, copy the
+template and edit it:
 
 ```bash
 cp convfusion.env.example.json convfusion.env.json
@@ -141,7 +142,7 @@ cp convfusion.env.example.json convfusion.env.json
   "environment": "development",          // or set CONVFUSION_ENV / NODE_ENV
   "environments": {
     "development": { "serverUrl": "http://localhost:8000" },
-    "production":  { "serverUrl": "https://convfusion.com" }
+    "production":  { "serverUrl": "https://convfusion.apibrowser.com:4747" }
   },
   "dev": {                               // read only by development tooling (verification scripts)
     "serverDir": "../ConvFusion-server",

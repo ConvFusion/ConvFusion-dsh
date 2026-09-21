@@ -117,8 +117,9 @@ ConvFusion.com 采用**邀请制**，账号没有口令 —— 凭据是一份 A
 
 ### 环境配置（开发 / 生产）
 
-服务器地址**不写死在代码里**：开发是 `http://localhost:8000`、生产是 `https://convfusion.com`，
-由环境配置文件按环境给出。开发机上复制模板并按需修改：
+服务器地址**不写死在代码里**：开发是 `http://localhost:8000`、生产是 `https://convfusion.apibrowser.com:4747`
+（试运行期地址，正式域名 `convfusion.com` 尚未启用），由环境配置文件按环境给出。
+开发机上复制模板并按需修改：
 
 ```bash
 cp convfusion.env.example.json convfusion.env.json
@@ -129,7 +130,7 @@ cp convfusion.env.example.json convfusion.env.json
   "environment": "development",          // 或用 CONVFUSION_ENV / NODE_ENV 指定
   "environments": {
     "development": { "serverUrl": "http://localhost:8000" },
-    "production":  { "serverUrl": "https://convfusion.com" }
+    "production":  { "serverUrl": "https://convfusion.apibrowser.com:4747" }
   },
   "dev": {                               // 只有开发流程（验证脚本）会读这段
     "serverDir": "../ConvFusion-server",

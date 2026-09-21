@@ -27,7 +27,7 @@
  *
  * ## 部署环境怎么验（`CONVFUSION_LIVE_TARGET=configured`）
  *
- * 线上（`https://convfusion.com`）不需要本地仓库、不需要 python，所以另有一条只读路径：
+ * 线上（`https://convfusion.apibrowser.com:4747`）不需要本地仓库、不需要 python，所以另有一条只读路径：
  * 直接对本机**当前配置的服务器地址**发请求，验证"地址通不通 + 错误分类对不对"，
  * 有 `CONVFUSION_API_KEY` 时再验证一次真实登录。
  *
@@ -490,7 +490,9 @@ console.log('\n[live.5] 本插件 account/* 端点 × 真实服务器')
   const badKey = await handler('account/login', { apiKey: 'cf_live_' + '0'.repeat(64), serverUrl: BASE })
   assertEq(badKey.ok, false, '假的 Key 登录失败')
   assertEq(badKey.error.code, 'invalid-key', '失败原因具体到 invalid-key')
-  assertEq(config.convfusionApiKey, '', '失败没有写盘')
+  // 凭据按服务器分槽；BASE 是本机地址 → 开发槽。失败时两处都不该有东西
+  assertEq(config.convfusionDevApiKey, '', '失败没有写盘（开发槽）')
+  assertEq(config.convfusionApiKey, '', '失败没有写盘（旧单值字段）')
 
   // ⑤-2 管理员 Key 登录（真实 /auth/me）
   const login = await handler('account/login', { apiKey: adminKey, serverUrl: BASE })
@@ -502,7 +504,7 @@ console.log('\n[live.5] 本插件 account/* 端点 × 真实服务器')
     assertEq(login.value.serverUrl, BASE, '服务器地址被记录')
     assert(!JSON.stringify(login.value).includes(adminKey), '登录响应里没有 Key 明文')
   }
-  assertEq(config.convfusionApiKey, adminKey, '管理员 Key 已落盘')
+  assertEq(config.convfusionDevApiKey, adminKey, '管理员 Key 已落进**开发槽**（BASE 是本机地址）')
 
   // ⑤-3 verify（用已保存的凭据）
   const verify = await handler('account/verify', {})
@@ -580,7 +582,7 @@ console.log('\n[live.5] 本插件 account/* 端点 × 真实服务器')
     )
     assert(!JSON.stringify(register.value).includes('cf_live_'), '注册响应里没有任何 Key 明文')
   }
-  researcherKey = config.convfusionApiKey
+  researcherKey = config.convfusionDevApiKey
   assert(/^cf_live_/.test(researcherKey), '服务器签发的 Key 已落盘')
   assert(researcherKey !== adminKey, '落盘的是**新账号**的 Key（不是管理员那份）')
 
@@ -593,7 +595,7 @@ console.log('\n[live.5] 本插件 account/* 端点 × 真实服务器')
   })
   assertEq(reuse.ok, false, '同一个邀请码第二次注册失败')
   assertEq(reuse.error.code, 'invitation-used', '失败原因是 invitation-used（409）')
-  assertEq(config.convfusionApiKey, researcherKey, '注册失败不动已保存的凭据')
+  assertEq(config.convfusionDevApiKey, researcherKey, '注册失败不动已保存的凭据')
 
   // ⑤-6 邮箱已被占用（同一个邮箱 + 新邀请码 → CONFLICT）
   const inv2 = await fetch(`${BASE}/api/v1/admin/invitations`, {
@@ -635,7 +637,8 @@ console.log('\n[live.5] 本插件 account/* 端点 × 真实服务器')
   assertEq(logout.ok, true, '登出成功')
   assertEq(logout.value.keyConfigured, false, '登出后未配置状态')
   assertEq(logout.value.serverUrl, BASE, '登出保留服务器地址')
-  assertEq(config.convfusionApiKey, '', '本机凭据已清空')
+  assertEq(config.convfusionDevApiKey, '', '本机凭据已清空（开发槽）')
+  assertEq(config.convfusionApiKey, '', '旧单值字段也一并清掉（否则登出会"复活"）')
 
   // ⑤-10 服务器上真的存在这两个账号（用管理员 Key 查邀请码状态）
   const list = await fetch(`${BASE}/api/v1/admin/invitations`, {

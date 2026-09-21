@@ -217,7 +217,10 @@ console.log('\n[D] 用户定制存储（文件后端；设置里只有文件名�
   writeFileSync(customizationFile, JSON.stringify({ 'literature-search': { 'Research Method': '我通常先看评测设置。' } }))
 
   const settingsLike = JSON.stringify(config)
-  assert(settingsLike.length < 200, `设置里只有文件名，长度与定制量无关（${settingsLike.length} 字节）`)
+  // 意图：设置里只放**文件名**，定制正文一律不进设置文档 —— 体积不随"定制了多少内容"增长。
+  // 先钉正文不在里面（真正的属性），再钉一个宽松上限（凭据等字段让空配置也有一两百字节）。
+  assert(!settingsLike.includes('我通常先看评测'), '定制正文不写进设置文档（只记文件名）')
+  assert(settingsLike.length < 400, `设置里只有文件名与配置项，长度与定制量无关（${settingsLike.length} 字节）`)
 }
 
 /* ── E. 合成语义 ─────────────────────────────────────────────────── */

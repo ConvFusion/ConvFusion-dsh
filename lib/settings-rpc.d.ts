@@ -263,7 +263,7 @@ export interface AccountState {
      * 当前环境（开发 / 生产）。
      *
      * ⚠️ **地址随环境而变**：开发是 `http://localhost:8000`、生产是
-     * `https://convfusion.com`（见 `src/server-env.ts`）。界面必须说清现在连的是哪一边，
+     * `https://convfusion.apibrowser.com:4747`（见 `src/server-env.ts`）。界面必须说清现在连的是哪一边，
      * 否则"在本机测通了"和"线上能用"会被混为一谈。
      */
     environment: 'development' | 'production';
@@ -477,6 +477,7 @@ export interface SettingsRpcDeps {
  * | `customization/resetAll` | `{}` | 清除全部定制（回到全系统原文） |
  * | `account/state` | `{}` | 【ConvFusion.com】登录状态（**不联网**） |
  * | `account/probe` | `{ serverUrl? }` | **只测连通性**（匿名 `/health`，最长 8 秒）；`reachable` 是结果不是错误 |
+ * | `account/serverUrl` | `{ serverUrl }` | 保存服务器地址（空串 = 跟随环境配置）；只改地址**不动凭据** |
  * | `account/login` | `{ apiKey, serverUrl? }` | 用 API Key 登录（联网验证后落盘） |
  * | `account/register` | `{ invitationCode, email, displayName, serverUrl? }` | 凭邀请码注册并登录 |
  * | `account/verify` | `{}` | 用已保存的凭据重新验证身份（联网） |

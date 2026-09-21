@@ -34,21 +34,27 @@
  * ⚠️ 刻意**没有**"默认 Skill 目录"之类的配置：系统 Skill Library 是包内资产，
  * 由我们维护；把它做成可配置项会诱导用户去改库，与架构冲突。
  *
- * ## ConvFusion.com 凭据（`serverUrl` + `convfusionApiKey`）
+ * ## ConvFusion.com 凭据（`serverUrl` + 两把 Key）
  *
- * 【设置】-【ConvFusion】-【ConvFusion.com】的「登录」把两样东西落在这里：
+ * 【设置】-【ConvFusion】-【ConvFusion.com】的「登录」把凭据落在这里：
  *
  * ```text
- * serverUrl         服务器地址（**留空 = 跟随环境配置**，见 src/server-env.ts）
- * convfusionApiKey  cf_live_…   ← role('secret')，只被宿主使用
+ * serverUrl              服务器地址（**留空 = 跟随环境配置**，见 src/server-env.ts）
+ * convfusionDevApiKey    开发服务器的 Key    ← role('secret')，只被宿主使用
+ * convfusionProdApiKey   互联网服务器的 Key  ← role('secret')，只被宿主使用
+ * convfusionApiKey       【已废弃】旧版单值 Key，仅用于迁移
  * ```
+ *
+ * ⚠️ **凭据绑定在服务器上，所以要分两个槽**：开发与线上是两套账号体系，一把 Key 只在
+ * 注册它的那台服务器上成立。合成一份的后果是换服务器时把开发 Key 发给线上（既是白送
+ * 凭据，用户还会看到一句指错方向的「API Key 无效」）。取用时按 `serverSlotOf(地址)` 选槽。
  *
  * 服务器**没有口令登录**：账号是邀请制，鉴权只有 `Authorization: Bearer cf_live_…`
  * 一条通道（见 `ConvFusion-server/docs/API.md` §2）。所以"登录"= 把一份有效凭据
  * 交给宿主、由宿主调 `GET /api/v1/auth/me` 验证身份 —— 浏览器从头到尾拿不到明文。
  *
  * ⚠️ **地址不写死在这个文件里**。开发（`http://localhost:8000`）与生产
- * （`https://convfusion.com`）是两套环境，地址由 `convfusion.env.json` 按环境给出，
+ * （`https://convfusion.apibrowser.com:4747`）是两套环境，地址由 `convfusion.env.json` 按环境给出，
  * 解析顺序见 {@link resolveServerUrl}。
  */
 
@@ -58,11 +64,12 @@ import Schema from '@deepseek-ai/schemastery'
 import {
   BUILTIN_SERVER_URL,
   environmentServerUrl,
+  serverSlotOf,
   serverUrlMismatch,
   type ConvFusionEnvironment,
 } from './server-env.js'
 
-export { serverUrlPresets } from './server-env.js'
+export { serverUrlPresets, serverSlotOf } from './server-env.js'
 
 /** 设置里没配 OpenAlex Key 时回退的环境变量名。 */
 export const OPENALEX_API_KEY_ENV = 'OPENALEX_API_KEY'
@@ -108,7 +115,7 @@ export interface Config {
    *
    * ⚠️ **默认是空串 = "跟随环境配置"**，不是某个写死的地址：开发环境由
    * `convfusion.env.json` 指向 `http://localhost:8000`、生产指向
-   * `https://convfusion.com`。schema 默认值不填地址是**故意的** ——
+   * `https://convfusion.apibrowser.com:4747`。schema 默认值不填地址是**故意的** ——
    * 一旦这里给了非空默认值，"设置文档"这一层就会永远盖住环境配置文件，
    * 配置文件里的生产地址就再也生效不了。
    *
@@ -116,10 +123,25 @@ export interface Config {
    */
   serverUrl: string
   /**
-   * ConvFusion.com API Key（**secret**，`cf_live_…`）。
+   * **开发服务器**的 API Key（**secret**，`cf_live_…`；`http://localhost:8000`）。
    *
    * ⚠️ 由宿主独占使用：浏览器只见"是否已登录 + 账号信息"（见 `server-client.ts`）。
    * 服务器没有口令登录，这份 Key 就是全部凭据。
+   */
+  convfusionDevApiKey: string
+  /**
+   * **互联网（生产）服务器**的 API Key（**secret**，`cf_live_…`）。
+   *
+   * ⚠️ **凭据绑定在服务器上**：开发与线上是两套账号体系，一把 Key 只在注册它的那台
+   * 服务器上成立。分开存之后来回切服务器不用重输 —— 这也是 2026-09 用户报的
+   * 「切到线上就报 invalid-key」的修法。
+   */
+  convfusionProdApiKey: string
+  /**
+   * 旧结构的**单值** API Key（**已废弃，仅用于迁移**）。
+   *
+   * 单值时代只有一台服务器（开发），所以迁移时这份 Key 归入**开发槽**，之后写空串。
+   * 保留字段是为了让老配置仍能读出来，而不是静默丢掉一份凭据。
    */
   convfusionApiKey: string
   /**
@@ -147,12 +169,20 @@ export const Config: Schema<Config> = Schema.object({
   serverUrl: Schema.string()
     .default('')
     .description(
-      'ConvFusion.com 服务器地址；留空 = 跟随环境配置（开发 localhost:8000 / 生产 convfusion.com）。',
+      'ConvFusion.com 服务器地址；留空 = 跟随环境配置（开发 localhost:8000 / 生产 convfusion.apibrowser.com:4747）。',
     ),
+  convfusionDevApiKey: Schema.string()
+    .role('secret')
+    .default('')
+    .description('开发服务器（localhost）的 API Key（cf_live_…）。由【ConvFusion.com】页的登录流程写入。'),
+  convfusionProdApiKey: Schema.string()
+    .role('secret')
+    .default('')
+    .description('互联网（生产）服务器的 API Key（cf_live_…）。由【ConvFusion.com】页的登录流程写入。'),
   convfusionApiKey: Schema.string()
     .role('secret')
     .default('')
-    .description('ConvFusion.com API Key（cf_live_…）。由【ConvFusion.com】页的登录流程写入。'),
+    .description('【已废弃】旧版单值 API Key；升级后会自动并入开发服务器槽，可留空。'),
   autoContinue: Schema.boolean()
     .default(true)
     .description('方向明确时自动继续推进；遇到需要取舍的抉择会停下来问你。'),
@@ -184,6 +214,8 @@ export function resolveConfig(input: Partial<Config> | undefined): Config {
     // ⚠️ 空串**保持空串**：它表示"跟随环境配置"。这里若补成某个地址，
     // 就会永久压住 `convfusion.env.json` 里的生产地址（见 Config.serverUrl 注释）。
     serverUrl: (c.serverUrl ?? '').trim(),
+    convfusionDevApiKey: (c.convfusionDevApiKey ?? '').trim(),
+    convfusionProdApiKey: (c.convfusionProdApiKey ?? '').trim(),
     convfusionApiKey: (c.convfusionApiKey ?? '').trim(),
     autoContinue: c.autoContinue !== false,
     autoContinueMaxRounds:
@@ -204,14 +236,31 @@ export function resolveConfig(input: Partial<Config> | undefined): Config {
  * 现在是**两个** secret：OpenAlex Key 与 ConvFusion.com API Key。
  */
 export function redactConfig(config: Config): Omit<Config, SecretField> {
-  const { openalexApiKey: _a, convfusionApiKey: _b, ...rest } = config
+  const {
+    openalexApiKey: _a,
+    convfusionApiKey: _b,
+    convfusionDevApiKey: _c,
+    convfusionProdApiKey: _d,
+    ...rest
+  } = config
   void _a
   void _b
+  void _c
+  void _d
   return rest
 }
 
-/** 需要脱敏的字段名（集中一处，新增 secret 只需改这里）。 */
-export type SecretField = 'openalexApiKey' | 'convfusionApiKey'
+/**
+ * 需要脱敏的字段名（集中一处，新增 secret 只需改这里）。
+ *
+ * ⚠️ 漏掉一个就是把凭据明文送回浏览器 —— 所以 `verify-server-login` 里有一条
+ * "任何端点的返回值都不含明文 Key" 的纪律断言，新增 secret 字段时它会立刻变红。
+ */
+export type SecretField =
+  | 'openalexApiKey'
+  | 'convfusionApiKey'
+  | 'convfusionDevApiKey'
+  | 'convfusionProdApiKey'
 
 /**
  * ConvFusion.com 服务器地址的**有效值**与来源。
@@ -219,7 +268,7 @@ export type SecretField = 'openalexApiKey' | 'convfusionApiKey'
  * ```text
  * ① 设置文档 convfusion.serverUrl        用户显式指定过（设置页登录时会写入）
  * ② $CONVFUSION_SERVER_URL               部署 / CI 覆盖
- * ③ 环境配置文件 environments[环境]      开发 → localhost:8000；生产 → convfusion.com
+ * ③ 环境配置文件 environments[环境]      开发 → localhost:8000；生产 → convfusion.apibrowser.com:4747
  * ④ 内置兜底（按环境）                   连配置文件都没有时的最后手段
  * ```
  *
@@ -270,13 +319,24 @@ export function defaultServerUrl(env: NodeJS.ProcessEnv = process.env): string {
  * ConvFusion.com 凭据的**可用性**（只有布尔与来源，**没有密钥**）。
  *
  * 与 {@link describeOpenAlexKey} 同款：这个结果可以直接回给浏览器。
+ *
+ * ⚠️ **按服务器判断**：切到线上之后，开发服务器的 Key 在这台服务器上不成立，
+ * 这里必须报 `configured: false` —— 否则界面会拿一把不属于它的 Key 去验证，
+ * 用户看到的是一句莫名其妙的「API Key 无效」。
  */
 export function describeConvFusionKey(
   config: Partial<Config>,
   env: NodeJS.ProcessEnv = process.env,
 ): { configured: boolean; source: 'settings' | 'env' | 'none' } {
-  if ((config.convfusionApiKey ?? '').trim()) return { configured: true, source: 'settings' }
+  const slot = serverSlotOf(resolveServerUrl(config, env).url, env)
+  if (((slot === 'development' ? config.convfusionDevApiKey : config.convfusionProdApiKey) ?? '').trim()) {
+    return { configured: true, source: 'settings' }
+  }
   if ((env[CONVFUSION_API_KEY_ENV] ?? '').trim()) return { configured: true, source: 'env' }
+  // 迁移期：旧单值 Key 只在**开发槽**成立（单值时代只有开发服务器）
+  if (slot === 'development' && (config.convfusionApiKey ?? '').trim()) {
+    return { configured: true, source: 'settings' }
+  }
   return { configured: false, source: 'none' }
 }
 
@@ -284,15 +344,19 @@ export function describeConvFusionKey(
  * 取出生效的 ConvFusion.com API Key（**明文**）。
  *
  * ⚠️ **只允许宿主调用**：返回值不得进入 `SettingsState`、日志、错误信息。
- * 设置文档优先，其次环境变量。
+ *
+ * 优先级：**该服务器的槽** > 环境变量（显式覆盖，任何地址都成立） > 旧单值字段（仅开发槽）。
  */
 export function resolveConvFusionApiKey(
   config: Partial<Config>,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const fromSettings = (config.convfusionApiKey ?? '').trim()
-  if (fromSettings) return fromSettings
-  return (env[CONVFUSION_API_KEY_ENV] ?? '').trim()
+  const slot = serverSlotOf(resolveServerUrl(config, env).url, env)
+  const scoped = ((slot === 'development' ? config.convfusionDevApiKey : config.convfusionProdApiKey) ?? '').trim()
+  if (scoped) return scoped
+  const fromEnv = (env[CONVFUSION_API_KEY_ENV] ?? '').trim()
+  if (fromEnv) return fromEnv
+  return slot === 'development' ? (config.convfusionApiKey ?? '').trim() : ''
 }
 
 /**

@@ -224,7 +224,7 @@ export declare class ServerError extends Error {
  * http://localhost:8000/docs#/    → http://localhost:8000
  * ```
  *
- * ⚠️ 空地址回落到**当前环境**的默认地址（开发 localhost / 生产 convfusion.com），
+ * ⚠️ 空地址回落到**当前环境**的默认地址（开发 localhost / 生产 convfusion.apibrowser.com:4747），
  * 不是某个写死的地址 —— 见 `server-env.ts`。
  *
  * @throws {ServerError} `bad-url` —— 不是 http(s) 地址，或首尾有空白之外的问题
