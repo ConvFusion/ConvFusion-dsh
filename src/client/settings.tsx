@@ -2984,6 +2984,41 @@ function RefreshIconButton({
 }
 
 /**
+ * 三个**服务器侧图标**：开发（显示器）、互联网（地球）、邀请码（票券）。
+ *
+ * 之前用 `⌂` / `☁` 这类 Unicode 符号，跨平台渲染不一致、表意也不够直白；
+ * 换成内联 SVG（`currentColor`，与官方 outline 图标同规格），三个图标一眼可辨。
+ */
+function DevServerGlyph(): JSX.Element {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="1.75" y="2.75" width="12.5" height="8.25" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M8 11v2.75" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M5.25 13.75h5.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function InternetGlyph(): JSX.Element {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M1.75 8h12.5" stroke="currentColor" strokeWidth="1.3" />
+      <ellipse cx="8" cy="8" rx="3.1" ry="6.25" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  )
+}
+
+function InviteCodeGlyph(): JSX.Element {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="2" y="3.75" width="12" height="8.5" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M9.25 3.75v8.5" stroke="currentColor" strokeWidth="1.3" strokeDasharray="1.5 1.4" />
+    </svg>
+  )
+}
+
+/**
  * 服务器地址框右边的**快捷切换**按钮（一个开发、一个互联网）。
  *
  * 图标式（26×26，与刷新按钮同规格）的理由：地址框本身就要占掉大半行，两个文字按钮会把
@@ -3006,7 +3041,7 @@ function ServerPresetButton({
   onPick,
 }: {
   t: Translate
-  icon: string
+  icon: React.ReactNode
   label: string
   url: string
   result: { state: 'idle' | 'busy' | 'ok' | 'fail'; reason: string | null }
@@ -3969,6 +4004,18 @@ function CommunityTab({
   const activeServerUrl = stripSlash(serverDraft.trim() || state?.serverUrl || '')
 
   /**
+   * 在浏览器**新标签**打开服务器首页（就是服务器地址本身）。
+   *
+   * 两个入口共用：注册表单的【申请邀请码】按钮 + 服务器设置的【邀请码】图标按钮。
+   * 地址取当前草稿（还没保存也认），草稿为空才退回宿主生效地址 —— 用户要申请邀请码，
+   * 就该去"将要登录的那台"服务器，而不是环境默认值。
+   */
+  const openServerHome = (): void => {
+    if (!serverUrl) return
+    window.open(serverUrl, '_blank', 'noopener,noreferrer')
+  }
+
+  /**
    * 点快捷按钮 = **填地址 + 测一次连通性**（2026-09 用户要求）。
    *
    * ⚠️ 这里**不落盘**：填进去的只是草稿，要点【保存】才写进配置（并立刻登录一次）。
@@ -4375,6 +4422,14 @@ function CommunityTab({
                       >
                         {busy ? t('community.action.registering') : t('community.action.register')}
                       </button>
+                      <button
+                        type="button"
+                        style={S.ghostBtn}
+                        title={`${t('community.action.applyInviteTip')}（${serverUrl}）`}
+                        onClick={openServerHome}
+                      >
+                        {t('community.action.applyInvite')}
+                      </button>
                     </div>
                     <div style={S.hint}>
                       
@@ -4408,7 +4463,7 @@ function CommunityTab({
                   <>
                     <ServerPresetButton
                       t={t}
-                      icon="⌂"
+                      icon={<DevServerGlyph />}
                       label={t('community.server.presetDev')}
                       url={state.serverPresets.development}
                       result={serverProbes.development ?? { state: 'idle', reason: null }}
@@ -4417,7 +4472,7 @@ function CommunityTab({
                     />
                     <ServerPresetButton
                       t={t}
-                      icon="☁"
+                      icon={<InternetGlyph />}
                       label={t('community.server.presetProd')}
                       url={state.serverPresets.production}
                       result={serverProbes.production ?? { state: 'idle', reason: null }}
@@ -4426,6 +4481,20 @@ function CommunityTab({
                     />
                   </>
                 ) : null}
+                {/*
+                 * 邀请码：在浏览器打开服务器首页（申请邀请码）。图标式，与两个快捷按钮
+                 * 同一规格；`title` 带上完整地址，悬停即知会打开什么。旧宿主没有
+                 * `serverPresets` 时它**照常显示** —— 打开首页不依赖那两份预设地址。
+                 */}
+                <button
+                  type="button"
+                  style={{ ...S.iconBtn, flex: '0 0 auto' }}
+                  title={`${t('community.server.inviteCode')} · ${t('community.action.applyInviteTip')} · ${serverUrl}`}
+                  aria-label={t('community.server.inviteCode')}
+                  onClick={openServerHome}
+                >
+                  <InviteCodeGlyph />
+                </button>
               </div>
               {/* 地址**还没保存**时才出现这一行：说清后果 + 一个明确的保存动作 */}
               {serverChanged ? (

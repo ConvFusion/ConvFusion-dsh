@@ -136,6 +136,7 @@ export declare const dictionaries: {
         'community.server.title': string;
         'community.server.presetDev': string;
         'community.server.presetProd': string;
+        'community.server.inviteCode': string;
         'community.server.probing': string;
         'community.server.probeOk': string;
         'community.server.probeFail': string;
@@ -170,6 +171,8 @@ export declare const dictionaries: {
         'community.action.registering': string;
         'community.action.inviteShow': string;
         'community.action.inviteHide': string;
+        'community.action.applyInvite': string;
+        'community.action.applyInviteTip': string;
         'community.tip.summary': string;
         'community.tip.briefDisabled': string;
         'community.tip.briefCost': string;
@@ -643,6 +646,7 @@ export declare const dictionaries: {
         readonly 'community.server.title': "Leave empty to follow the environment config (this environment defaults to {url}); addresses containing /api or /docs are normalized automatically.";
         readonly 'community.server.presetDev': "Dev server";
         readonly 'community.server.presetProd': "Internet server";
+        readonly 'community.server.inviteCode': "Invitation code";
         readonly 'community.server.probing': "Testing connection...";
         readonly 'community.server.probeOk': "Connected";
         readonly 'community.server.probeFail': "Connection failed";
@@ -677,6 +681,8 @@ export declare const dictionaries: {
         readonly 'community.action.registering': "Registering…";
         readonly 'community.action.inviteShow': "Register with an invitation";
         readonly 'community.action.inviteHide': "Hide invitation form";
+        readonly 'community.action.applyInvite': "Request invitation code";
+        readonly 'community.action.applyInviteTip': "Open the server homepage in your browser to request an invitation code from the administrator";
         readonly 'community.tip.summary': "Free: topic and work note — see whether it relates to you";
         readonly 'community.tip.briefDisabled': "Sign in to read the details";
         readonly 'community.tip.briefCost': "Go deeper: motivation / core idea / hypothesis / method / evidence / open problems (1 Token on first read; you can offer mentorship afterwards)";

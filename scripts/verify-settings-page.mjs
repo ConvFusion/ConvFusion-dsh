@@ -488,8 +488,8 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   // （服务器快捷按钮见下面的 [1i]：它们还要**恒为方形**，否则行宽会跟着文案跳）
   assertEq(
     (src.match(/\.\.\.S\.iconBtn, flex: '0 0 auto'/g) ?? []).length,
-    3,
-    '图标按钮都不许被压（刷新 + 登出 + 两个服务器快捷）',
+    4,
+    '图标按钮都不许被压（刷新 + 登出 + 两个服务器快捷 + 邀请码）',
   )
   assert(zhDict.includes("'community.balance.frozenNote': '（冻 {count}）'"), '冻结标记压到最短（详情在 tooltip）')
 
@@ -799,7 +799,7 @@ console.log('\n[1i] 服务器快捷按钮：换地址 + 测连通（绿 = 通）
   // 图标式（26×26，与刷新按钮同规格）：省空间，且**必须有** title / aria-label
   assert(/S\.iconBtn, flex: '0 0 auto'/.test(src), '图标按钮与刷新按钮同规格（不被压）')
   assert(/title=\{title\}/.test(src) && /aria-label=\{label\}/.test(src), '悬浮提示 + 无障碍名不可省')
-  assert(/icon="⌂"/.test(src) && /icon="☁"/.test(src), '两个图标：本机 / 线上')
+  assert(/icon=\{<DevServerGlyph \/>\}/.test(src) && /icon=\{<InternetGlyph \/>\}/.test(src), '两个图标：本机（显示器）/ 线上（地球）')
   // 地址来自宿主（界面不写死域名）
   assert(
     /state\.serverPresets\.development/.test(src) && /state\.serverPresets\.production/.test(src),
@@ -819,6 +819,19 @@ console.log('\n[1i] 服务器快捷按钮：换地址 + 测连通（绿 = 通）
   assert(/state === 'ok'[\s\S]{0,140}?S\.iconBtnOk/.test(src), '通了才变绿')
   assert(/state === 'fail'[\s\S]{0,160}?S\.iconBtn\b/.test(src), '没通 = 原色（不残留上一次的绿）')
   assert(/state === 'busy'[\s\S]{0,140}?opacity: 0\.55/.test(src), '正在测 = 变灰（有反馈，防连点）')
+
+  // 邀请码图标按钮（2026-09 用户要求）：在浏览器新标签打开服务器首页（申请邀请码）
+  assert(src.includes('function InviteCodeGlyph('), '邀请码图标是独立 SVG 组件（票券）')
+  assert(
+    /const openServerHome =[\s\S]{0,220}?window\.open\(serverUrl, '_blank', 'noopener,noreferrer'\)/.test(src),
+    '邀请码按钮在新标签打开服务器地址（noopener）',
+  )
+  assert(/aria-label=\{t\('community\.server\.inviteCode'\)\}/.test(src), '邀请码图标有 aria-label')
+  assert(zhDict.includes("'community.action.applyInvite': '申请邀请码'"), '有「申请邀请码」文案')
+  assert(
+    /t\('community\.action\.applyInvite'\)/.test(src) && /t\('community\.action\.applyInviteTip'\)/.test(src),
+    '注册表单的【申请邀请码】按钮走 i18n',
+  )
 
   /*
    * 【保存】按钮（2026-09 用户报的 bug 的修复）。

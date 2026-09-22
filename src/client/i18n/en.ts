@@ -132,9 +132,10 @@ export const en = {
   'community.login.keyLabel': 'Sign in with API key',
   'community.server.address': 'Server address',
   'community.server.title': 'Leave empty to follow the environment config (this environment defaults to {url}); addresses containing /api or /docs are normalized automatically.',
-  // The two shortcut icon buttons next to the address field (tooltip = "<label> · <url>")
+  // The shortcut icon buttons next to the address field (tooltip = "<label> · <url>")
   'community.server.presetDev': 'Dev server',
   'community.server.presetProd': 'Internet server',
+  'community.server.inviteCode': 'Invitation code',
   'community.server.probing': 'Testing connection...',
   'community.server.probeOk': 'Connected',
   'community.server.probeFail': 'Connection failed',
@@ -173,6 +174,8 @@ export const en = {
   'community.action.registering': 'Registering…',
   'community.action.inviteShow': 'Register with an invitation',
   'community.action.inviteHide': 'Hide invitation form',
+  'community.action.applyInvite': 'Request invitation code',
+  'community.action.applyInviteTip': 'Open the server homepage in your browser to request an invitation code from the administrator',
   'community.tip.summary': 'Free: topic and work note — see whether it relates to you',
   'community.tip.briefDisabled': 'Sign in to read the details',
   'community.tip.briefCost': 'Go deeper: motivation / core idea / hypothesis / method / evidence / open problems (1 Token on first read; you can offer mentorship afterwards)',

@@ -131,6 +131,7 @@ export declare const zh: {
     'community.server.title': string;
     'community.server.presetDev': string;
     'community.server.presetProd': string;
+    'community.server.inviteCode': string;
     'community.server.probing': string;
     'community.server.probeOk': string;
     'community.server.probeFail': string;
@@ -165,6 +166,8 @@ export declare const zh: {
     'community.action.registering': string;
     'community.action.inviteShow': string;
     'community.action.inviteHide': string;
+    'community.action.applyInvite': string;
+    'community.action.applyInviteTip': string;
     'community.tip.summary': string;
     'community.tip.briefDisabled': string;
     'community.tip.briefCost': string;

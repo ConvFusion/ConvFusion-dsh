@@ -135,9 +135,10 @@ export const zh = {
   'community.login.keyLabel': 'API Key 登录',
   'community.server.address': '服务器地址',
   'community.server.title': '留空 = 跟随环境配置（本环境默认 {url}）；带 /api 或 /docs 的地址会自动归一。',
-  // 地址框右边那两个快捷图标按钮（悬停提示 = "<名称> · <完整地址>"）
+  // 地址框右边的快捷图标按钮（悬停提示 = "<名称> · <完整地址>"）
   'community.server.presetDev': '开发服务器',
   'community.server.presetProd': '互联网服务器',
+  'community.server.inviteCode': '邀请码',
   // 快捷按钮的连通性探测（颜色是答案，文字只在悬浮提示里出现）
   'community.server.probing': '正在测试连接…',
   'community.server.probeOk': '连接正常',
@@ -178,6 +179,8 @@ export const zh = {
   'community.action.registering': '注册中…',
   'community.action.inviteShow': '使用邀请码注册',
   'community.action.inviteHide': '收起邀请码注册',
+  'community.action.applyInvite': '申请邀请码',
+  'community.action.applyInviteTip': '在浏览器打开服务器首页，向管理员申请邀请码',
   'community.tip.summary': '免费：研究主题与工作说明，先看是否与你相关',
   'community.tip.briefDisabled': '登录后可查看详情',
   // 详情按钮的 tooltip 顺带说明"读后可发起指导"：发起按钮在读过详情之后才出现，
