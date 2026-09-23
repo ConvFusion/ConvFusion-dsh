@@ -1194,7 +1194,9 @@ export function defineResearchTools(
       'Notes: `total` is the number of matches, `returned` is how many came back — a coverage claim ' +
       'needs the query set, not one page of results. Increase `perPage` or narrow the query rather than ' +
       'paging blindly. If no API key is configured the request still works through OpenAlex\'s public ' +
-      'pool but with lower rate limits.',
+      'pool but with lower rate limits. Requests are automatically serialized (one at a time) with a ' +
+      'minimum interval, and HTTP 429/5xx are retried with backoff — do not pace or serialize queries ' +
+      'yourself.',
     parameters: {
       query: { type: 'string', description: 'The search expression (natural language or OpenAlex boolean syntax).' },
       perPage: {
@@ -1220,6 +1222,9 @@ export function defineResearchTools(
           provenance?: { source?: string; retrievedAt?: string; total?: number; returned?: number; usedApiKey?: boolean }
           results?: Array<{
             title?: string
+            authors?: string[]
+            /** 作者总数（可能大于 `authors` 的长度，用于补 `et al.`）。 */
+            authorCount?: number
             year?: number
             venue?: string
             citedByCount?: number
@@ -1240,7 +1245,14 @@ export function defineResearchTools(
           `hits ${p.total ?? '?'} · returned ${p.returned ?? '?'} · key ${p.usedApiKey ? 'yes' : 'no'} · ${p.retrievedAt ?? ''}`,
         ]
         for (const [i, r] of (v.results ?? []).entries()) {
+          // 作者是构建参考文献的必需字段：记录里有，就必须渲染出来 ——
+          // 只放进结构化 payload 而渲染时丢掉，等于模型看不到。
+          const names = (r.authors ?? []).filter(Boolean)
+          const authors = names.length > 0
+            ? names.join(', ') + (r.authorCount !== undefined && r.authorCount > names.length ? ', et al.' : '')
+            : undefined
           const bits = [
+            authors,
             r.year ? String(r.year) : undefined,
             r.venue,
             r.citedByCount !== undefined ? `${r.citedByCount} cites` : undefined,
@@ -1781,11 +1793,14 @@ export function parseBibEntries(text: string): { entries: BibEntry[]; numberToKe
     seen.add(key)
     // thebibliography 非表格环境：作者列表里的 & / % / # 必须转义，否则
     // "Misplaced alignment tab character &" 之类的编译错误。
+    // `_` 同理且更容易漏：DOI 里下划线是常态（如 `10.1162/tacl_a_00754`），
+    // 不转义会直接报 "Missing $ inserted"，整篇编译失败。
     const safeText = body
       .replace(/\s+/g, ' ')
       .replace(/(?<!\\)&/g, '\\&')
       .replace(/(?<!\\)%/g, '\\%')
       .replace(/(?<!\\)#/g, '\\#')
+      .replace(/(?<!\\)_/g, '\\_')
     entries.push({ key, text: safeText })
   }
   return { entries, numberToKey }

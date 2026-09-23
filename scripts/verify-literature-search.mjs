@@ -13,12 +13,14 @@
  *   3. 摘要倒排索引能重建（OpenAlex 不返回纯文本摘要）；
  *   4. 响应映射：总数 ≠ 返回数（覆盖度结论不能只看一页）；
  *   5. 失败**带原因**（无检索式 / HTTP / 网络 / 超时），绝不把失败表现成"没检索到"；
- *   6. 工具已注册且被注入检索依赖（否则 Agent 根本调不到）。
+ *   6. 工具已注册且被注入检索依赖（否则 Agent 根本调不到）；
+ *   7. **渲染输出含作者** —— 记录里有作者、渲染时却丢掉，等于模型看不到
+ *      （曾发生：作者只进了结构化 payload，模型读到的文本里没有）。
  *
  * 用法：
  *   node scripts/verify-literature-search.mjs packages/dsh-convfusion
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -329,8 +331,83 @@ console.log('\n[8] literature-search Skill 指向真实工具')
   const skill = readFileSync(join(PKG, 'skills', 'literature', 'literature-search.md'), 'utf8')
   assert(skill.includes('research_literature_search'), 'Skill 正文提到该工具（否则选择到了也不知道怎么执行）')
   assert(/never\*{0,2} present an empty result|绝不.*空结果|never present an empty/.test(skill), 'Skill 要求：失败不许伪装成"没检索到"')
-  const map = readFileSync(resolve(PKG, '..', '..', 'scripts', 'lib', 'skill-migration-map.mjs'), 'utf8')
-  assert(map.includes('research_literature_search'), '迁移映射（生成源）里也有 —— 重新生成不会丢')
+  // 迁移映射的位置随仓库布局而异（monorepo 里包在 packages/<pkg> 下，
+  // 独立仓库里包就是仓库根）——向上找，别写死相对层级。
+  const mapPath = (() => {
+    let dir = resolve(PKG)
+    for (let i = 0; i < 5; i++) {
+      const cand = join(dir, 'scripts', 'lib', 'skill-migration-map.mjs')
+      if (existsSync(cand)) return cand
+      dir = resolve(dir, '..')
+    }
+    return null
+  })()
+  assert(mapPath !== null, '找得到迁移映射（生成源）')
+  assert(mapPath !== null && readFileSync(mapPath, 'utf8').includes('research_literature_search'), '迁移映射（生成源）里也有 —— 重新生成不会丢')
+}
+
+/* ── 9. 渲染输出：作者必须出现在模型看到的文本里 ───────────────────── */
+console.log('\n[9] 渲染输出（作者可见）')
+{
+  const ws = mkdtempSync(join(tmpdir(), 'convfusion-lit-render-'))
+  const rawResults = [
+    {
+      id: 'https://openalex.org/W1',
+      display_name: 'FrugalGPT: How to Use Large Language Models While Reducing Cost and Improving Performance',
+      publication_year: 2023,
+      doi: 'https://doi.org/10.48550/arxiv.2305.05176',
+      cited_by_count: 52,
+      primary_location: { source: { display_name: 'arXiv (Cornell University)' } },
+      open_access: { oa_status: 'green' },
+      authorships: [
+        { author: { display_name: 'Lingjiao Chen' } },
+        { author: { display_name: 'Matei Zaharia' } },
+        { author: { display_name: 'James Zou' } },
+      ],
+    },
+    {
+      id: 'https://openalex.org/W2',
+      display_name: 'A Paper With Many Authors',
+      publication_year: 2024,
+      authorships: [
+        { author: { display_name: 'A One' } },
+        { author: { display_name: 'B Two' } },
+        { author: { display_name: 'C Three' } },
+        { author: { display_name: 'D Four' } },
+        { author: { display_name: 'E Five' } },
+        { author: { display_name: 'F Six' } },
+      ],
+    },
+  ]
+  const tools = TOOLS.defineResearchTools(() => ws, {
+    apiKey: () => '',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ meta: { count: 2 }, results: rawResults }) }),
+  })
+  const tool = tools.find((t) => t.name === TOOLS.LITERATURE_TOOL)
+  const args = { query: 'frugalgpt' }
+  const value = await tool.execute(args, {})
+  const text = tool.output
+    .render(args, value)
+    .map((b) => b.text ?? '')
+    .join('\n')
+
+  assert(text.includes('Lingjiao Chen'), '渲染输出含第一位作者')
+  assert(text.includes('Matei Zaharia') && text.includes('James Zou'), '渲染输出含其余作者')
+  assert(text.includes('2023'), '渲染输出含年份')
+  assert(text.includes('arXiv (Cornell University)'), '渲染输出含发表处')
+  assert(text.includes('52 cites'), '渲染输出含被引数')
+  assert(text.includes('2305.05176'), '渲染输出含全文/DOI 链接')
+  assert(text.includes('A One, B Two, C Three, D Four, et al.'), '作者被截断时补 et al.（6 位 → 4 位 + et al.）')
+  // 回归：作者曾经只进结构化 payload，渲染文本以"— 年份"开头，作者无从可见
+  assert(!text.includes('— 2023 ·'), '作者排在年份之前（不再以"— 年份"开头）')
+
+  // 失败路径也要渲染出原因，而不是空文本
+  const failText = tool.output
+    .render({ query: 'x' }, { ok: false, error: 'boom' })
+    .map((b) => b.text ?? '')
+    .join('')
+  assert(/boom/.test(failText), '失败时渲染出原因')
+  rmSync(ws, { recursive: true, force: true })
 }
 
 console.log(`\n${failed === 0 ? '✅' : '❌'} literature-search: ${passed} passed, ${failed} failed`)

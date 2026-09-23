@@ -33,6 +33,14 @@ export declare const OPENALEX_MAX_PER_PAGE = 50;
 export declare const OPENALEX_DEFAULT_PER_PAGE = 20;
 /** 摘要截断长度（字符）。倒排索引重建出的全文往往很长。 */
 export declare const ABSTRACT_MAX_CHARS = 600;
+/** 相邻 OpenAlex 请求的最小间隔（毫秒）。公共池建议 ≤10 req/s。 */
+export declare const OPENALEX_MIN_INTERVAL_MS = 200;
+/** 429/5xx 最多重试次数（不含首次请求）。 */
+export declare const OPENALEX_MAX_RETRIES = 3;
+/** 指数退避基准（毫秒）：800 → 1600 → 3200 → 6400。 */
+export declare const OPENALEX_BACKOFF_BASE_MS = 800;
+/** 退避/Retry-After 上限（毫秒），避免长时间卡住一个工具调用。 */
+export declare const OPENALEX_BACKOFF_MAX_MS = 8000;
 /**
  * 检索字段。
  *
@@ -99,8 +107,10 @@ export interface LiteratureRecord {
     doi?: string;
     /** 发表处（期刊/会议名）。 */
     venue?: string;
-    /** 前若干位作者。 */
+    /** 前若干位作者（构建参考文献用）。 */
     authors: string[];
+    /** 作者总数 —— 大于 `authors.length` 时渲染会补 `et al.`。 */
+    authorCount?: number;
     citedByCount?: number;
     /**
      * 开放获取全文地址（`open_access.oa_url`，有则可直接读全文）。
@@ -171,6 +181,10 @@ export type FetchLike = (url: string, init?: {
     status: number;
     json: () => Promise<unknown>;
     text?: () => Promise<string>;
+    /** 响应头（读取 `Retry-After` 用；真实 fetch Response 原生提供）。 */
+    headers?: {
+        get(name: string): string | null;
+    };
 }>;
 /** 检索依赖（由插件入口注入配置解析器）。 */
 export interface LiteratureDeps {
@@ -182,11 +196,35 @@ export interface LiteratureDeps {
     fetchImpl?: FetchLike;
     /** 请求超时（毫秒）。 */
     timeoutMs?: number;
+    /** 429/5xx 最多重试次数（缺省 {@link OPENALEX_MAX_RETRIES}）。 */
+    maxRetries?: number;
+    /** 等待函数（缺省 setTimeout；测试可注入）。 */
+    wait?: WaitFn;
 }
 /** 检索超时（毫秒）。学术检索偶发慢响应，必须给上限。 */
 export declare const OPENALEX_TIMEOUT_MS = 20000;
+/** 等待函数（便于测试注入）。 */
+export type WaitFn = (ms: number) => Promise<void>;
+/**
+ * 把一次 OpenAlex 请求放进全局串行队列。
+ *
+ * - 同一时刻最多一个请求在飞（逐个串行）
+ * - 相邻请求至少间隔 `minIntervalMs`（从上次请求**开始**时刻起算）
+ * - 前一个请求抛错不会卡死队列：release 在 finally 里必定执行
+ */
+export declare function runOpenAlexSlot<T>(task: () => Promise<T>, opts?: {
+    minIntervalMs?: number;
+    wait?: WaitFn;
+}): Promise<T>;
+/** 解析 `Retry-After` 响应头（秒 或 HTTP-date），返回等待毫秒；无法解析返回 undefined。 */
+export declare function parseRetryAfter(header: string | null | undefined, now?: number): number | undefined;
+/** 指数退避（attempt 从 0 开始）：base × 2^attempt，封顶 {@link OPENALEX_BACKOFF_MAX_MS}。 */
+export declare function openAlexBackoffMs(attempt: number): number;
 /**
  * 执行一次 OpenAlex 检索。
+ *
+ * 请求自动进入全局串行队列（逐个发出），429/5xx 自动按 `Retry-After` 或指数
+ * 退避重试最多 `maxRetries` 次 —— 并发多路检索不再互相触发限流。
  *
  * @returns 检索结果，或<b>带原因的</b>失败（绝不返回空结果冒充"没查到"）
  */
