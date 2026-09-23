@@ -76,9 +76,24 @@ export const LITERATURE_FIELDS = ['any', 'title_abstract', 'title'] as const
 
 export type LiteratureField = (typeof LITERATURE_FIELDS)[number]
 
-/** 归一化检索字段（未知值收敛到 `any`）。 */
+/**
+ * 字段别名：模型可能直接写 OpenAlex 的原始 filter 名 `title_and_abstract`
+ * （而不是本工具的 `title_abstract`）。收敛到规范名，避免拼写差异把一次
+ * 受限检索静默降级成全文检索 —— 那会让"未发现"看起来比实际更可信。
+ */
+const FIELD_ALIASES: Record<string, LiteratureField> = {
+  title_and_abstract: 'title_abstract',
+}
+
+/**
+ * 归一化检索字段（未知值收敛到 `any`）。
+ *
+ * 大小写不敏感、接受别名；**未知值一律收敛到 `any`（最宽）**而不是报错，
+ * 因为报错会让 Agent 拿不到任何结果，而 `any` 至少给出可解释的覆盖度。
+ */
 export function normalizeField(field?: string): LiteratureField {
   const v = (field ?? '').trim().toLowerCase()
+  if (v in FIELD_ALIASES) return FIELD_ALIASES[v]
   return (LITERATURE_FIELDS as readonly string[]).includes(v) ? (v as LiteratureField) : 'any'
 }
 
@@ -135,16 +150,28 @@ function sortParam(sort: LiteratureQuery['sort']): string | undefined {
  */
 export function buildOpenAlexUrl(query: LiteratureQuery, apiKey?: string, mailto?: string): string {
   const p = new URLSearchParams()
-  p.set('search', query.query.trim())
   p.set('per-page', String(normalizePerPage(query.perPage)))
 
+  const field = normalizeField(query.field)
+  const text = query.query.trim()
+
   const filters: string[] = []
+
+  // 字段决定检索走哪条路：
+  // - any            → 全文 `search=`（宽、噪声大；**不能**与 filter 叠加，否则条件互相稀释）
+  // - title_abstract → `filter=title_and_abstract.search:`
+  // - title          → `filter=title.search:`
+  if (field === 'title_abstract') filters.push(`title_and_abstract.search:${text}`)
+  else if (field === 'title') filters.push(`title.search:${text}`)
+  else p.set('search', text)
+
   const from = query.yearFrom
   const to = query.yearTo
   if (typeof from === 'number' && typeof to === 'number') filters.push(`publication_year:${from}-${to}`)
   else if (typeof from === 'number') filters.push(`publication_year:>${from - 1}`)
   else if (typeof to === 'number') filters.push(`publication_year:<${to + 1}`)
   if (query.openAccessOnly) filters.push('is_oa:true')
+  // OpenAlex 的多个条件是**一个**用逗号分隔的 filter 参数
   if (filters.length > 0) p.set('filter', filters.join(','))
 
   const sort = sortParam(query.sort)
@@ -291,13 +318,26 @@ export interface LiteratureSearchResult {
   requestUrl: string
   /** 是否使用了 API Key（只记事实，不记值）。 */
   usedApiKey: boolean
+  /**
+   * 实际使用的检索字段（{@link LITERATURE_FIELDS}）。
+   *
+   * 必须记录：**没有它，"未发现"就无法被解释** —— 全文检索没命中与仅标题
+   * 没命中，可信度完全不同，而覆盖度结论正是建立在这上面。
+   */
+  field: LiteratureField
   results: LiteratureRecord[]
 }
 
 /** 把 OpenAlex 的响应体映射成 {@link LiteratureSearchResult}。 */
 export function mapOpenAlexResponse(
   body: unknown,
-  ctx: { query: string; requestUrl: string; usedApiKey: boolean; retrievedAt?: string },
+  ctx: {
+    query: string
+    requestUrl: string
+    usedApiKey: boolean
+    retrievedAt?: string
+    field?: LiteratureField
+  },
 ): LiteratureSearchResult {
   const b = (body ?? {}) as Record<string, unknown>
   const meta = (b.meta ?? {}) as Record<string, unknown>
@@ -311,6 +351,7 @@ export function mapOpenAlexResponse(
     returned: results.length,
     requestUrl: redactOpenAlexUrl(ctx.requestUrl),
     usedApiKey: ctx.usedApiKey,
+    field: normalizeField(ctx.field),
     results,
   }
 }
@@ -502,7 +543,12 @@ export async function searchOpenAlex(
 
         if (res.ok) {
           const body = await res.json()
-          return mapOpenAlexResponse(body, { query: text, requestUrl: url, usedApiKey: Boolean(key) })
+          return mapOpenAlexResponse(body, {
+            query: text,
+            requestUrl: url,
+            usedApiKey: Boolean(key),
+            field: query.field,
+          })
         }
 
         if (isRetryableStatus(res.status) && attempt < maxRetries) {

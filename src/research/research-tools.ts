@@ -34,6 +34,7 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { losslessJson } from '../json.js'
 import {
+  LITERATURE_FIELDS,
   OPENALEX_MAX_PER_PAGE,
   isLiteratureError,
   searchOpenAlex,
@@ -1193,7 +1194,14 @@ export function defineResearchTools(
       'to `research_paper_download` (the record\'s `id` maps to that tool\'s `openalexId`).\n' +
       'Notes: `total` is the number of matches, `returned` is how many came back — a coverage claim ' +
       'needs the query set, not one page of results. Increase `perPage` or narrow the query rather than ' +
-      'paging blindly. If no API key is configured the request still works through OpenAlex\'s public ' +
+      'paging blindly.\n' +
+      '`field` controls how wide the search is, and it changes what "no results" means: `any` ' +
+      '(default) searches full text and is easily flooded by surveys and textbooks; `title_abstract` ' +
+      'restricts to title+abstract and is the recommended default for exploration; `title` is for ' +
+      'confirming whether anyone has already used a specific name. The `provenance.field` value records ' +
+      'which one was used — quote it, because "not found" under `title` is a much stronger claim than ' +
+      'under `any`.\n' +
+      'If no API key is configured the request still works through OpenAlex\'s public ' +
       'pool but with lower rate limits. Requests are automatically serialized (one at a time) with a ' +
       'minimum interval, and HTTP 429/5xx are retried with backoff — do not pace or serialize queries ' +
       'yourself.',
@@ -1202,6 +1210,14 @@ export function defineResearchTools(
       perPage: {
         type: 'number',
         description: `How many records to return (1..${OPENALEX_MAX_PER_PAGE}, default 20).`,
+      },
+      field: {
+        type: 'string',
+        enum: [...LITERATURE_FIELDS],
+        description:
+          'How wide the search is (default any). any = full text (broad, noisy); ' +
+          'title_abstract = title + abstract (recommended for exploration); ' +
+          'title = title only (for "has anyone used this name").',
       },
       yearFrom: { type: 'number', description: 'Earliest publication year (inclusive).' },
       yearTo: { type: 'number', description: 'Latest publication year (inclusive).' },
@@ -1219,7 +1235,15 @@ export function defineResearchTools(
           ok?: boolean
           error?: string
           query?: string
-          provenance?: { source?: string; retrievedAt?: string; total?: number; returned?: number; usedApiKey?: boolean }
+          provenance?: {
+            source?: string
+            retrievedAt?: string
+            total?: number
+            returned?: number
+            usedApiKey?: boolean
+            /** 实际使用的检索字段 —— 决定"未发现"有多可信。 */
+            field?: string
+          }
           results?: Array<{
             title?: string
             authors?: string[]
@@ -1242,7 +1266,10 @@ export function defineResearchTools(
         const p = v.provenance ?? {}
         const lines = [
           `OpenAlex · "${v.query ?? ''}"`,
-          `hits ${p.total ?? '?'} · returned ${p.returned ?? '?'} · key ${p.usedApiKey ? 'yes' : 'no'} · ${p.retrievedAt ?? ''}`,
+          // 字段必须渲染出来：只放进结构化 payload 的话，"未发现"就无法被解释 ——
+          // 全文检索没命中与仅标题没命中，可信度完全不同。
+          `hits ${p.total ?? '?'} · returned ${p.returned ?? '?'} · field ${p.field ?? 'any'} · ` +
+            `key ${p.usedApiKey ? 'yes' : 'no'} · ${p.retrievedAt ?? ''}`,
         ]
         for (const [i, r] of (v.results ?? []).entries()) {
           // 作者是构建参考文献的必需字段：记录里有，就必须渲染出来 ——
@@ -1279,6 +1306,7 @@ export function defineResearchTools(
         yearTo?: number
         sort?: LiteratureQuery['sort']
         openAccessOnly?: boolean
+        field?: LiteratureQuery['field']
       }
       const query: LiteratureQuery = {
         query: typeof a.query === 'string' ? a.query : '',
@@ -1287,6 +1315,7 @@ export function defineResearchTools(
         ...(typeof a.yearTo === 'number' ? { yearTo: a.yearTo } : {}),
         ...(a.sort === 'relevance' || a.sort === 'cited' || a.sort === 'recent' ? { sort: a.sort } : {}),
         ...(a.openAccessOnly === true ? { openAccessOnly: true } : {}),
+        ...(typeof a.field === 'string' && a.field.trim() ? { field: a.field as LiteratureQuery['field'] } : {}),
       }
 
       const outcome = await searchOpenAlex(query, literatureDeps)
@@ -1304,6 +1333,7 @@ export function defineResearchTools(
           returned: outcome.returned,
           requestUrl: outcome.requestUrl,
           usedApiKey: outcome.usedApiKey,
+          field: outcome.field,
         },
         results: outcome.results as unknown as JsonValue,
         coverageNote:

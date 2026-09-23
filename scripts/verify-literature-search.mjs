@@ -232,7 +232,14 @@ console.log('\n[6] Agent 能不能真的调到')
   // 未注入依赖时**也注册**该工具：让 Agent 能发现它，并在调用时得到一句解释。
   // 静默不注册会让"检索能力存在与否"完全不可见 —— 那正是这次要修的问题。
   const without = TOOLS.defineResearchTools(() => ws)
-  assertEq(without.length, 8, '未注入依赖时仍注册 8 个工具（可发现）')
+  // 工具总数会随研究工具增加而变化（output / paper_download / paper_latex 都是后加的）。
+  // 这里真正要断言的是「文献检索工具**两种情况都注册**」——写死总数会随每次新增工具
+  // 误报失败，反而掩盖真实回归。
+  assert(without.length >= 8, `未注入依赖时仍注册研究工具（可发现，实际 ${without.length} 个）`)
+  assert(
+    without.some((t) => t.name === TOOLS.LITERATURE_TOOL),
+    '未注入依赖时文献检索工具也在（可发现，而非静默不注册）',
+  )
   const bare = without.find((t) => t.name === TOOLS.LITERATURE_TOOL)
   const bareOut = await bare.execute({ query: 'x' }, {})
   assert(bareOut.ok === false, '未注入依赖时调用返回失败而不是抛错')
@@ -249,7 +256,7 @@ console.log('\n[6] Agent 能不能真的调到')
       return { ok: true, status: 200, json: async () => ({ meta: { count: 7 }, results: [] }) }
     },
   })
-  assertEq(withDeps.length, 8, '注入后注册 8 个工具（多了文献检索）')
+  assertEq(withDeps.length, without.length, '注入依赖不改变工具数量（文献检索两种情况都在）')
 
   const tool = withDeps.find((t) => t.name === TOOLS.LITERATURE_TOOL)
   assert(tool !== undefined, '找到文献检索工具')

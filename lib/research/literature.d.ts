@@ -54,7 +54,12 @@ export declare const OPENALEX_BACKOFF_MAX_MS = 8000;
  */
 export declare const LITERATURE_FIELDS: readonly ["any", "title_abstract", "title"];
 export type LiteratureField = (typeof LITERATURE_FIELDS)[number];
-/** 归一化检索字段（未知值收敛到 `any`）。 */
+/**
+ * 归一化检索字段（未知值收敛到 `any`）。
+ *
+ * 大小写不敏感、接受别名；**未知值一律收敛到 `any`（最宽）**而不是报错，
+ * 因为报错会让 Agent 拿不到任何结果，而 `any` 至少给出可解释的覆盖度。
+ */
 export declare function normalizeField(field?: string): LiteratureField;
 /** 一次检索请求。 */
 export interface LiteratureQuery {
@@ -153,6 +158,13 @@ export interface LiteratureSearchResult {
     requestUrl: string;
     /** 是否使用了 API Key（只记事实，不记值）。 */
     usedApiKey: boolean;
+    /**
+     * 实际使用的检索字段（{@link LITERATURE_FIELDS}）。
+     *
+     * 必须记录：**没有它，"未发现"就无法被解释** —— 全文检索没命中与仅标题
+     * 没命中，可信度完全不同，而覆盖度结论正是建立在这上面。
+     */
+    field: LiteratureField;
     results: LiteratureRecord[];
 }
 /** 把 OpenAlex 的响应体映射成 {@link LiteratureSearchResult}。 */
@@ -161,6 +173,7 @@ export declare function mapOpenAlexResponse(body: unknown, ctx: {
     requestUrl: string;
     usedApiKey: boolean;
     retrievedAt?: string;
+    field?: LiteratureField;
 }): LiteratureSearchResult;
 /** 检索失败的原因分类（让调用方能给用户一句有用的话，而不是空结果）。 */
 export type LiteratureErrorKind = 'no-query' | 'http' | 'network' | 'bad-response';
