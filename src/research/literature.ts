@@ -394,6 +394,14 @@ export interface LiteratureDeps {
   apiKey: () => string
   /** 公共池联络邮箱（可选）。 */
   mailto?: () => string | undefined
+  /**
+   * User-Agent 头（可选）。
+   *
+   * 不在本模块内硬编码版本号 —— 版本由装配层（插件入口）从 `package.json`
+   * 读取后注入，避免每次发版遗漏此字符串（2026-09 遗留：此处曾停留在 0.2 而
+   * 包版本已是 0.3.1）。缺省回退到 `ConvFusion (no-version)`，仅用于测试替身。
+   */
+  userAgent?: string
   /** fetch 实现（缺省用全局 fetch）。 */
   fetchImpl?: FetchLike
   /** 请求超时（毫秒）。 */
@@ -517,9 +525,12 @@ export async function searchOpenAlex(
   const timeoutMs = deps.timeoutMs ?? OPENALEX_TIMEOUT_MS
   const maxRetries = deps.maxRetries ?? OPENALEX_MAX_RETRIES
 
+  const mailtoForUA = (deps.mailto?.() ?? 'no-mailto').trim() || 'no-mailto'
+  const productUA = (deps.userAgent ?? 'ConvFusion (no-version)').trim() || 'ConvFusion (no-version)'
   const headers: Record<string, string> = {
-    // OpenAlex 要求可识别的 UA；带 mailto 的 UA 还能进 polite pool
-    'user-agent': `ConvFusion/0.2 (${(deps.mailto?.() ?? 'no-mailto').trim() || 'no-mailto'})`,
+    // OpenAlex 要求可识别的 UA；带 mailto 的 UA 还能进 polite pool。
+    // 版本字符串由装配层注入（见 LiteratureDeps.userAgent），此处不再硬编码。
+    'user-agent': `${productUA} (${mailtoForUA})`,
     accept: 'application/json',
   }
 

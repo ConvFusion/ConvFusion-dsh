@@ -36,6 +36,10 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { dirname, join, resolve } from 'node:path'
+// 单一版本来源：UA / 标识字符串一律从 package.json 取，
+// 避免发版时漏改硬编码版本号（2026-09 事故：literature.ts 的 UA 停留在 0.2，
+// 包版本已是 0.3.1）。tsconfig 开启了 resolveJsonModule，tsc 会把该字段内联。
+import pkg from '../package.json' with { type: 'json' }
 import {
   Config,
   OPENALEX_API_KEY_ENV,
@@ -355,12 +359,16 @@ export function apply(ctx: Context, rawConfig: Partial<ConfigShape> = {}): void 
   // 让 Agent 有**正确通道**记录科研事实：ID 与双向引用由我们保证，
   // 且 `research_state_propose` **只提案、不应用**（Stage 4 §20 / §21）。
   ctx.effect(() => {
+    // OpenAlex / 论文下载的 UA：从 package.json 读版本，确保跟随发版。
+    // 形如 `ConvFusion/0.3.1`；mailto 部分由检索层按 deps.mailto() 追加。
+    const convfusionUA = `ConvFusion/${pkg.version}`
     const disposers = defineResearchTools(
       resolveWorkspaceForAgent,
       {
         // OpenAlex Key 从设置（或 OPENALEX_API_KEY 环境变量）**每次调用时**读取：
         // 用户在设置页改完立即生效，不需要重启。
         apiKey: () => currentConfig().openalexApiKey || process.env[OPENALEX_API_KEY_ENV] || '',
+        userAgent: convfusionUA,
       },
       // 论文全文下载依赖：复用全局 fetch（与 OpenAlex 检索同一网络栈）。
       // 不需要单独的 API Key —— 下载走论文的开放获取源（arXiv / ACL / OA）。
