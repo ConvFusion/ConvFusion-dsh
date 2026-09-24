@@ -41,6 +41,7 @@ export const en = {
   'settings.library.categoryHint': '{count} capabilities · Categories follow the research process',
   'settings.library.emptyCategory': 'No customizable capabilities in this category',
   'settings.library.sectionCount': '{count} sections',
+  'settings.library.sectionHint': '{count} customizable sections',
   'settings.library.sectionCustomizedSuffix': ' · Customized',
   'settings.library.emptyUsesDefault': 'Leave blank to use the system default',
   'settings.editor.customized': 'Customized',

@@ -1169,7 +1169,11 @@ export function ConvFusionProjectSettings({
                       </option>
                     ))}
                   </select>
-                  <div style={S.hint}>{t('settings.library.emptyUsesDefault')}</div>
+                  <div style={S.hint}>
+                    {skill
+                      ? `${t('settings.library.sectionHint', { count: skill.sections.length })} · ${t('settings.library.emptyUsesDefault')}`
+                      : t('settings.library.emptyUsesDefault')}
+                  </div>
                 </div>
               </div>
             </div>

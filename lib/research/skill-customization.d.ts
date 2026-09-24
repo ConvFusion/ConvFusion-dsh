@@ -74,6 +74,14 @@ export interface CustomizationPoint {
  */
 export declare const CUSTOMIZABLE_SECTIONS: readonly string[];
 /**
+ * 章节的**规范序号**（= 它在 `CUSTOMIZABLE_SECTIONS` 里的下标）。
+ *
+ * 用途：设置页 ③「可定制章节」的**下拉顺序与默认项**都取自这里 ——
+ * 顺序必须与「一章一章往下写」的阅读顺序一致，否则默认项会落在一个任意的章节上。
+ * 未登记的章节（用户自定义技能可能带）排到最后，不静默丢弃。
+ */
+export declare function sectionOrderIndex(section: string): number;
+/**
  * 用户覆盖集合（持久化形状，与设置里的 JSON 完全一致）。
  *
  * ```json

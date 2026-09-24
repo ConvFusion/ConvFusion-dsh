@@ -46,6 +46,7 @@ export declare const dictionaries: {
         'settings.library.categoryHint': string;
         'settings.library.emptyCategory': string;
         'settings.library.sectionCount': string;
+        'settings.library.sectionHint': string;
         'settings.library.sectionCustomizedSuffix': string;
         'settings.library.emptyUsesDefault': string;
         'settings.editor.customized': string;
@@ -556,6 +557,7 @@ export declare const dictionaries: {
         readonly 'settings.library.categoryHint': "{count} capabilities · Categories follow the research process";
         readonly 'settings.library.emptyCategory': "No customizable capabilities in this category";
         readonly 'settings.library.sectionCount': "{count} sections";
+        readonly 'settings.library.sectionHint': "{count} customizable sections";
         readonly 'settings.library.sectionCustomizedSuffix': " · Customized";
         readonly 'settings.library.emptyUsesDefault': "Leave blank to use the system default";
         readonly 'settings.editor.customized': "Customized";

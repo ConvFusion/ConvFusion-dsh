@@ -123,6 +123,31 @@ console.log('\n[1] 状态组装：类别 → 研究方法 → 可定制章节')
   assert([...sections].every((x) => CUST.CUSTOMIZABLE_SECTIONS.includes(x)), '只暴露允许定制的章节')
   assert(sections.has('Research Method'), '含 Research Method')
 
+  // 章节顺序 = `CUSTOMIZABLE_SECTIONS` 的规范顺序（Purpose 在前）。
+  // 回归：曾按 `section.localeCompare` 排 → 每个能力的首个章节恒为 `Evidence Requirements`，
+  // 设置页 ③ 的默认项对几乎所有能力都一样，切 ② 时看起来"③ 没反应"。
+  const allSkills = s.categories.flatMap((c) => c.skills)
+  assert(
+    allSkills.every((k) => k.sections[0]?.section === 'Purpose'),
+    '每个能力的首个可定制章节都是 Purpose（规范顺序，不是字母序）',
+  )
+  assert(
+    allSkills.every((k) =>
+      k.sections.every((x, i, arr) => i === 0 || CUST.CUSTOMIZABLE_SECTIONS.indexOf(arr[i - 1].section) < CUST.CUSTOMIZABLE_SECTIONS.indexOf(x.section)),
+    ),
+    '能力内章节严格按规范顺序排列',
+  )
+  // ③ 的列表确实随 ② 变化：入口能力没有 Prerequisites，带前置的能力有
+  const entrySkill = allSkills.find((k) => k.skillId === 'literature-search')
+  const prereqSkill = allSkills.find((k) => k.skillId === 'literature-screening')
+  assertEq(entrySkill?.sections.length, 6, '入口能力 literature-search 有 6 个可定制章节')
+  assertEq(prereqSkill?.sections.length, 7, '带前置的 literature-screening 有 7 个（切换 ② 时 ③ 的列表会变）')
+  assertEq(
+    prereqSkill?.sections.findIndex((x) => x.section === 'Prerequisites'),
+    2,
+    'Prerequisites 落在规范位置（第 3 项）',
+  )
+
   // 每个章节都带系统原文（用户必须看得见自己在覆盖什么）
   const withBase = s.categories.flatMap((c) => c.skills.flatMap((k) => k.sections))
   assert(withBase.every((x) => typeof x.base === 'string' && x.base.trim().length > 0), '每项都带系统原文（非空）')
@@ -1020,6 +1045,9 @@ console.log('\n[2] 保存 / 恢复：真的落到定制文件')
     (k) => k.skillId === 'literature-search',
   )
   const section = skill.sections[0].section
+  // 第二个章节必须与第一个**不同**（规范顺序下 sections[0] = Purpose）：
+  // reset 的语义是"只清除指定章节"，用同一个章节就测不出来了。
+  const otherSection = skill.sections.find((x) => x.section !== section).section
 
   const saved = await h.handler('customization/save', {
     skillId: 'literature-search',
@@ -1049,7 +1077,7 @@ console.log('\n[2] 保存 / 恢复：真的落到定制文件')
 
   // 恢复端点
   await h.handler('customization/save', { skillId: 'literature-search', section, text: 'x' })
-  await h.handler('customization/save', { skillId: 'literature-search', section: 'Purpose', text: 'y' })
+  await h.handler('customization/save', { skillId: 'literature-search', section: otherSection, text: 'y' })
   const resetOne = await h.handler('customization/reset', { skillId: 'literature-search', section })
   assert(resetOne.ok && resetOne.value.file.entryCount === 1, 'reset 只清除指定章节')
 
@@ -1282,6 +1310,11 @@ console.log('\n[8] 自动选中优先级：优先落到已有定制的项')
     ]
     assertEq(mod.preferredSection(sections), 'Reasoning Guidance', 'preferredSection 命中已有定制的章节（不是第一个）')
     assertEq(mod.preferredSection([sec('Purpose'), sec('Research Method')]), 'Purpose', 'preferredSection 无定制 → 第一个')
+    assertEq(
+      mod.preferredSection([sec('Purpose'), sec('When to Use'), sec('Prerequisites'), sec('Research Method')]),
+      'Purpose',
+      'preferredSection 无定制 → 规范第一项 Purpose（③ 的默认项可预期）',
+    )
     assertEq(mod.preferredSection([]), '', 'preferredSection 空列表 → 空串')
 
     const skills = [skill('a', 0, [sec('Purpose')]), skill('b', 1, [sec('Purpose')]), skill('c', 0, [sec('Purpose')])]

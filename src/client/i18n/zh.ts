@@ -43,6 +43,7 @@ export const zh = {
   'settings.library.categoryHint': '{count} 项能力 · 类别按研究过程排序',
   'settings.library.emptyCategory': '该类别下暂无可定制能力',
   'settings.library.sectionCount': '{count} 个章节',
+  'settings.library.sectionHint': '共 {count} 个可定制章节',
   'settings.library.sectionCustomizedSuffix': ' · 已定制',
   'settings.library.emptyUsesDefault': '留空则使用系统原文',
   'settings.editor.customized': '已定制',
