@@ -20,14 +20,17 @@
  * 否则一个笔误就会让"当前阶段"永远判不出来。词表：
  *
  * ```text
- * problem-defined      有研究问题且已定领域
+ * topic-proposed        research/topics.md 里记录了研究话题
  * literature-evidence  存在 source_kind=literature 的证据
  * claims               存在主张
  * method-plan          存在方法相关的 Plan
+ * resource-estimate    存在资源/成本/可行性相关的 Plan
  * experiments          存在 experiments/ 目录
- * settled-evidence     存在 supported/verified 证据
+ * problem-defined      有研究问题且已定领域（前置用；问题随主题在检索之后确定）
+ * settled-evidence     存在 supported/verified 证据（技能前置用，非阶段信号）
  * decisions            存在决策记录
  * manuscript           存在论文正文
+ * simulation-result    存在 source_kind=computation 的证据（技能前置用，非阶段信号）
  * ```
  *
  * 信号留空或写错 → 该阶段**不参与"当前阶段"判定**（不会造成假的缺口），但仍会展示。
@@ -36,13 +39,13 @@
  * 因为用户定制在合成时**排在原文之前**，所以"取第一个"天然让**用户的定义优先**。
  */
 
-export const CATEGORY = 'research-management'
+export const CATEGORY = 'research-planning'
 
 export const SKILLS = [
   {
     id: 'research-process',
-    // taxonomy 里已有的叶子：这个能力做的正是「进展评估」
-    category: 'research-management/progress-assessment',
+    // 研究计划（C04）的元能力：它定义"进展如何判定"，其余能力据此被推荐
+    category: 'research-planning/research-process',
     name: 'Research Process',
     origin: 'v2/native-process',
     purpose:
@@ -59,13 +62,13 @@ export const SKILLS = [
       'Format: `stage: <id> | <display name> | <capability category> | <signal> | <what this stage produces>`. Signals come from a fixed vocabulary (see the header of this skill file in the repository); an empty or unknown signal means the stage is displayed but does not count towards the current-stage decision.',
       '',
       '```text',
-      'stage: problem | 理解问题 | research-understanding | problem-defined | 可证伪的研究问题与范围（project.md）',
+      'stage: topics | 提出话题 | research-understanding | topic-proposed | 研究话题（research/topics.md）',
       'stage: literature | 文献调研 | literature | literature-evidence | 实际检索到的文献证据（research/evidence/）',
-      'stage: innovation | 创新假设 | innovation | claims | 可检验的假设与主张（research/claims/）',
-      'stage: method | 方法设计 | methodology | method-plan | 可被第三方实现的方法设计',
-      'stage: experiment | 实验验证 | experiment | experiments | 实验产物（experiments/<name>/results/）',
-      'stage: analysis | 分析论证 | analysis | settled-evidence | 经确认的结果证据（Evidence 状态 supported/verified）',
+      'stage: innovation | 创新假设 | innovation | claims | 已确定的研究问题与主题、可检验的假设与主张（project.md / research/claims/）',
+      'stage: planning | 计划管理 | research-planning | method-plan | 可执行的研究计划与方法设计（research/plans/）',
+      'stage: resource | 资源评估 | resource-estimation | resource-estimate | 资源需求、成本与可行性估计（research/plans/）',
       'stage: decision | 研究决策 | research-decision | decisions | 已记录理由的研究决策（research/decisions/）',
+      'stage: experiment | 实验验证 | experiment | experiments | 实验产物与经确认的结果证据（experiments/<name>/results/）',
       'stage: writing | 论文写作 | academic-writing | manuscript | 论文正文（papers/<id>/paper.md）',
       '```',
       '',

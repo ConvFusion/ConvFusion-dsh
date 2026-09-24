@@ -19,7 +19,7 @@ export const SKILLS = [
    * ══════════════════════════════════════════════════════════════════ */
   {
     id: 'innovation-gap-analysis',
-    category: 'innovation/innovation-analysis',
+    category: 'innovation/innovation-gap-analysis',
     name: 'Innovation Gap Analysis',
     origin: 'conception/understanding, conception/gap-discovery',
     purpose:
@@ -47,40 +47,43 @@ export const SKILLS = [
       'a consequence-based ranking of the gaps',
       'an explicit statement of what the search could not exclude',
     ],
+    prerequisites: [
+      "literature-evidence | 缺口是文献图景上的判断，需先有文献证据",
+    ],
     sources: [
       { file: 'modules/conception/prompts/understanding_prompt.py' },
       { file: 'modules/conception/prompts/gap_discovery_prompt.py' },
     ],
   },
   {
-    id: 'research-idea-generation',
-    category: 'innovation/idea-generation',
-    name: 'Research Idea Generation',
+    id: 'research-theme-generation',
+    category: 'innovation/research-theme-generation',
+    name: 'Research Theme Generation',
     origin: 'conception/idea-generation',
     purpose:
-      'Produce a portfolio of genuinely distinct candidate research ideas, each attacking a named gap through a stated mechanism — instead of several rewordings of one idea.',
+      'Turn a research topic and a ranked set of gaps into candidate research themes — each stated at the level of a precise research title (most often the paper title) that attacks a named gap through a stated mechanism, instead of several rewordings of one theme.',
     whenToUse: [
-      'A ranked set of gaps exists and you need candidate ways to close them.',
-      'An existing idea list looks broad but every entry shares the same mechanism.',
-      'You need cross-domain candidates and want their validity conditions made explicit.',
+      'A research topic exists and the literature has been reviewed into gaps, and you need candidate themes to commit to.',
+      'An existing theme list looks broad but every entry shares the same mechanism.',
+      'You need cross-domain candidate themes and want their validity conditions made explicit.',
     ],
     method: [
-      '1. **Fix the generation target before generating.** For each gap write the one-sentence change in capability the idea must produce. An idea that cannot state this is a restatement of existing work, however appealing it sounds.',
-      '2. **Generate across mechanisms, not within one.** For each gap, produce candidates from at least three different mechanism families — change the representation, change the training signal, change the inference procedure, change the evaluation setting. Mechanism diversity is what makes the later portfolio decision meaningful.',
+      '1. **Fix the generation target before generating.** For each gap write the one-sentence change in capability the theme must produce. A theme that cannot state this is a restatement of existing work, however appealing it sounds.',
+      '2. **Generate across mechanisms, not within one.** For each gap, produce candidates from at least three different mechanism families — change the representation, change the training signal, change the inference procedure, change the evaluation setting. Mechanism diversity is what makes the later theme decision meaningful.',
       '3. **Force cross-domain transfer to declare itself.** For at least one candidate per gap, name the source field and the imported mechanism, then state what must be re-derived for the import to be valid. Unexamined analogy is the most common source of fake novelty.',
-      '4. **Check the closest work while writing the idea, not after.** If you cannot name what differs from the nearest existing method and why that difference should matter, drop the candidate rather than keeping it with vague novelty language.',
-      '5. **State the falsifiable claim for each idea.** Write the observation that would show it does not work. An idea whose claim cannot fail is not researchable; it is a programme of work.',
-      '6. **Keep the idea separate from its implementation.** Record mechanism and claim only. Architecture, dataset and schedule belong to planning, and committing to them now silently deletes alternatives.',
+      '4. **Check the closest work while writing the theme, not after.** If you cannot name what differs from the nearest existing method and why that difference should matter, drop the candidate rather than keeping it with vague novelty language.',
+      '5. **State each theme at title level, with its falsifiable claim.** A research theme is a strict selection, normally usable as the paper title: write one sentence naming the problem, the intervention and the comparison. Then write the observation that would show it does not work — a theme whose claim cannot fail is a programme of work, not a research theme.',
+      '6. **Keep the theme separate from its implementation.** Record mechanism, claim and title only. Architecture, dataset and schedule belong to planning, and committing to them now silently deletes alternatives.',
       '7. **Stop at coverage, not at a count.** Stop when every selected gap has at least one candidate from each plausible mechanism family; report the gaps that produced nothing and why, rather than padding the list.',
     ],
     evidenceRequirements:
-      'Each idea must reference the gap it addresses and the closest work it must be distinguished from. Any cross-domain import must name its source and what was re-derived. No idea may be justified by trend or popularity alone.',
+      'Each candidate theme must reference the gap it addresses and the closest work it must be distinguished from. Any cross-domain import must name its source and what was re-derived. No theme may be justified by trend or popularity alone.',
     expectedOutput: [
-      'candidate ideas, each with its gap, mechanism family and core claim',
-      'the closest-work comparison that distinguishes each idea',
-      'a falsification condition per idea',
+      'candidate research themes, each with its gap, mechanism family and core claim',
+      'a title-level statement per theme (usable as the paper title), together with its falsification condition',
+      'the closest-work comparison that distinguishes each theme',
       'cross-domain imports with their validity conditions',
-      'gaps that yielded no viable candidate, with the reason',
+      'gaps that yielded no viable theme, with the reason',
     ],
     sources: [
       { file: 'modules/conception/prompts/idea_generation_prompt.py' },
@@ -89,7 +92,7 @@ export const SKILLS = [
   },
   {
     id: 'idea-novelty-assessment',
-    category: 'innovation/novelty-assessment',
+    category: 'innovation/idea-novelty-assessment',
     name: 'Idea Novelty Assessment',
     origin: 'conception/idea-evaluation, decision/novelty-evaluation',
     purpose:
@@ -117,6 +120,9 @@ export const SKILLS = [
       'an incremental-versus-structural judgement with its reasoning',
       'prior art that could not be ruled out',
     ],
+    prerequisites: [
+      "literature-evidence | 评新颖性要对照最近的前人工作",
+    ],
     sources: [
       { file: 'modules/decision/prompts/novelty_evaluator.py' },
       { file: 'modules/conception/prompts/idea_evaluation_prompt.py' },
@@ -125,7 +131,7 @@ export const SKILLS = [
   },
   {
     id: 'hypothesis-formulation',
-    category: 'innovation/hypothesis',
+    category: 'innovation/hypothesis-formulation',
     name: 'Hypothesis Formulation',
     origin: 'conception/structuring, conception/innovation-state-synthesis',
     purpose:
@@ -152,6 +158,9 @@ export const SKILLS = [
       'boundary conditions derived from prior evidence',
       'the concrete refutation test',
       'competing trivial explanations and how the experiment separates them',
+    ],
+    prerequisites: [
+      "literature-evidence | 假设立在文献证据之上，否则无法判断它是否已被回答",
     ],
     sources: [
       { file: 'modules/conception/prompts/structuring_prompt.py' },
@@ -188,6 +197,9 @@ export const SKILLS = [
       'control conditions that isolate the mechanism',
       'the scope and limits of each claim, plus a fallback contribution',
     ],
+    prerequisites: [
+      "claims | 先有主张，才能设计证明它的证据包",
+    ],
     sources: [
       { file: 'modules/conception/prompts/structuring_prompt.py' },
       { file: 'modules/decision/prompts/impact_evaluator.py' },
@@ -200,7 +212,7 @@ export const SKILLS = [
    * ══════════════════════════════════════════════════════════════════ */
   {
     id: 'research-direction-selection',
-    category: 'research-decision/research-direction',
+    category: 'research-decision/research-direction-selection',
     name: 'Research Direction Selection',
     origin: 'conception/idea-evaluation, conception/idea-selection',
     purpose:
@@ -228,6 +240,9 @@ export const SKILLS = [
       'the chosen direction and what it commits',
       'the runner-up, its winning axis, and the revisit trigger',
     ],
+    prerequisites: [
+      "literature-evidence | 方向选择要在文献评估之上做",
+    ],
     sources: [
       { file: 'modules/conception/prompts/idea_evaluation_prompt.py' },
       { file: 'modules/conception/prompts/idea_selection_prompt.py' },
@@ -235,7 +250,7 @@ export const SKILLS = [
   },
   {
     id: 'feasibility-cost-and-resource-plan',
-    category: 'research-decision/experiment-decision',
+    category: 'resource-estimation/feasibility-cost-and-resource-plan',
     name: 'Feasibility, Cost and Resource Plan',
     origin: 'decision/feasibility-evaluation, decision/cost-evaluation, resource/estimation',
     purpose:
@@ -263,6 +278,9 @@ export const SKILLS = [
       'the bottleneck and the scaling behaviour of cost',
       'a consistency check across spec, option and cost, plus an uncertainty range',
     ],
+    prerequisites: [
+      "method-plan | 可行性与成本估算以方法设计为对象",
+    ],
     sources: [
       { file: 'modules/decision/prompts/feasibility_evaluator.py' },
       { file: 'modules/decision/prompts/cost_evaluator.py' },
@@ -276,7 +294,7 @@ export const SKILLS = [
   },
   {
     id: 'research-risk-assessment',
-    category: 'research-decision/risk-assessment',
+    category: 'research-planning/research-risk-assessment',
     name: 'Research Risk Assessment',
     origin: 'decision/risk-evaluation, decision/feasibility-evaluation, resource/estimation',
     purpose:
@@ -304,6 +322,9 @@ export const SKILLS = [
       'kill criteria stated in advance',
       'residual risk after mitigation, plus reproducibility risks',
     ],
+    prerequisites: [
+      "method-plan | 评研究风险要先有方法与计划",
+    ],
     sources: [
       { file: 'modules/decision/prompts/risk_evaluator.py' },
       { file: 'modules/decision/prompts/feasibility_evaluator.py' },
@@ -312,7 +333,7 @@ export const SKILLS = [
   },
   {
     id: 'go-no-go-decision',
-    category: 'research-decision/go-no-go',
+    category: 'research-decision/go-no-go-decision',
     name: 'Go / No-Go Decision',
     origin: 'decision/decision-synthesis',
     purpose:
@@ -339,6 +360,9 @@ export const SKILLS = [
       'a go, no-go or conditional go, with the decision rule when conditional',
       'what is being committed and the opportunity cost',
       'prioritised next actions with owners and progress signals',
+    ],
+    prerequisites: [
+      "resource-estimate | 决定继续/放弃，要先知道投入的资源代价",
     ],
     sources: [{ file: 'modules/decision/prompts/decision_synthesizer.py' }],
   },

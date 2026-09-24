@@ -1,6 +1,6 @@
 ---
 name: Visual Evidence Selection
-category: academic-writing/technical-writing
+category: academic-writing/visual-evidence-selection
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - More candidate figures were collected than the paper can hold.
 - A candidate figure repeats the comparison a table already makes.
 - A result is argued in the text but never visualised.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: experiments/simulation-result | 选图表要先有结果
+```
 
 ## Research Method
 

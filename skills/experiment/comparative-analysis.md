@@ -1,6 +1,6 @@
 ---
 name: Comparative Analysis & Significance
-category: analysis/comparative-analysis
+category: experiment/comparative-analysis
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - A results table exists and you must say which differences matter.
 - The improvement over the strongest baseline is small relative to run-to-run variation.
 - Some baseline numbers come from papers run under a different setting.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: experiments | 对比分析基于实验产物
+```
 
 ## Research Method
 

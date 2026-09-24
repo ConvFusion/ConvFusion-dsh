@@ -24,6 +24,14 @@ Use this skill when:
 
 Use `paper-claim-review` for claim–evidence consistency inside the text, and this skill for submission readiness: fit, record audit, citations, figures, integrity, positioning.
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: manuscript | 投稿前评阅先要有正文
+```
+
 ## Research Method
 
 1. **Separate the questions before judging any of them.** Keep scientific validity, contribution value, journal fit, reporting quality and integrity concerns apart, and say which one each finding belongs to. A weakness in one is not evidence about another.

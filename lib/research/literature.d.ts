@@ -205,6 +205,14 @@ export interface LiteratureDeps {
     apiKey: () => string;
     /** 公共池联络邮箱（可选）。 */
     mailto?: () => string | undefined;
+    /**
+     * User-Agent 头（可选）。
+     *
+     * 不在本模块内硬编码版本号 —— 版本由装配层（插件入口）从 `package.json`
+     * 读取后注入，避免每次发版遗漏此字符串（2026-09 遗留：此处曾停留在 0.2 而
+     * 包版本已是 0.3.1）。缺省回退到 `ConvFusion (no-version)`，仅用于测试替身。
+     */
+    userAgent?: string;
     /** fetch 实现（缺省用全局 fetch）。 */
     fetchImpl?: FetchLike;
     /** 请求超时（毫秒）。 */

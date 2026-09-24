@@ -1,6 +1,6 @@
 ---
 name: Go / No-Go Decision
-category: research-decision/go-no-go
+category: research-decision/go-no-go-decision
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - The novelty, feasibility, cost and risk assessments exist and a commitment must be made.
 - A project is continuing by momentum and nobody has stated the grounds for continuing.
 - The decision depends on a missing fact and the right answer is currently neither go nor no-go.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: resource-estimate | 决定继续/放弃，要先知道投入的资源代价
+```
 
 ## Research Method
 

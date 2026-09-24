@@ -127,6 +127,13 @@ export interface ResearchContext {
    * 用于能力选择与进展展示，不驱动执行。
    */
   process: ProcessAssessment
+  /**
+   * 建议技能的前置依赖未满足项（skillId → 一行提示）。
+   *
+   * ⚠️ **提示性**：只告诉 Agent「这个能力的前置信号还没落地」，不阻塞、不驱动执行
+   * （与 `process` 同一条边界）。仅评估建议技能，不全量评估 55 个技能。
+   */
+  prereqWarnings: Map<string, string>
   /** 当前激活 Paper 状态摘要（Stage 5；null = 尚未建立 Paper）。 */
   paper: PaperStatusSummary | null
   /** 当前激活 Paper 未解决的缺口（Stage 5 §14；只作提示，不触发执行）。 */

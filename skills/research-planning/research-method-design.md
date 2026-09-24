@@ -1,6 +1,6 @@
 ---
 name: Research Method Design
-category: methodology/method-design
+category: research-planning/research-method-design
 type: system
 status: active
 version: 1.0
@@ -21,6 +21,14 @@ Use this skill when:
 - The method is named but its intervention is not stated (for example "a diffusion model" with no stated change).
 - You need to check that the planned evaluation could actually falsify the mechanism.
 - Data requirements must be settled before resources are estimated.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: claims | 方法是为验证主张而设计的
+```
 
 ## Research Method
 

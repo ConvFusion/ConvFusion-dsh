@@ -276,7 +276,7 @@ export function listSystemSkills(root?: string): SkillDocument[] {
     const doc = parseSkillDocument(abs, `${SKILLS_DIR}/${rel}`, 'system')
     if (doc) docs.push({ ...doc, type: 'system', editable: false })
   }
-  // ⚠️ 按**编号排序**，不是 id 字母序：字母序会把消融（实验阶段）排到理解问题之前，
+  // ⚠️ 按**编号排序**，不是 id 字母序：字母序会把消融（实验阶段）排到理解输入之前，
   // 与研究进程无关。编号表（`skill-codes.ts`）是研究顺序的单一事实来源。
   return docs.sort((a, b) => skillSortKey(a.id).localeCompare(skillSortKey(b.id)))
 }

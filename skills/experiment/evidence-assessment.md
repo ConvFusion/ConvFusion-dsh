@@ -1,6 +1,6 @@
 ---
 name: Evidence Assessment & Claim Traceability
-category: analysis/evidence-assessment
+category: experiment/evidence-assessment
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - The experiment pipeline has finished and claims are about to be written.
 - A measured result departs from the pre-run prediction and needs scrutiny before it is trusted.
 - A non-programmable or offline study has returned human-collected data that must be checked against the design.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: experiments | 要评估证据是否支撑主张，先得有实验结果
+```
 
 ## Research Method
 

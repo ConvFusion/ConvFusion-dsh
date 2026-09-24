@@ -1,6 +1,6 @@
 ---
 name: Research Topic Ranking
-category: research-decision/research-direction
+category: research-decision/research-topic-ranking
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - Several candidate topics exist and one must be chosen.
 - A topic is being questioned and it is unclear whether to continue or change.
 - The user has stated preferences (risk, timeline, venue) that should constrain the choice.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: literature-evidence | 候选主题的排序要对照文献，而不是凭印象
+```
 
 ## Research Method
 

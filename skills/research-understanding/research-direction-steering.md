@@ -1,6 +1,6 @@
 ---
 name: Research Direction Steering
-category: research-decision/research-direction
+category: research-understanding/research-direction-steering
 type: system
 status: active
 version: 1.0

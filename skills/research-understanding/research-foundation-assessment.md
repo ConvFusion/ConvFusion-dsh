@@ -1,6 +1,6 @@
 ---
 name: Research Foundation Assessment
-category: research-understanding/context-analysis
+category: research-understanding/research-foundation-assessment
 type: system
 status: active
 version: 1.0

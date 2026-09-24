@@ -40,6 +40,9 @@ export const SKILLS = [
       'primary and secondary metrics with the split protocol',
       'versioned design plus the recorded refinements and their reasons',
     ],
+    prerequisites: [
+      "method-plan | 实验设计要有已定的方法来检验",
+    ],
     sources: [
       { file: 'modules/experiment/design/prompts/experiment_design_prompt.py' },
       { file: 'modules/experiment/design/prompts/experiment_design_refiner_prompt.py' },
@@ -49,7 +52,7 @@ export const SKILLS = [
   },
   {
     id: 'simulation-baseline',
-    category: 'experiment/simulation',
+    category: 'experiment/simulation-baseline',
     name: 'Simulation-First Results & Baseline Reference',
     origin: 'experiment/simulation, experiment/design, experiment/lab_offline',
     purpose:
@@ -95,6 +98,9 @@ export const SKILLS = [
       'expected chart and table descriptions, marked as expected rather than observed',
       'label policy applied to artefacts plus the sim-to-real replacement plan',
     ],
+    prerequisites: [
+      "method-plan | 仿真为方法设计服务（要先有设计好的方法）",
+    ],
     sources: [
       { file: 'modules/experiment/simulation/prompts/experiment_simulation_prompt.py' },
       { file: 'modules/experiment/simulation/prompts/design_refinement_prompt.py' },
@@ -130,6 +136,9 @@ export const SKILLS = [
       'split protocol with the splitting unit and a deterministic seed',
       'preprocessing and statistics requirements handed to implementation',
       'fallback plan for unavailable or unusable data',
+    ],
+    prerequisites: [
+      "method-plan | 需要什么数据由方法决定",
     ],
     sources: [
       { file: 'modules/experiment/dataset/prompts/dataset_planning_prompt.py' },
@@ -168,6 +177,9 @@ export const SKILLS = [
       'the pre-declared improvement margin',
       'implementation requirements per baseline, including cited-only entries',
     ],
+    prerequisites: [
+      "method-plan | 基线要与方法可比",
+    ],
     sources: [
       { file: 'modules/experiment/design/prompts/baseline_design_prompt.py' },
       { file: 'modules/experiment/method/prompts/baseline_requirements_prompt.py' },
@@ -176,7 +188,7 @@ export const SKILLS = [
   },
   {
     id: 'evaluation-protocol',
-    category: 'experiment/evaluation',
+    category: 'experiment/evaluation-protocol',
     name: 'Evaluation Protocol & Metric Design',
     origin: 'experiment/design, experiment/analysis, experiment/method',
     purpose:
@@ -203,6 +215,9 @@ export const SKILLS = [
       'pre-declared success, failure and minimum-effect thresholds',
       'required output schema for the implementation',
     ],
+    prerequisites: [
+      "method-plan | 评测协议服务于方法要检验的主张",
+    ],
     sources: [
       { file: 'modules/experiment/analysis/prompts/metric_analysis_prompt.py' },
       { file: 'modules/experiment/method/prompts/training_code_prompt.py' },
@@ -212,7 +227,7 @@ export const SKILLS = [
   },
   {
     id: 'ablation-design',
-    category: 'experiment/ablation',
+    category: 'experiment/ablation-design',
     name: 'Ablation & Contribution Isolation',
     origin: 'experiment/design, experiment/simulation, experiment/summary',
     purpose:
@@ -239,6 +254,9 @@ export const SKILLS = [
       'per-run decision criteria declared before execution',
       'run budget with pruning rationale',
     ],
+    prerequisites: [
+      "method-plan | 消融要按方法的组件来拆分，否则归因不成立",
+    ],
     sources: [
       { file: 'modules/experiment/design/prompts/experiment_design_prompt.py' },
       { file: 'modules/experiment/simulation/prompts/design_refinement_prompt.py' },
@@ -249,7 +267,7 @@ export const SKILLS = [
   },
   {
     id: 'reproducible-implementation-spec',
-    category: 'experiment/reproducibility',
+    category: 'experiment/reproducible-implementation-spec',
     name: 'Reproducible Implementation Specification',
     origin: 'experiment/method, experiment/dataset, experiment/analysis',
     purpose:
@@ -276,6 +294,9 @@ export const SKILLS = [
       'run-directory layout, config schema, smoke-test and fail-loud requirements',
       're-execution comparison record with tolerances and deviations',
     ],
+    prerequisites: [
+      "method-plan | 复现规范锁定的是方法的实现",
+    ],
     sources: [
       { file: 'modules/experiment/method/prompts/model_design_prompt.py' },
       { file: 'modules/experiment/method/prompts/training_code_prompt.py' },
@@ -287,7 +308,7 @@ export const SKILLS = [
   },
   {
     id: 'result-analysis',
-    category: 'analysis/result-analysis',
+    category: 'experiment/result-analysis',
     name: 'Result Analysis & Finding Extraction',
     origin: 'experiment/analysis, experiment/summary',
     purpose:
@@ -314,6 +335,9 @@ export const SKILLS = [
       'limitations and negative results',
       'claim-support verdict per intended claim',
     ],
+    prerequisites: [
+      "experiments | 没有实验产物就没有可分析的结果",
+    ],
     sources: [
       { file: 'modules/experiment/analysis/prompts/metric_analysis_prompt.py' },
       { file: 'modules/experiment/analysis/prompts/chart_planning_prompt.py' },
@@ -322,7 +346,7 @@ export const SKILLS = [
   },
   {
     id: 'comparative-analysis',
-    category: 'analysis/comparative-analysis',
+    category: 'experiment/comparative-analysis',
     name: 'Comparative Analysis & Significance',
     origin: 'experiment/analysis, experiment/simulation, experiment/prompts (baseline builder)',
     purpose:
@@ -349,6 +373,9 @@ export const SKILLS = [
       'practical-significance statement relative to cost and metric range',
       'explicit list of rows excluded from comparison and why',
     ],
+    prerequisites: [
+      "experiments | 对比分析基于实验产物",
+    ],
     sources: [
       { file: 'modules/experiment/prompts/baseline_builder_prompt.py' },
       { file: 'modules/experiment/analysis/prompts/metric_analysis_prompt.py' },
@@ -359,7 +386,7 @@ export const SKILLS = [
   },
   {
     id: 'evidence-assessment',
-    category: 'analysis/evidence-assessment',
+    category: 'experiment/evidence-assessment',
     name: 'Evidence Assessment & Claim Traceability',
     origin: 'experiment/prompts (full-chain evaluator), experiment/summary, experiment/lab_offline',
     purpose:
@@ -385,6 +412,9 @@ export const SKILLS = [
       'achieved-versus-expected gap analysis with causes',
       'evidence grade per claim and what would raise it',
       'offline protocol compliance check plus a proceed, revise or stop verdict with required fixes',
+    ],
+    prerequisites: [
+      "experiments | 要评估证据是否支撑主张，先得有实验结果",
     ],
     sources: [
       { file: 'modules/experiment/prompts/full_chain_evaluator_prompt.py' },

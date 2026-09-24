@@ -1,6 +1,6 @@
 ---
 name: Experiment Pipeline Design
-category: research-management/task-decomposition
+category: research-planning/experiment-pipeline-design
 type: system
 status: active
 version: 1.0
@@ -21,6 +21,14 @@ Use this skill when:
 - Steps are described as prose phases with no inputs, outputs or dependencies.
 - The work must be parallelised across people or machines.
 - You need to know the critical path before estimating cost or negotiating a deadline.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 流水线是把已定的方法分解为可执行步骤
+```
 
 ## Research Method
 

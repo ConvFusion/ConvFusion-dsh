@@ -1,6 +1,6 @@
 ---
 name: Research Risk Assessment
-category: research-decision/risk-assessment
+category: research-planning/research-risk-assessment
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - A plan is being committed and its failure modes have not been written down.
 - A risk list exists but contains unread papers and vague warnings instead of mechanisms.
 - You need to decide at what observation the direction should be abandoned.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 评研究风险要先有方法与计划
+```
 
 ## Research Method
 

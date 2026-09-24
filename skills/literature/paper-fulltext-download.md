@@ -21,6 +21,14 @@ Use this skill when:
 - A `research_literature_search` returned a promising record but you need the paper body to read the comparison tables, the dataset descriptions or the method details.
 - You want to build a local corpus of full-text papers for systematic comparison (every paper gets a stable sequence number and a manifest entry, so nothing is lost or duplicated).
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: literature-evidence | 先有检索到的文献证据，才谈得上取哪几篇的全文
+```
+
 ## Research Method
 
 0. **Take the link fields from the search record — do not fabricate URLs.** A `research_literature_search` record carries `pdfUrl`, `openAccessUrl`, `landingPageUrl`, `doi` and `openAccessStatus`. Pass them (plus the paper `title`) to the `research_paper_download` tool with `action: "download"`. The tool resolves an ordered candidate list (PDF direct → OA → arXiv → ACL Anthology → landing → DOI), fetches the bytes, validates them as PDF or HTML, and writes the file to `research/literature/fulltext/<NNN>_<title>.pdf|.html`.

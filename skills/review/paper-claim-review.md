@@ -22,6 +22,14 @@ Use this skill when:
 
 Use `experimental-evidence-review` when the question is whether the experiments are strong enough; use this skill when the question is whether the **text** says more, less, or something other than what the research supports.
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: manuscript | 评论文主张先要有正文
+```
+
 ## Research Method
 
 1. **Check genre and maturity before reading for quality.** Does the manuscript do what its stated genre promises — if it claims to be a review, does it actually survey the literature rather than argue one position; if it claims a method, is the development far enough along for the venue and stage it presents itself at? Say plainly whether the work reads as premature, mispositioned, or filed under the wrong article type.

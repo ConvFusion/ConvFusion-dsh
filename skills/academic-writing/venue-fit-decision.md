@@ -1,6 +1,6 @@
 ---
 name: Venue Fit Decision
-category: research-decision/go-no-go
+category: academic-writing/venue-fit-decision
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - Before fixing the section skeleton, because the venue choice determines it.
 - A project sits between conference and journal ambition and a choice must be made.
 - Experiments are complete but weaker than hoped, and the submission target must be re-decided.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: experiments/simulation-result | 投稿形态按已有结果（真实或仿真）的证据厚度定
+```
 
 ## Research Method
 

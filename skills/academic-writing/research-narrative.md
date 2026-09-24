@@ -1,6 +1,6 @@
 ---
 name: Research Narrative and Positioning
-category: academic-writing/argumentation
+category: academic-writing/research-narrative
 type: system
 status: active
 version: 1.0
@@ -21,6 +21,14 @@ Use this skill when:
 - The list of contributions reads as a list of activities rather than as verifiable claims.
 - Related work reads as a paper-by-paper summary, or the gap is asserted without support.
 - A storyline draft exists and you need to know which part of it is weak before writing sections from it.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: experiments/simulation-result | 叙事要有可讲述的结果（真实或仿真）
+```
 
 ## Research Method
 

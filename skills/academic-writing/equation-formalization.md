@@ -1,6 +1,6 @@
 ---
 name: Equation Formalization
-category: academic-writing/technical-writing
+category: academic-writing/equation-formalization
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - The method describes computations in words but the paper needs numbered equations.
 - The same quantity is written several different ways across sections.
 - Equations must be referenced by number, or rendered from a deterministic template rather than as free-form LaTeX.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 公式来自方法设计
+```
 
 ## Research Method
 

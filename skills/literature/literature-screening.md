@@ -21,6 +21,14 @@ Use this skill when:
 - You must justify why a work was included or excluded.
 - Duplicate or near-duplicate works from different queries need resolving.
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: literature-evidence | 先有检索并记录下的文献证据才能筛
+```
+
 ## Research Method
 
 1. **Fix the inclusion criteria before screening** — venue tier, recency window, task/setting match, whether the work reports results at all. Criteria chosen after looking at the results are not criteria.

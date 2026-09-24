@@ -1,16 +1,16 @@
 ---
-name: Topic Understanding
-category: research-understanding/topic-understanding
+name: Input Understanding
+category: research-understanding/input-understanding
 type: system
 status: active
 version: 1.0
 ---
 
-# Skill: Topic Understanding
+# Skill: Input Understanding
 
 ## Purpose
 
-Turn an unstructured input — a paper, repository, dataset, conversation, half-formed idea — into a precise statement of what is actually being researched: its source type, domain, and substantive content.
+Turn an unstructured input — a paper, repository, dataset, conversation, half-formed idea — into a precise statement of what the input actually is and contains: its source type, its domain, and the research signals inside it. This is **input understanding**, not topic definition: the first step cannot produce a research theme, and must not pretend to.
 
 ## When to Use
 
@@ -18,7 +18,7 @@ Use this skill when:
 
 - A new piece of material enters the project and you do not yet know how to treat it.
 - The user describes an interest in vague terms and you must find the research inside it.
-- You are about to search the literature but the question itself is still unclear.
+- You are about to propose a research topic and need to know what the input can actually support.
 
 ## Research Method
 
@@ -26,7 +26,7 @@ Use this skill when:
 2. **Identify the domain at the level a researcher would name it** (e.g. "Robotics (Embodied AI)", not "Computer Science"). The domain determines which literature is relevant and which baselines count.
 3. **Separate what the input states from what it implies.** List explicitly: stated problems, methods, results, limitations, claimed future work. Do not merge these into one summary — their differences are where research questions come from.
 4. **Extract research signals.** A signal is something that could become a research direction: an admitted limitation, a contradiction with another work, a missing evaluation dimension, an untested assumption.
-5. **Assemble a research seed** — domain + problem + signals — expressed so a later step can build a direction from it. If the material cannot support a seed, state what is missing.
+5. **Assemble a research seed** — domain + problem + signals — expressed so the next step (proposing a research topic) can build a direction from it. If the material cannot support a seed, state what is missing rather than inventing one.
 
 ## Reasoning Guidance
 

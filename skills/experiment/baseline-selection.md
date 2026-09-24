@@ -21,6 +21,14 @@ Use this skill when:
 - The candidate baseline list consists of whatever was easiest to reimplement.
 - Expected baseline numbers are needed before implementation to judge whether the expected gain justifies the work.
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 基线要与方法可比
+```
+
 ## Research Method
 
 1. **Derive the comparison from the claim.** The baseline must differ from your method in exactly the factor the contribution claims. If it differs in data, tuning budget or compute, the comparison does not test the claim.

@@ -21,6 +21,14 @@ Use this skill when:
 - A candidate dataset is popular in the field but its domain, splits or licence may not match the claim.
 - You need a data pipeline whose processed outputs can be regenerated and inspected.
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 需要什么数据由方法决定
+```
+
 ## Research Method
 
 1. **Derive dataset requirements from the claim, not from habit.** List the constructs that must be present (labels, modalities, domains, languages), the required scale, and any distribution the claim depends on. A dataset missing a required construct cannot support the claim no matter how standard it is.

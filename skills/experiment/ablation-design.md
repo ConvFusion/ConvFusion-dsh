@@ -1,6 +1,6 @@
 ---
 name: Ablation & Contribution Isolation
-category: experiment/ablation
+category: experiment/ablation-design
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - A method combines several components and the paper will claim each of them helps.
 - A reviewer would ask which component actually drove the improvement.
 - Deciding whether an extra component justifies its complexity and compute cost.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 消融要按方法的组件来拆分，否则归因不成立
+```
 
 ## Research Method
 

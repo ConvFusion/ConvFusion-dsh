@@ -1,6 +1,6 @@
 ---
 name: Resource Requirement Estimation
-category: research-management/resource-planning
+category: resource-estimation/resource-requirement-estimation
 type: system
 status: active
 version: 1.0
@@ -21,6 +21,14 @@ Use this skill when:
 - Someone proposes a specific GPU model before the requirement has been stated.
 - You need to know which phase or resource constrains the schedule.
 - A plan is being scaled up (more seeds, more data, a larger model) and the cost curve is unknown.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 资源需求由方法设计推导，而不是拍脑袋
+```
 
 ## Research Method
 

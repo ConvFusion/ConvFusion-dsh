@@ -30,12 +30,11 @@ export const CATEGORY = {
   understanding: 'research-understanding',
   literature: 'literature',
   innovation: 'innovation',
-  methodology: 'methodology',
-  experiment: 'experiment',
-  analysis: 'analysis',
+  planning: 'research-planning',
+  resource: 'resource-estimation',
   decision: 'research-decision',
+  experiment: 'experiment',
   writing: 'academic-writing',
-  management: 'research-management',
 }
 
 /**
@@ -48,22 +47,22 @@ export const SKILLS = [
    * Research Understanding
    * ══════════════════════════════════════════════════════════════════ */
   {
-    id: 'topic-understanding',
-    category: 'research-understanding/topic-understanding',
-    name: 'Topic Understanding',
+    id: 'input-understanding',
+    category: 'research-understanding/input-understanding',
+    name: 'Input Understanding',
     purpose:
-      'Turn an unstructured input — a paper, repository, dataset, conversation, half-formed idea — into a precise statement of what is actually being researched: its source type, domain, and substantive content.',
+      'Turn an unstructured input — a paper, repository, dataset, conversation, half-formed idea — into a precise statement of what the input actually is and contains: its source type, its domain, and the research signals inside it. This is **input understanding**, not topic definition: the first step cannot produce a research theme, and must not pretend to.',
     whenToUse: [
       'A new piece of material enters the project and you do not yet know how to treat it.',
       'The user describes an interest in vague terms and you must find the research inside it.',
-      'You are about to search the literature but the question itself is still unclear.',
+      'You are about to propose a research topic and need to know what the input can actually support.',
     ],
     method: [
       "1. **Classify the input\'s source type.** Paper, patent, code, dataset, conversation, experiment log, report, or other. Treatment differs: a dataset claim needs different support from a conversation claim. If ambiguous, say so rather than defaulting silently.",
       '2. **Identify the domain at the level a researcher would name it** (e.g. "Robotics (Embodied AI)", not "Computer Science"). The domain determines which literature is relevant and which baselines count.',
       '3. **Separate what the input states from what it implies.** List explicitly: stated problems, methods, results, limitations, claimed future work. Do not merge these into one summary — their differences are where research questions come from.',
       '4. **Extract research signals.** A signal is something that could become a research direction: an admitted limitation, a contradiction with another work, a missing evaluation dimension, an untested assumption.',
-      '5. **Assemble a research seed** — domain + problem + signals — expressed so a later step can build a direction from it. If the material cannot support a seed, state what is missing.',
+      '5. **Assemble a research seed** — domain + problem + signals — expressed so the next step (proposing a research topic) can build a direction from it. If the material cannot support a seed, state what is missing rather than inventing one.',
     ],
     evidenceRequirements:
       'Every claim about what the material says must be traceable to the material (section, figure, file path). Domain and source-type judgements should state their basis. Never let an agent-generated summary become the only record of a source.',
@@ -81,33 +80,34 @@ export const SKILLS = [
     ],
   },
   {
-    id: 'problem-definition',
-    category: 'research-understanding/problem-definition',
-    name: 'Problem Definition',
+    id: 'research-topic-proposal',
+    category: 'research-understanding/research-topic-proposal',
+    name: 'Research Topic Proposal',
     origin: 'initiation/conversation, incubation',
     purpose:
-      'Convert a research interest into a falsifiable research problem: a question whose answer would change what we do, and which could turn out to be false.',
+      'Turn an understood input and the researcher\'s profile into one or more stated research topics — a **loose working direction** (a sentence, a paragraph, or something distilled from a document) that aims the literature search. A research topic is not yet a research theme: it does not have to be falsifiable, and it must not be forced into a paper title at this stage.',
     whenToUse: [
-      'A domain and some signals exist, but no committable research question does.',
-      'A direction is stated so broadly that any result could be claimed to support it.',
-      'You need to decide whether two candidate directions are actually the same problem.',
+      'The input has been understood and the intent confirmed as research, but no direction has been named.',
+      'A direction is being assumed from the material alone, without the researcher\'s own domains and foundation taken into account.',
+      'You are about to search the literature and need a stable anchor to aim the search at.',
     ],
     method: [
-      '1. **State the problem as a question, not a topic.** "Geometry-conditioned adaptation" is a topic; "does conditioning the adapter on egocentric geometry change navigation performance when topology is held fixed?" is a problem.',
-      '2. **Name the comparison.** Every research problem implies a baseline or a null. If you cannot name what the answer is compared against, the problem is not yet defined.',
-      '3. **Specify the setting.** Dataset, model class, metric, deployment constraint — whatever the answer is conditional on. A problem that is true in every setting is usually not research.',
-      '4. **State the falsification condition.** What observation would show the answer is "no"? If nothing could, the problem is unfalsifiable and should be rewritten.',
-      '5. **Check separability.** If the problem bundles two independent questions, split it — bundled questions produce uninterpretable results.',
-      '6. **Write the seed down**, with topic, question, setting and falsification condition, so planning can act on it.',
+      '1. **State the topic as a direction, not a problem.** "Using LLMs to support research decisions" is a topic. A falsifiable research question is *not* required here and belongs to theme generation and hypothesis formulation; forcing one now produces a fake problem that the literature has not yet earned.',
+      '2. **Derive it from the input and the profile together.** Take the research signals the material yielded (admitted limitations, contradictions, untested assumptions) and intersect them with what the researcher actually has — domains, demonstrated foundation, available setting. A topic with no basis in either is a guess.',
+      '3. **Keep it deliberately loose, but not empty.** A topic may be one sentence, a paragraph, or a distilled statement from a document. It must be concrete enough that a literature search can be aimed at it — and no more precise than the evidence currently supports.',
+      '4. **Name them all when there is more than one.** Distinct topics differ in the question they point at, not in dataset or scale. Record every candidate; choosing among them is a decision to be made with reasoning, not silently.',
+      '5. **Say what would sharpen or kill each topic.** For each, note which literature would confirm it, narrow it, or refute it — that is exactly what the literature step must answer.',
+      '6. **Write every topic into `research/topics.md`** — one bullet per topic, each carrying its basis (input signal + profile) and what would sharpen or kill it. That file is the stable anchor the literature step retrieves against, and the record that survives across sessions. Create it if missing; append rather than overwrite when a new topic appears.',
+      '7. **Mark the file as topics, not themes.** `research/topics.md` holds loose directions; the committed research theme (normally the paper title) is decided later, after the literature and the gap are in hand.',
     ],
     evidenceRequirements:
-      'The setting you specify should be justified: if you claim a dataset or metric is the standard one, that claim needs a literature basis. Falsification conditions must be concrete enough that someone else could check them.',
+      'Every topic must be traceable to the input that suggested it (section, figure, file path) and, where used, to the researcher\'s profile. A topic may not rest on trend or on a single paper alone; the basis for the direction must be visible so it can be revisited when the literature says otherwise.',
     expectedOutput: [
-      'the research question, stated as a question',
-      'the comparison / baseline it is against',
-      'the setting it is conditional on',
-      'the falsification condition',
-      'a note on whether it needed splitting into sub-questions',
+      'one or more research topics, each stated as a direction',
+      'the input signal(s) and profile basis each topic rests on',
+      'for each topic, what literature would confirm, narrow or kill it',
+      'every topic written into `research/topics.md` (one bullet each, with its basis)',
+      'an explicit note that these are topics, not yet research themes',
     ],
     sources: [
       { file: 'modules/initiation/conversation/prompts/clarify_goal_prompt.py' },
@@ -117,7 +117,7 @@ export const SKILLS = [
   },
   {
     id: 'research-intent-assessment',
-    category: 'research-understanding/research-question',
+    category: 'research-understanding/research-intent-assessment',
     name: 'Research Intent Assessment',
     origin: 'initiation/gate',
     purpose:
@@ -145,7 +145,7 @@ export const SKILLS = [
   },
   {
     id: 'research-domain-profiling',
-    category: 'research-understanding/context-analysis',
+    category: 'research-understanding/research-domain-profiling',
     name: 'Research Domain Profiling',
     origin: 'initiation/profile',
     purpose:
@@ -177,7 +177,7 @@ export const SKILLS = [
   },
   {
     id: 'research-foundation-assessment',
-    category: 'research-understanding/context-analysis',
+    category: 'research-understanding/research-foundation-assessment',
     name: 'Research Foundation Assessment',
     origin: 'initiation/profile',
     purpose:
@@ -272,6 +272,9 @@ export const SKILLS = [
       'the retained corpus with the basis for each retention',
       'the exclusion log with reasons',
     ],
+    prerequisites: [
+      'literature-evidence | 先有检索并记录下的文献证据才能筛',
+    ],
     origin: 'discovery/curation',
     sources: [
       { file: 'modules/discovery/curation/prompts/quality_assessment_prompt.py' },
@@ -308,6 +311,9 @@ export const SKILLS = [
       'the dominant direction and the reason it dominates',
     ],
     origin: 'discovery/cognition',
+    prerequisites: [
+      "literature-evidence | 综述建立在已落地的文献证据之上，而不是检索计划",
+    ],
     sources: [
       { file: 'modules/discovery/cognition/prompts/extract_problems_prompt.py' },
       { file: 'modules/discovery/cognition/prompts/extract_methods_prompt.py' },
@@ -343,6 +349,9 @@ export const SKILLS = [
       'persistent challenges and unexploited combinations',
     ],
     origin: 'discovery/cognition, synthesis',
+    prerequisites: [
+      "literature-evidence | 全景由读过的文献综合而来",
+    ],
     sources: [
       { file: 'modules/discovery/cognition/prompts/understanding_prompt.py' },
       { file: 'modules/discovery/cognition/prompts/landscape_cognition_prompt.py' },
@@ -354,7 +363,7 @@ export const SKILLS = [
 
   {
     id: 'research-direction-steering',
-    category: 'research-decision/research-direction',
+    category: 'research-understanding/research-direction-steering',
     name: 'Research Direction Steering',
     purpose:
       "Guide a researcher from a vague interest toward concrete, researchable directions — without prescribing a workflow, and without pretending the first candidate is the answer.",
@@ -390,7 +399,7 @@ export const SKILLS = [
   },
   {
     id: 'research-topic-ranking',
-    category: 'research-decision/research-direction',
+    category: 'research-decision/research-topic-ranking',
     name: "Research Topic Ranking",
     purpose:
       "Rank candidate research topics on separated dimensions and state the reasoning, so that the choice can be revisited rather than re-argued.",
@@ -416,6 +425,9 @@ export const SKILLS = [
       "the ranking with the reasoning and driving preferences",
     ],
     origin: 'initiation/incubation',
+    prerequisites: [
+      "literature-evidence | 候选主题的排序要对照文献，而不是凭印象",
+    ],
     sources: [
       { file: 'modules/initiation/incubation/prompts/rank_topics_prompt.py' },
       { file: 'modules/initiation/incubation/prompts/identify_opportunities_prompt.py' },
@@ -465,6 +477,9 @@ export const SKILLS = [
       'explicit note of which user preference drove the outcome',
     ],
     origin: 'initiation/incubation, decision',
+    prerequisites: [
+      "literature-evidence | 收敛到一个方向需要文献支撑",
+    ],
     sources: [
       { file: 'modules/initiation/incubation/prompts/rank_topics_prompt.py' },
       { file: 'modules/decision/prompts/decision_synthesizer.py' },

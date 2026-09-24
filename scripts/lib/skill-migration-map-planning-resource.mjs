@@ -28,7 +28,7 @@
 export const SKILLS = [
   {
     id: 'research-strategy-portfolio',
-    category: 'research-management/research-planning',
+    category: 'research-planning/research-strategy-portfolio',
     name: 'Research Strategy Portfolio',
     origin: 'planning/plan_initializer, planning/research_strategy_synthesis',
     purpose:
@@ -57,6 +57,9 @@ export const SKILLS = [
       'an experiment graph and an ablation plan for the unproven components',
       'a reproducibility and publication contract (seeds, hyperparameters, hardware, environment, venue, timeline)',
     ],
+    prerequisites: [
+      "literature-evidence | 策略组合需要文献图景来划分取舍",
+    ],
     sources: [
       { file: 'modules/planning/prompts/plan_initializer.py' },
       { file: 'modules/planning/prompts/research_strategy_synthesis.py' },
@@ -64,7 +67,7 @@ export const SKILLS = [
   },
   {
     id: 'research-method-design',
-    category: 'methodology/method-design',
+    category: 'research-planning/research-method-design',
     name: 'Research Method Design',
     origin: 'planning/method_expansion',
     purpose:
@@ -93,6 +96,9 @@ export const SKILLS = [
       'data requirements as properties (modality, volume, labels, licensing, acquisition path)',
       'the expected observable difference and the failure signature',
     ],
+    prerequisites: [
+      "claims | 方法是为验证主张而设计的",
+    ],
     sources: [
       { file: 'modules/planning/prompts/method_expansion.py' },
       { file: 'modules/planning/prompts/plan_initializer.py' },
@@ -100,7 +106,7 @@ export const SKILLS = [
   },
   {
     id: 'experiment-pipeline-design',
-    category: 'research-management/task-decomposition',
+    category: 'research-planning/experiment-pipeline-design',
     name: 'Experiment Pipeline Design',
     origin:
       'planning/route_expansion, planning/plan_enricher, planning/plan_structurer, planning/plan_canonicalizer',
@@ -129,6 +135,9 @@ export const SKILLS = [
       'the enumerated training, evaluation, ablation and sweep runs',
       'a technical-route narrative explaining why this ordering is necessary and what forces it',
     ],
+    prerequisites: [
+      "method-plan | 流水线是把已定的方法分解为可执行步骤",
+    ],
     sources: [
       { file: 'modules/planning/prompts/route_expansion.py' },
       { file: 'modules/planning/prompts/plan_enricher.py' },
@@ -138,7 +147,7 @@ export const SKILLS = [
   },
   {
     id: 'resource-requirement-estimation',
-    category: 'research-management/resource-planning',
+    category: 'resource-estimation/resource-requirement-estimation',
     name: 'Resource Requirement Estimation',
     origin: 'resource/resource_estimation, resource/instance_selection',
     purpose:
@@ -167,6 +176,9 @@ export const SKILLS = [
       'time estimate by phase plus the human skills the plan assumes',
       'the binding bottleneck with its severity, and the scaling behaviour of the estimate',
     ],
+    prerequisites: [
+      "method-plan | 资源需求由方法设计推导，而不是拍脑袋",
+    ],
     sources: [
       { file: 'modules/resource/prompts/resource_estimation.py' },
       { file: 'modules/resource/prompts/instance_selection.py' },
@@ -174,7 +186,7 @@ export const SKILLS = [
   },
   {
     id: 'infrastructure-cost-selection',
-    category: 'research-management/resource-planning',
+    category: 'resource-estimation/infrastructure-cost-selection',
     name: 'Infrastructure and Cost Selection',
     origin:
       'resource/instance_selection, resource/infra_selection, resource/cost_estimation, resource/recommendation, resource/consistency_validation',
@@ -204,6 +216,9 @@ export const SKILLS = [
       'the trade-off rationale plus rejected options with their prices',
       'a consistency report across requirement, instances, infrastructure and cost, or an explicit no-feasible-option verdict',
     ],
+    prerequisites: [
+      "resource-estimate | 选型前先有资源需求估算",
+    ],
     sources: [
       { file: 'modules/resource/prompts/infra_selection.py' },
       { file: 'modules/resource/prompts/cost_estimation.py' },
@@ -214,7 +229,7 @@ export const SKILLS = [
   },
   {
     id: 'plan-risk-assessment',
-    category: 'research-decision/risk-assessment',
+    category: 'research-planning/plan-risk-assessment',
     name: 'Plan Risk Assessment',
     origin: 'planning/plan_enricher, resource/recommendation, resource/consistency_validation',
     purpose:
@@ -242,6 +257,9 @@ export const SKILLS = [
       'hard-constraint gate results with the measured shortfall for each failure',
       'shared dependencies and correlated failure modes',
       'a feasibility verdict with the condition that would change it',
+    ],
+    prerequisites: [
+      "method-plan | 评计划风险要先有计划",
     ],
     sources: [
       { file: 'modules/planning/prompts/plan_enricher.py' },

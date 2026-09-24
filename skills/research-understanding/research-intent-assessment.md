@@ -1,6 +1,6 @@
 ---
 name: Research Intent Assessment
-category: research-understanding/research-question
+category: research-understanding/research-intent-assessment
 type: system
 status: active
 version: 1.0

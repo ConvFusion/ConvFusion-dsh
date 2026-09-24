@@ -1,6 +1,6 @@
 ---
 name: Paper Architecture
-category: academic-writing/paper-structure
+category: academic-writing/paper-architecture
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - Starting a manuscript, or re-targeting an existing one from a conference template to an IEEE Transactions template.
 - Section drafts exist but their scopes overlap, or the manuscript is under or over the page limit.
 - You are about to write sections and need to know which evidence each one is allowed to use.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: experiments/simulation-result | 架构要有可组织的结果（真实或仿真）
+```
 
 ## Research Method
 

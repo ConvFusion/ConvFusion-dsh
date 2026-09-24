@@ -1,6 +1,6 @@
 ---
 name: Reproducible Implementation Specification
-category: experiment/reproducibility
+category: experiment/reproducible-implementation-spec
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - The design is settled and code must be written by a person or a coding agent.
 - Results exist but cannot be regenerated from the repository and its documentation.
 - A baseline or component must be reimplemented faithfully rather than approximately.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 复现规范锁定的是方法的实现
+```
 
 ## Research Method
 

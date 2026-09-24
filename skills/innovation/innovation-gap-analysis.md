@@ -1,6 +1,6 @@
 ---
 name: Innovation Gap Analysis
-category: innovation/innovation-analysis
+category: innovation/innovation-gap-analysis
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - A literature review or landscape exists and you need to know what is still open in it.
 - You are about to generate ideas and want them aimed at real gaps rather than at topics.
 - A gap is being claimed in a proposal and must survive the question "has this already been done?".
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: literature-evidence | 缺口是文献图景上的判断，需先有文献证据
+```
 
 ## Research Method
 

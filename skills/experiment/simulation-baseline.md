@@ -1,6 +1,6 @@
 ---
 name: Simulation-First Results & Baseline Reference
-category: experiment/simulation
+category: experiment/simulation-baseline
 type: system
 status: active
 version: 1.0
@@ -26,6 +26,14 @@ Do **not** use it when:
 - The experiment can actually be run — a simulation is never a substitute for an available measurement.
 - The question is whether the method works rather than what magnitude is plausible; only real runs can answer that.
 - A simulated value would enter an abstract, result table, figure or claim without a simulated label.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 仿真为方法设计服务（要先有设计好的方法）
+```
 
 ## Research Method
 

@@ -25,6 +25,14 @@ Use this skill when:
 
 Use the research-quality review when a body of work exists; use this skill when what exists is a direction.
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: problem-defined | 评选题先要有研究问题与领域
+```
+
 ## Research Method
 
 1. **Restate the direction as a question that could be answered.** Convert the topic into the research question it implies, and say what would count as an answer. A direction that cannot be restated as an answerable question has already produced its first finding.

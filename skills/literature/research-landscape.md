@@ -21,6 +21,14 @@ Use this skill when:
 - You need to place a proposed contribution relative to the field.
 - You are deciding which sub-area is worth entering.
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: literature-evidence | 全景由读过的文献综合而来
+```
+
 ## Research Method
 
 1. **Map the sub-areas** and the works that define each. A landscape with undefined regions is a reading list, not a landscape.

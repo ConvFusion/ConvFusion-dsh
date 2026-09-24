@@ -1,6 +1,6 @@
 ---
 name: Research Domain Profiling
-category: research-understanding/context-analysis
+category: research-understanding/research-domain-profiling
 type: system
 status: active
 version: 1.0

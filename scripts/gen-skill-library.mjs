@@ -184,10 +184,24 @@ function buildSkillMarkdown(skill, sources) {
     bullets(skill.whenToUse),
     '',
     ...(skill.avoidWhen?.length ? ['Do **not** use it when:', '', bullets(skill.avoidWhen), ''] : []),
+    ...(skill.prerequisites?.length
+      ? [
+          '## Prerequisites',
+          '',
+          'Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.',
+          '',
+          '```text',
+          ...skill.prerequisites.map((p) => `requires: ${p}`),
+          '```',
+          '',
+        ]
+      : []),
     '## Research Method',
     '',
     skill.method.join('\n'),
     '',
+    // 映射表不能在固定章节里表达的内容（如转换器的已知限制），按声明顺序原样输出。
+    ...(skill.extraSections ?? []).flatMap((s) => [`## ${s.title}`, '', s.body, '']),
     '## Reasoning Guidance',
     '',
     ...(skill.reasoning
@@ -263,7 +277,10 @@ for (const skill of SKILLS) {
 
 // ── 孤儿清理（--prune）────────────────────────────────────────────────
 if (PRUNE && !CHECK) {
-  const expected = new Set(SKILLS.map((s) => `${s.id}.md`))
+  // ⚠️ 必须按**相对路径**比对，不能只比文件名：类别重排后
+  // `analysis/result-analysis.md` 与 `experiment/result-analysis.md` 同名，
+  // 只比文件名会让旧目录里的残留副本永远清不掉（库里出现重复 id）。
+  const expected = new Set(SKILLS.map((s) => `${s.category.split('/')[0]}/${s.id}.md`))
   /**
    * 手写技能不受映射表管理：它们的 `.sources/<id>.json` 标了 `origin: "handwritten"`。
    * prune 必须跳过它们 —— 否则"生成器重新跑一遍"会把新功能技能当孤儿删掉。
@@ -294,7 +311,11 @@ if (PRUNE && !CHECK) {
       if (e.name.startsWith('.')) continue
       const p = join(dir, e.name)
       if (e.isDirectory()) walk(p)
-      else if (e.name.endsWith('.md') && !expected.has(e.name) && !handwritten.has(`${e.name.slice(0, -3)}.json`)) {
+      else if (
+        e.name.endsWith('.md') &&
+        !expected.has(p.slice(SKILLS_DIR.length + 1)) &&
+        !handwritten.has(`${e.name.slice(0, -3)}.json`)
+      ) {
         rmSync(p)
         pruned++
         console.log(`  · pruned orphan ${p.slice(SKILLS_DIR.length + 1)}`)

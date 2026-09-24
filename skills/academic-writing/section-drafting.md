@@ -1,6 +1,6 @@
 ---
 name: Section Drafting from Evidence
-category: academic-writing/technical-writing
+category: academic-writing/section-drafting
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - The outline and narrative exist and a specific section must now be produced as prose.
 - A section note, method sketch or results table must become publishable text.
 - A section is outside its length budget or repeats another section.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: experiments/simulation-result | 起草前要有真实实验结果，或有仿真结果（草稿可基于仿真先行）
+```
 
 ## Research Method
 

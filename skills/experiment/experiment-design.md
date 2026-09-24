@@ -21,6 +21,14 @@ Use this skill when:
 - You must decide whether the work is programmable, needs new data, or can only be done offline.
 - Compute or lab time is about to be committed and the design should be stress-tested first.
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 实验设计要有已定的方法来检验
+```
+
 ## Research Method
 
 1. **Test feasibility before designing.** Classify the experiment on three axes: can the core manipulation be implemented in software, does it need data that exists or can be obtained, and does it need physical-world access (hardware, participants, wet lab). Name the specific non-simulable dependency behind any not-programmable verdict, and state which sub-parts remain programmable.

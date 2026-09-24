@@ -166,7 +166,7 @@ console.log('\n[1b] Skill 名称与章节解析（跳过代码围栏）')
   assert(ra !== undefined, 'result-analysis 存在')
   assertEq(
     ra.sections.map((s) => s.title),
-    ['Purpose', 'When to Use', 'Research Method', 'Reasoning Guidance', 'Evidence Requirements', 'Expected Output', 'Source Prompts (verbatim from ConvFusion)'],
+    ['Purpose', 'When to Use', 'Prerequisites', 'Research Method', 'Reasoning Guidance', 'Evidence Requirements', 'Expected Output', 'Source Prompts (verbatim from ConvFusion)'],
     'result-analysis 不再被围栏里的 `## ` 切出假章节',
   )
   const eo = ra.sections.find((s) => s.title === 'Expected Output')

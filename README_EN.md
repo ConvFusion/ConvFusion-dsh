@@ -25,7 +25,7 @@ ConvFusion is a research operating system plugin built for DeepSeek Harness. It 
 ## ✨ Core Features
 
 - **Research context injection**: Automatically maintains research project state and dynamically injects system prompts so the AI assistant always understands the current research progress
-- **Professional skill library**: Includes 49 validated research methodology skills covering the full research workflow, including literature reviews, experiment design (with simulation-first results when hardware is insufficient), result analysis, and academic writing
+- **Professional skill library**: Includes 55 validated research methodology skills in 9 categories (Research Understanding · Literature · Innovation · Research Planning · Resource Estimation · Research Decision · Experiment · Academic Writing · Review), covering the full research workflow, including literature reviews, experiment design (with simulation-first results when hardware is insufficient), result analysis, and academic writing
 - **Research asset tracking**: Native structured recording and traceability for Evidence, Claims, and Decisions
 - **Plan management system**: Natural-language-driven research plan lifecycle management with draft, review, and execution state transitions
 - **Paper evolution support**: Treats papers as continuously evolving entities, with revision proposals, gap analysis, and version management

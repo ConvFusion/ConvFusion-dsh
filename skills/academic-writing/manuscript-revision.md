@@ -1,6 +1,6 @@
 ---
 name: Manuscript Revision and Style
-category: academic-writing/revision
+category: academic-writing/manuscript-revision
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - All sections are drafted and the prose quality is uneven across them.
 - Terminology, notation or metric names drift between sections, tables and captions.
 - A self-check or reviewer report lists clarity problems while the scientific content is settled.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: manuscript | 修订的对象是已有正文
+```
 
 ## Research Method
 

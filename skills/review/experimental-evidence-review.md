@@ -22,6 +22,14 @@ Use this skill when:
 
 Use `research-quality-review` instead when the whole body of work must be assessed, and this skill when the question is specifically about the evidence behind claims.
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: experiments | 评实验证据先要有实验
+```
+
 ## Research Method
 
 1. **Trace each result through the record before judging it.** Claim → experiment or analysis → dataset and split → metric → output artefact → table or figure. For each link record what artefact exists, what consistency check it passed, what is missing, and what that costs the claim. Check dataset identity, version and licensing; sample, class and split counts; which data are real, simulated, illustrative or predicted; and whether configurations, seeds and evaluation scripts exist. **Plausible numbers do not establish authenticity, and unusual numbers do not establish fabrication** — say which artefact would verify the result instead of judging by appearance.

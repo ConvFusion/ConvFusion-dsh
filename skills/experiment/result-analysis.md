@@ -1,6 +1,6 @@
 ---
 name: Result Analysis & Finding Extraction
-category: analysis/result-analysis
+category: experiment/result-analysis
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - Runs finished and metrics and predictions exist, but a narrative is still needed.
 - Deciding which figures and tables the paper actually requires.
 - Consolidating several sub-experiments into one coherent result set.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: experiments | 没有实验产物就没有可分析的结果
+```
 
 ## Research Method
 

@@ -21,6 +21,14 @@ Use this skill when:
 - A proposal claims a contribution that no planned experiment would actually demonstrate.
 - You need to choose baselines and controls that make the result interpretable.
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: claims | 先有主张，才能设计证明它的证据包
+```
+
 ## Research Method
 
 1. **Name the contribution type explicitly.** New mechanism, new evidence or understanding, new benchmark or dataset, new capability, or a negative result that changes practice. Each type demands a different demonstration.

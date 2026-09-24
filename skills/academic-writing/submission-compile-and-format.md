@@ -1,6 +1,6 @@
 ---
 name: Submission Formatting and Compile Repair
-category: academic-writing/final-editing
+category: academic-writing/submission-compile-and-format
 type: system
 status: active
 version: 1.0
@@ -21,6 +21,14 @@ Use this skill when:
 - The manuscript fails to compile, or the compile log reports errors that must be addressed.
 - The text still contains Markdown artefacts such as heading hashes, emphasis markers or raw underscores.
 - References are missing, are placeholders, or use "Anonymous" as an author.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: manuscript | 先有正文才谈得上编译成稿
+```
 
 ## Research Method
 

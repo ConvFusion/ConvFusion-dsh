@@ -1,6 +1,6 @@
 ---
 name: Research Direction Selection
-category: research-decision/research-direction
+category: research-decision/research-direction-selection
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - Several evaluated ideas compete for the same time and resources.
 - A direction must be committed to and the rejection reasons are not written down.
 - Two candidates look comparable and the decision keeps being reopened.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: literature-evidence | 方向选择要在文献评估之上做
+```
 
 ## Research Method
 

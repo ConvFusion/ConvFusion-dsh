@@ -12,7 +12,7 @@
 export const SKILLS = [
   {
     id: 'patent-drafting',
-    category: 'academic-writing/technical-writing',
+    category: 'academic-writing/patent-drafting',
     name: 'Patent Drafting',
     origin: 'stage5.1/output-transformation',
     purpose:
@@ -55,11 +55,14 @@ export const SKILLS = [
       'a numbered claim set expressed as feature combinations (not research claims)',
       'an abstract',
     ],
+    prerequisites: [
+      "experiments/simulation-result | 专利要转化实验结果（仿真结果亦可先起稿）",
+    ],
     sources: [],
   },
   {
     id: 'technical-report-writing',
-    category: 'academic-writing/technical-writing',
+    category: 'academic-writing/technical-report-writing',
     name: 'Technical Report Writing',
     origin: 'stage5.1/output-transformation',
     purpose:
@@ -100,11 +103,14 @@ export const SKILLS = [
       'explicit limitations and assumptions',
       'reproduction instructions a colleague can follow',
     ],
+    prerequisites: [
+      "experiments/simulation-result | 技术报告基于实验结果（仿真结果亦可先记录）",
+    ],
     sources: [],
   },
   {
     id: 'presentation-design',
-    category: 'academic-writing/technical-writing',
+    category: 'academic-writing/presentation-design',
     name: 'Research Presentation Design',
     origin: 'stage5.1/output-transformation',
     purpose:
@@ -144,6 +150,9 @@ export const SKILLS = [
       'per-slide content: the claim, its support, and the setting for any number',
       'a limitations slide',
       'backup slides for anticipated questions',
+    ],
+    prerequisites: [
+      "experiments/simulation-result | 演讲要有可讲的结果（真实或仿真）",
     ],
     sources: [],
   },

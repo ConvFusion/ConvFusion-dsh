@@ -29,6 +29,7 @@
  * - **没有**任何执行类工具：真实执行仍走 Harness 原生工具（§42 Native Harness）。
  */
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
+import { type LiteratureDeps } from './literature.js';
 import { type PaperDownloadDeps } from './paper-download.js';
 import { type BibEntry, type ComposeInput } from './latex.js';
 import { openQuestions } from './research-state.js';
@@ -52,17 +53,13 @@ export declare const PAPER_LATEX_TOOL = "research_paper_latex";
  *        会话自己的工作区，而不是插件进程的全局"当前 cwd" —— 多会话并行时全局值
  *        可能已被其它会话覆盖，会把研究数据写进别人的工作区（2026-09 事故：一条
  *        state proposal 被写进插件开发仓库根目录的 `research/`）。
- * @param literatureDeps 文献检索依赖（API Key 解析）；缺省时不注册检索工具
+ * @param literatureDeps 文献检索依赖（API Key 解析等）；缺省时不注册检索工具。
+ *        类型直接复用 {@link LiteratureDeps}，避免此处与 `literature.ts` 重复定义字段。
  * @param downloadDeps 论文全文下载依赖（fetch 实现）；缺省时不注册下载工具
  */
 export declare function defineResearchTools(resolveWorkspace: (agent?: {
     id?: unknown;
-} | null) => string, literatureDeps?: {
-    apiKey: () => string;
-    mailto?: () => string | undefined;
-    fetchImpl?: import('./literature.js').FetchLike;
-    timeoutMs?: number;
-}, downloadDeps?: PaperDownloadDeps): ToolDefinition[];
+} | null) => string, literatureDeps?: LiteratureDeps, downloadDeps?: PaperDownloadDeps): ToolDefinition[];
 /**
  * 从 Markdown 参考文献列表解析 `\bibitem` 条目。
  *

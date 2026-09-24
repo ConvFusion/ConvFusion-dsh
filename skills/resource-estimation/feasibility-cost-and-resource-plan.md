@@ -1,36 +1,43 @@
 ---
-name: Infrastructure and Cost Selection
-category: research-management/resource-planning
+name: Feasibility, Cost and Resource Plan
+category: resource-estimation/feasibility-cost-and-resource-plan
 type: system
 status: active
 version: 1.0
-origin: resource/instance_selection, resource/infra_selection, resource/cost_estimation, resource/recommendation, resource/consistency_validation
+origin: decision/feasibility-evaluation, decision/cost-evaluation, resource/estimation
 ---
 
-# Skill: Infrastructure and Cost Selection
+# Skill: Feasibility, Cost and Resource Plan
 
 ## Purpose
 
-Turn an audited resource requirement into costed, feasibility-checked infrastructure options and one recommended plan that respects budget, deadline and data-governance constraints, with the rejected options and their prices kept on record.
+Determine whether a research plan can actually be executed within the available resources, and what it will cost, expressed in units that can be checked — compute, data, storage, skills, time and money.
 
 ## When to Use
 
 Use this skill when:
 
-- A resource estimate exists and must become something purchasable or bookable.
-- Several providers, or a cloud-versus-on-prem choice, are plausible and the decision is contested.
-- A budget or deadline is fixed and you must show whether the plan fits inside it.
-- A quoted cost looks too low and you suspect storage, checkpoints or egress were ignored.
+- A plan is about to be committed and its resource envelope is unknown.
+- Two technical routes look equally good on paper and must be compared by cost and feasibility.
+- A claim depends on resources you do not control, such as a dataset, a licence or a cluster.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 可行性与成本估算以方法设计为对象
+```
 
 ## Research Method
 
-1. **Gate on feasibility before ranking on price.** Check each candidate against the full requirement, namely GPU-hours, CPU, memory, storage tiers, network and the deadline, and mark it feasible, scalable (meets the need after a stated adjustment) or infeasible. Drop infeasible candidates before any score is computed; free tiers are infeasible by default unless they demonstrably satisfy the requirement.
-2. **Keep near-misses as candidates.** A candidate that fits after increasing GPU count or extending the deadline is a real option and belongs in the comparison with its adaptation plan stated. Do not reject it on GPU-model mismatch alone when the performance model says the compute requirement can be met.
-3. **Price the whole plan, not the GPU-hour.** Include compute, storage at each tier, checkpoints, network egress and data transfer, and the human time to operate the setup. State the pricing source and date. A total that omits storage and egress is not a total and will not survive contact with the invoice.
-4. **Normalise heterogeneous options onto one basis.** Convert on-demand, reserved or spot cloud pricing and amortised on-prem hardware into a common currency and period, and state which cost model was used. Comparing a monthly reservation against an hourly rate without normalisation is a category error.
-5. **Score cost, time and risk explicitly, with weights fixed in advance.** Report per-criterion scores alongside the aggregate so a reviewer can see whether the winner won on price or on risk. An aggregate score with invisible weights cannot be argued with and therefore cannot be trusted.
-6. **Cross-check the chain.** Verify that providers in the infrastructure set have corresponding instances, that every priced instance traces back to a requirement, and that the recommended option appears in the feasible set. Mismatches are errors to surface, not to repair silently.
-7. **Recommend with the trade-off stated, or return an explicit no-feasible-option verdict.** If nothing satisfies the constraints, say so and name the binding constraint and the relaxation that would open the option set. Do not introduce a fallback that the constraints already exclude.
+1. **Estimate requirements from the plan's computation, not from hardware names.** Express compute as a work quantity — GPU-hours times relative compute units against a stated reference (A100 = 1.0) — plus storage tiers, data volume, parallelism and number of runs. Fix the requirement before naming any hardware.
+2. **Enumerate cost components separately and cite their source.** Compute, storage, network egress, data acquisition and personnel time, each with the pricing source and date. A single total without a breakdown cannot be audited, and goes stale silently when prices change.
+3. **Convert every requirement into a hard constraint and gate on it first.** An option that fails any single requirement — GPU-hours, storage, bandwidth, deadline — is infeasible and is removed before ranking. A strong score on one axis must never hide a failed constraint.
+4. **Compare at least two viable options**, including the local or self-hosted alternative and the cheapest credible provider, and report the total for each rather than only for the winner.
+5. **Report the bottleneck and the scaling regime.** State which resource binds first and how cost grows with scale — runs, parameters, data, sequence length — so the estimate can be reused at a different scale instead of recomputed.
+6. **Validate consistency across the estimate chain.** Resource spec, chosen option and cost must describe the same configuration; a mismatch invalidates the number rather than merely looking untidy.
+7. **Publish the uncertainty on the dominant driver** as scenarios (optimistic, expected, pessimistic) and say which assumption would move the estimate most.
 
 ## Reasoning Guidance
 
@@ -38,17 +45,17 @@ Use this skill when:
 
 ## Evidence Requirements
 
-Every price must cite its source and date. Each rejected option must carry its price and the reason it lost. Feasibility verdicts must show the requirement-versus-capacity comparison. When no feasible option exists, the binding constraint and the required relaxation must be stated explicitly.
+Prices, instance types and exchange rates must cite their source and date. Requirement estimates must show the derivation from plan parameters rather than appearing as given numbers. Infeasible options must be recorded with the constraint they failed, and assumptions about data availability or expertise must be flagged.
 
 ## Expected Output
 
 Produce:
 
-- feasibility-gated candidate instances and infrastructure options per provider
-- a full cost breakdown (compute, storage, egress, human time) with pricing provenance
-- a ranked shortlist with per-criterion scores, stated weights and the recommended option
-- the trade-off rationale plus rejected options with their prices
-- a consistency report across requirement, instances, infrastructure and cost, or an explicit no-feasible-option verdict
+- a resource specification covering compute, storage, network, data, skills and time
+- a cost breakdown per option with pricing provenance
+- a feasibility gating table showing pass/fail per hard constraint
+- the bottleneck and the scaling behaviour of cost
+- a consistency check across spec, option and cost, plus an uncertainty range
 
 ## Source Prompts (verbatim from ConvFusion)
 
@@ -56,6 +63,234 @@ These are the original module prompts this skill was reorganised from — preser
 accumulated research intelligence, not as an execution contract. They reference state keys
 (`{research_topic}`, `{plans_json}`, …) that no longer exist in v2; read them for the method,
 not for a pipeline.
+
+### `modules/decision/prompts/feasibility_evaluator.py` — SYSTEM_PROMPT
+
+```text
+Evaluate the feasibility of the following research proposal:
+
+Idea:
+{idea}
+
+Method:
+{method}
+
+Experiment:
+{experiment}
+
+Please consider:
+1. Technical feasibility (current technology limitations)
+2. Required resources (computational power, data availability, equipment)
+3. Time requirements (realistic timeline estimation)
+4. Potential technical challenges and risks
+5. Availability of required expertise and skills
+6. Regulatory or ethical considerations
+
+You MUST follow this EXACT JSON schema:
+{{
+    "feasibility_score": 0.7,
+    "technical_feasibility": {{
+        "current_technology_status": "description",
+        "technical_challenges": "list of challenges",
+        "solution_approaches": "potential solutions"
+    }},
+    "resource_analysis": {{
+        "computational_resources": "requirements and availability",
+        "data_resources": "availability and quality",
+        "equipment_resources": "required equipment availability"
+    }},
+    "risk_assessment": {{
+        "technical_risks": "list of technical risks",
+        "resource_risks": "resource-related risks",
+        "mitigation_strategies": "risk mitigation approaches"
+    }},
+    "timeline_feasibility": "realistic timeline assessment",
+    "expertise_requirements": "required skills and expertise",
+    "regulatory_considerations": "any regulatory or ethical issues",
+    "feasibility_analysis": "detailed explanation of the feasibility assessment"
+}}
+```
+
+### `modules/decision/prompts/cost_evaluator.py` — SYSTEM_PROMPT
+
+```text
+Evaluate the cost of the following research proposal:
+
+Method:
+{method}
+
+Experiment:
+{experiment}
+
+Please consider:
+1. Computational requirements (GPU/CPU, memory, storage)
+2. Data collection or acquisition costs
+3. Storage requirements (data volume, database needs)
+4. Personnel costs (researcher time, expertise required)
+5. Infrastructure requirements (cloud computing, specialized hardware)
+
+You MUST follow this EXACT JSON schema:
+{{
+    "cost_score": 0.5,
+    "cost_analysis": "detailed explanation of the cost assessment",
+    "computational_requirements": {{
+        "gpu_requirements": "description",
+        "cpu_requirements": "description",
+        "memory_requirements": "description",
+        "storage_requirements": "description"
+    }},
+    "data_requirements": {{
+        "data_volume": "estimated size",
+        "data_collection_cost": "description",
+        "storage_cost": "description"
+    }},
+    "hardware_requirements": "specific hardware needed",
+    "software_requirements": "specific software needed",
+    "personnel_requirements": "expertise and time needed",
+    "additional_cost_factors": "any other relevant factors"
+}}
+```
+
+### `modules/resource/prompts/resource_estimation.py` — TEMPLATE
+
+```text
+You are ResourceEstimatorAgent, responsible for estimating "compute requirements", not selecting hardware.
+
+Research Topic: {research_topic}
+Research Domain: {domain}
+Research Plan: {plan}
+Data Profile: {data_profile}
+
+========================
+【PROHIBITED OUTPUTS】
+- RTX 4090
+- A100
+- V100
+
+MUST OUTPUT:
+
+{{
+  "resource_spec": {{
+    "compute_requirement": {{
+      "gpu_compute_units": float,   # A100 = 1.0
+      "gpu_hours": float,
+      "parallelism": int
+    }},
+    "storage": {{
+      "hot_storage_gb": float,
+      "cold_storage_gb": float,
+      "checkpoint_gb": float,
+      "storage_days": int
+    }},
+    "experiment": {{
+      "num_runs": int,
+      "log_per_run_gb": float,
+      "data_processing_gb": int,
+      "model_size_gb": float
+    }},
+    "dataset_requirements": {{
+      "total_size_gb": float,
+      "num_samples": int,
+      "data_types": [str],
+      "preprocessing_needs": str,
+      "data_acquisition_plan": str,
+      "data_sources": [str]
+    }},
+    "human_skills": [
+      {{
+        "skill": str,
+        "level": str,
+        "reason": str
+      }}
+    ],
+    "time_cost": {{
+      "total_weeks": float,
+      "phase_breakdown": {{
+        "data_preparation_weeks": float,
+        "implementation_weeks": float,
+        "training_weeks": float,
+        "evaluation_weeks": float
+      }}
+    }},
+    "bottlenecks": [
+      {{
+        "resource": str,
+        "severity": str,
+        "description": str
+      }}
+    ],
+    "scaling_risks": [
+      {{
+        "risk": str,
+        "impact": str,
+        "mitigation": str
+      }}
+    ]
+  }}
+}}
+
+========================
+
+Examples:
+
+DO NOT:
+"gpu_type": "RTX 4090"
+
+DO:
+"gpu_compute_units": 0.8
+
+========================
+
+Please provide detailed resource estimation including:
+
+1. **Compute Requirements (Performance-based)**:
+   - GPU compute units (relative to A100 = 1.0)
+   - Required GPU hours
+   - Parallelism level
+
+2. **Storage Requirements**:
+   - Active data storage
+   - Archive/backup storage
+   - Model checkpoint storage
+   - Storage duration
+
+3. **Network Requirements**:
+   - Data transfer volumes
+   - Bandwidth requirements
+
+4. **Dataset Requirements**:
+   - Total dataset size
+   - Number of samples
+   - Data types involved
+   - Preprocessing needs
+   - Data acquisition plan (how to obtain the data, including public datasets, synthetic generation, or collaboration)
+   - Data sources (specific dataset names, URLs, or generation methods)
+
+5. **Human Skill Requirements**:
+   - Required skills and expertise levels
+   - Reason for each skill requirement
+
+6. **Time Cost Estimation**:
+   - Total project duration in weeks
+   - Phase-by-phase breakdown
+
+7. **Resource Bottlenecks**:
+   - Potential resource constraints
+   - Severity assessment
+
+8. **Scaling Risks**:
+   - Potential scaling challenges
+   - Impact assessment
+   - Mitigation strategies
+
+9. **Experiment Metadata**:
+   - Number of experimental runs
+   - Log storage per run
+   - Data processing volumes
+   - Model size estimation
+
+Provide comprehensive resource estimation based on research topic, domain, plan, and data profile. Output must be in English JSON format only.
+```
 
 ### `modules/resource/prompts/infra_selection.py` — TEMPLATE
 
@@ -218,73 +453,6 @@ Return ONLY a JSON object with this EXACT structure (wrapped under "infra_select
 IMPORTANT: The JSON output MUST be complete and properly formatted. Do not truncate the response. Ensure all fields are filled with realistic values.
 ```
 
-### `modules/resource/prompts/cost_estimation.py` — TEMPLATE
-
-```text
-You are a cloud cost estimation expert.
-
-Your task is to estimate cost and select the best instance from candidates.
-
-====================
-INPUT
-====================
-Instance candidates: {instance_candidates}
-Resource specification: {resource_spec}
-Pricing reference data: {pricing_data}
-
-====================
-RULES
-====================
-1. ONLY consider instances with feasibility = "feasible" or "scalable"
-2. Use the pricing reference data to calculate accurate costs
-3. Estimate cost for EACH feasible instance considering:
-   - Hourly price from pricing data
-   - Required GPU hours from resource specification
-   - Number of parallel instances needed
-   - Storage costs (from pricing data storage section)
-   - Network egress costs (from pricing data network section)
-
-4. Select the most cost-effective one considering:
-   - Total cost (primary factor)
-   - Performance requirements
-   - Resource specifications
-   - Cost-effectiveness ratio
-
-5. If no feasible instance exists: return "no feasible instance"
-
-====================
-SELECTION CRITERIA
-====================
-1. **Cost optimization** - Choose the instance with lowest total cost
-2. **Performance matching** - Ensure the instance meets performance requirements
-3. **Resource adequacy** - Verify CPU, memory, and GPU resources are sufficient
-4. **Cost-effectiveness** - Balance cost vs performance
-
-====================
-OUTPUT FORMAT (STRICT JSON)
-====================
-{{
-  "cost_estimation": {{
-    "selected_instance": "specific instance type",
-    "total_cost_usd": 12345.67,
-    "cost_breakdown": {{
-      "compute_cost_usd": 10000.00,
-      "storage_cost_usd": 2000.00,
-      "network_cost_usd": 345.67
-    }},
-    "currency": "USD",
-    "alternatives": [
-      {{
-        "instance_type": "alternative instance type",
-        "total_cost_usd": 15000.00,
-        "reason": "why this alternative was not selected"
-      }}
-    ],
-    "reason": "detailed explanation of selection"
-  }}
-}}
-```
-
 ### `modules/resource/prompts/instance_selection.py` — TEMPLATE
 
 ```text
@@ -427,86 +595,71 @@ candidate_compute = gpu_performance * gpu_count * available_hours
 }}
 ```
 
-### `modules/resource/prompts/recommendation.py` — TEMPLATE
+### `modules/resource/prompts/cost_estimation.py` — TEMPLATE
 
 ```text
-You are an expert infrastructure recommendation system for research projects. Analyze the infrastructure options and provide detailed recommendations using multi-objective optimization with STRICT CONSTRAINT ENFORCEMENT.
+You are a cloud cost estimation expert.
 
-Infrastructure selection: {infrastructure_selection}
-Cost estimation: {cost_estimation}
+Your task is to estimate cost and select the best instance from candidates.
+
+====================
+INPUT
+====================
+Instance candidates: {instance_candidates}
 Resource specification: {resource_spec}
-Validation result: {validation}
+Pricing reference data: {pricing_data}
 
-CRITICAL CONSTRAINT RULES (HARD CONSTRAINTS):
-1. **You MUST only recommend from feasible infrastructure options**
-2. **You MUST NOT introduce new providers (e.g., free, local) if they are infeasible**
-3. **If no feasible solution exists, return {{ 'status': 'no_feasible_solution' }}**
-4. **Recommendations MUST be based on actual cost analysis from cost_estimation**
-5. **Do not recommend options with cost=0 unless they are explicitly free resources**
+====================
+RULES
+====================
+1. ONLY consider instances with feasibility = "feasible" or "scalable"
+2. Use the pricing reference data to calculate accurate costs
+3. Estimate cost for EACH feasible instance considering:
+   - Hourly price from pricing data
+   - Required GPU hours from resource specification
+   - Number of parallel instances needed
+   - Storage costs (from pricing data storage section)
+   - Network egress costs (from pricing data network section)
 
-MULTI-OBJECTIVE OPTIMIZATION REQUIREMENTS:
-You MUST perform multi-objective optimization considering:
-1. **Cost optimization** (40% weight): Minimize total cost while meeting requirements
-2. **Time optimization** (30% weight): Consider project deadlines and time constraints
-3. **Risk optimization** (30% weight): Evaluate reliability, availability, and technical risks
+4. Select the most cost-effective one considering:
+   - Total cost (primary factor)
+   - Performance requirements
+   - Resource specifications
+   - Cost-effectiveness ratio
 
-SCORING FORMULA:
-Overall Score = (0.4 × normalized_cost_score) + (0.3 × normalized_time_score) + (0.3 × normalized_risk_score)
+5. If no feasible instance exists: return "no feasible instance"
 
-Provide a comprehensive recommendation that includes:
-1. Overall best option with detailed multi-objective reasoning
-2. Cost-performance analysis with specific optimization scores
-3. Trade-offs between different options with weighted analysis
-4. Specific recommendations based on multi-objective optimization
-5. Implementation considerations with step-by-step guidance
-6. Top-3 ranking with detailed scoring breakdown
+====================
+SELECTION CRITERIA
+====================
+1. **Cost optimization** - Choose the instance with lowest total cost
+2. **Performance matching** - Ensure the instance meets performance requirements
+3. **Resource adequacy** - Verify CPU, memory, and GPU resources are sufficient
+4. **Cost-effectiveness** - Balance cost vs performance
 
-Return your response in JSON format with this EXACT structure (wrapped under "recommendation" key):
+====================
+OUTPUT FORMAT (STRICT JSON)
+====================
 {{
-  "recommendation": {{
-    "multi_objective_optimization": {{
-      "optimization_weights": {{
-        "cost": 0.4,
-        "time": 0.3,
-        "risk": 0.3
-      }},
-      "scoring_methodology": "weighted_sum_normalized"
+  "cost_estimation": {{
+    "selected_instance": "specific instance type",
+    "total_cost_usd": 12345.67,
+    "cost_breakdown": {{
+      "compute_cost_usd": 10000.00,
+      "storage_cost_usd": 2000.00,
+      "network_cost_usd": 345.67
     }},
-    "top_ranking": [
+    "currency": "USD",
+    "alternatives": [
       {{
-        "rank": 1,
-        "provider": "specific provider and configuration",
-        "overall_score": 0.0,
-        "cost_score": 0.0,
-        "time_score": 0.0,
-        "risk_score": 0.0,
-        "reasoning": "detailed explanation"
+        "instance_type": "alternative instance type",
+        "total_cost_usd": 15000.00,
+        "reason": "why this alternative was not selected"
       }}
     ],
-    "best_option": "specific provider and configuration",
-    "implementation_steps": [
-      "step 1",
-      "step 2"
-    ],
-    "risk_mitigation": "risk mitigation strategies",
-    "cost_breakdown": "detailed cost analysis",
-    "feasibility_validation": {{
-      "constraints_satisfied": true,
-      "feasibility_verified": true,
-      "cost_verified": true
-    }}
+    "reason": "detailed explanation of selection"
   }}
 }}
-
-If no feasible solution exists:
-{{
-  "recommendation": {{
-    "status": "no_feasible_solution",
-    "reasoning": "detailed explanation of why no solution exists"
-  }}
-}}
-
-IMPORTANT: You MUST strictly follow the JSON structure above. Do not modify field names or structure.
 ```
 
 ### `modules/resource/prompts/consistency_validation.py` — TEMPLATE
@@ -630,4 +783,86 @@ If no feasible solution exists:
 }}
 
 **Remember: Output only JSON, no wrapping!**
+```
+
+### `modules/resource/prompts/recommendation.py` — TEMPLATE
+
+```text
+You are an expert infrastructure recommendation system for research projects. Analyze the infrastructure options and provide detailed recommendations using multi-objective optimization with STRICT CONSTRAINT ENFORCEMENT.
+
+Infrastructure selection: {infrastructure_selection}
+Cost estimation: {cost_estimation}
+Resource specification: {resource_spec}
+Validation result: {validation}
+
+CRITICAL CONSTRAINT RULES (HARD CONSTRAINTS):
+1. **You MUST only recommend from feasible infrastructure options**
+2. **You MUST NOT introduce new providers (e.g., free, local) if they are infeasible**
+3. **If no feasible solution exists, return {{ 'status': 'no_feasible_solution' }}**
+4. **Recommendations MUST be based on actual cost analysis from cost_estimation**
+5. **Do not recommend options with cost=0 unless they are explicitly free resources**
+
+MULTI-OBJECTIVE OPTIMIZATION REQUIREMENTS:
+You MUST perform multi-objective optimization considering:
+1. **Cost optimization** (40% weight): Minimize total cost while meeting requirements
+2. **Time optimization** (30% weight): Consider project deadlines and time constraints
+3. **Risk optimization** (30% weight): Evaluate reliability, availability, and technical risks
+
+SCORING FORMULA:
+Overall Score = (0.4 × normalized_cost_score) + (0.3 × normalized_time_score) + (0.3 × normalized_risk_score)
+
+Provide a comprehensive recommendation that includes:
+1. Overall best option with detailed multi-objective reasoning
+2. Cost-performance analysis with specific optimization scores
+3. Trade-offs between different options with weighted analysis
+4. Specific recommendations based on multi-objective optimization
+5. Implementation considerations with step-by-step guidance
+6. Top-3 ranking with detailed scoring breakdown
+
+Return your response in JSON format with this EXACT structure (wrapped under "recommendation" key):
+{{
+  "recommendation": {{
+    "multi_objective_optimization": {{
+      "optimization_weights": {{
+        "cost": 0.4,
+        "time": 0.3,
+        "risk": 0.3
+      }},
+      "scoring_methodology": "weighted_sum_normalized"
+    }},
+    "top_ranking": [
+      {{
+        "rank": 1,
+        "provider": "specific provider and configuration",
+        "overall_score": 0.0,
+        "cost_score": 0.0,
+        "time_score": 0.0,
+        "risk_score": 0.0,
+        "reasoning": "detailed explanation"
+      }}
+    ],
+    "best_option": "specific provider and configuration",
+    "implementation_steps": [
+      "step 1",
+      "step 2"
+    ],
+    "risk_mitigation": "risk mitigation strategies",
+    "cost_breakdown": "detailed cost analysis",
+    "feasibility_validation": {{
+      "constraints_satisfied": true,
+      "feasibility_verified": true,
+      "cost_verified": true
+    }}
+  }}
+}}
+
+If no feasible solution exists:
+{{
+  "recommendation": {{
+    "status": "no_feasible_solution",
+    "reasoning": "detailed explanation of why no solution exists"
+  }}
+}}
+
+IMPORTANT: You MUST strictly follow the JSON structure above. Do not modify field names or structure.
 ```

@@ -76,7 +76,7 @@ console.log('\n[A] 系统 Skill Library（包内资产）')
     'research-quality-review',
     'experimental-evidence-review',
     'paper-claim-review',
-    // C10P04 投稿前评阅：编辑视角的投稿审计（依据出版社的两份评阅参考），同样 v2 新增
+    // C09P05 投稿前评阅：编辑视角的投稿审计（依据出版社的两份评阅参考），同样 v2 新增
     'pre-submission-review',
   ])
   const withSources = docs.filter((d) => d.sections.some((x) => x.title.startsWith('Source Prompts')))
@@ -303,7 +303,7 @@ console.log('\n[G] 用户定制绝不写进系统库')
 
   const store = CUST.createFileCustomizationStore(() => customizationFile)
   store.set('experiment-design', 'Research Method', '我的实验设计方法。')
-  store.set('topic-understanding', 'Purpose', '我的目的描述。')
+  store.set('input-understanding', 'Purpose', '我的目的描述。')
   void LIB.loadSkillLibrary(ws, store)
   S.listSystemSkills()
   CUST.listCustomizationPoints(ws, store.load())

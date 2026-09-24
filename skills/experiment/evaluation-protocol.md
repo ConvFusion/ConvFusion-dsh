@@ -1,6 +1,6 @@
 ---
 name: Evaluation Protocol & Metric Design
-category: experiment/evaluation
+category: experiment/evaluation-protocol
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - The design names metrics but not their definitions or computation.
 - The same metric name is computed differently across the works you compare against.
 - Before implementation, to make sure the code will emit the quantities the claims need.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 评测协议服务于方法要检验的主张
+```
 
 ## Research Method
 

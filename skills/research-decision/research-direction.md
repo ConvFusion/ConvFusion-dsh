@@ -21,6 +21,14 @@ Use this skill when:
 - A direction is being questioned and you must decide whether to continue or change.
 - The user has given preferences (risk appetite, time budget, venue target) that should shape the choice.
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: literature-evidence | 收敛到一个方向需要文献支撑
+```
+
 ## Research Method
 
 1. **Enumerate the candidates explicitly** before evaluating any of them. Candidates never written down cannot be compared.

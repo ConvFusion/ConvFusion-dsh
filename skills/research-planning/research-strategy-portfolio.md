@@ -1,6 +1,6 @@
 ---
 name: Research Strategy Portfolio
-category: research-management/research-planning
+category: research-planning/research-strategy-portfolio
 type: system
 status: active
 version: 1.0
@@ -21,6 +21,14 @@ Use this skill when:
 - You cannot tell whether the plan is a safe incremental study or a high-risk, high-reward bet.
 - Several candidate plans exist and must be reduced to the ones worth executing.
 - The experiment graph, validation protocol or target venue is still undefined.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: literature-evidence | 策略组合需要文献图景来划分取舍
+```
 
 ## Research Method
 

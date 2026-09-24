@@ -74,12 +74,12 @@ console.log('\n[1] 过程定义是能力库里的一个 Skill')
   assert(typeof content === 'string' && content.length > 0, '`research-process` 存在于能力库')
   const stages = PROC.parseStages(content)
   assert(Array.isArray(stages) && stages.length >= 6, `从能力正文解析出 ${stages?.length ?? 0} 个阶段`)
-  assertEq(stages?.map((s) => s.id)[0], 'problem', '第一个阶段是 problem')
+  assertEq(stages?.map((s) => s.id)[0], 'topics', '第一个阶段是 topics（提出话题）')
   assert(stages.every((s) => s.label && s.category), '每个阶段都有显示名与能力类别')
   assert(stages.every((s) => s.signal === undefined || PROC.STAGE_SIGNALS.includes(s.signal)), '判定信号都在固定词表内')
-  // 默认过程必须覆盖"理解问题 → 文献 → …"这条基本科研过程
+  // 默认过程必须覆盖"提出话题 → 文献调研 → … → 论文写作"这条基本科研过程
   const ids = stages.map((s) => s.id)
-  for (const want of ['problem', 'literature', 'innovation', 'method', 'experiment', 'analysis', 'decision', 'writing']) {
+  for (const want of ['topics', 'literature', 'innovation', 'planning', 'resource', 'decision', 'experiment', 'writing']) {
     assert(ids.includes(want), `默认过程包含阶段：${want}`)
   }
   // 提示性：正文必须写明它不是流水线
@@ -125,16 +125,17 @@ console.log('\n[3] 阶段判定看的是磁盘上的资产，不是对话内容'
 {
   const ws = mkdtempSync(join(tmpdir(), 'cf-proc-'))
   const a0 = PROC.assessResearchProcess(ws, { skillContent: baseContent })
-  assertEq(a0.current?.stage.id, 'problem', '空工作区 → 当前阶段是 problem')
+  assertEq(a0.current?.stage.id, 'topics', '空工作区 → 当前阶段是 topics（提出话题）')
 
-  // 只写研究问题：
+  // 只写研究话题：阶段 1 的落地物是 `research/topics.md`（不是 project.md）
+  mkdirSync(join(ws, 'research'), { recursive: true })
   writeFileSync(
-    join(ws, 'project.md'),
-    ['---', 'type: research-project', 'topic: T', 'domain: Robotics', '---', '', '## Research Statement', '', 'T', '', '## Research Questions', '', '- **Q1** 能不能？', ''].join('\n'),
+    join(ws, 'research', 'topics.md'),
+    '# Research Topics\n\n- 用 LLM 辅助科研决策（依据：某论文承认的局限）\n',
   )
   const a1 = PROC.assessResearchProcess(ws, { skillContent: baseContent })
-  assertEq(a1.current?.stage.id, 'literature', '有研究问题后 → 当前阶段推进到 literature')
-  assert(a1.stages[0].satisfied, 'problem 阶段判定为已落地')
+  assertEq(a1.current?.stage.id, 'literature', '有研究话题后 → 当前阶段推进到 literature')
+  assert(a1.stages[0].satisfied, '提出话题阶段判定为已落地')
 
   // "只有检索计划不算产出文献证据"这个区分要真的成立
   mkdirSync(join(ws, 'plans'), { recursive: true })

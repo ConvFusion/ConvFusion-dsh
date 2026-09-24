@@ -40,6 +40,8 @@ import { recommendSkills, skillSummaries } from './library.js'
 import type { SkillSummary } from './library.js'
 import { assessResearchProcess } from './research-process.js'
 import type { ProcessAssessment } from './research-process.js'
+import { buildSignalContext } from './stage-signals.js'
+import { assessPrerequisites, renderUnmetPrerequisites } from './prerequisites.js'
 import { buildResearchIndex, loadResearchState, openQuestions } from './research-state.js'
 import { DEFAULT_PAPER_ID } from './paper-data.js'
 import { getActivePaperId, listPapers, readPaper } from './paper.js'
@@ -148,6 +150,19 @@ export function collectResearchContext(source: ResearchContextSource): ResearchC
     const rel = relative(resolve(source.sessionWorkspace), resolve(ws))
     if (rel && rel !== '.' && !isAbsolute(rel) && !rel.startsWith('..')) rootPrefix = rel
   }
+  const suggestedSkills = suggestSkillsFor(ws, source.userInput, source.skillContent)
+  // 仅评估**建议技能**的前置（不全量评估 55 个；提示性，不阻塞）。
+  const prereqWarnings = new Map<string, string>()
+  if (suggestedSkills.length > 0) {
+    const signalCtx = buildSignalContext(ws)
+    const statuses = assessPrerequisites(
+      suggestedSkills.map((s) => ({ id: s.id, content: source.skillContent?.(s.id) })),
+      signalCtx,
+    )
+    for (const st of statuses) {
+      if (!st.satisfied) prereqWarnings.set(st.skillId, renderUnmetPrerequisites(st))
+    }
+  }
   return {
     ...(rootPrefix ? { rootPrefix } : {}),
     project: loadProject(ws),
@@ -158,7 +173,8 @@ export function collectResearchContext(source: ResearchContextSource): ResearchC
     plans: listPlans(ws),
     skills: skillSummaries(ws),
     process: assessResearchProcess(ws, { ...(source.skillContent ? { skillContent: source.skillContent } : {}) }),
-    suggestedSkills: suggestSkillsFor(ws, source.userInput, source.skillContent),
+    suggestedSkills,
+    prereqWarnings,
     state: loadResearchState(ws),
     index: buildResearchIndex(ws),
     openQuestions: openQuestions(ws),
@@ -485,7 +501,8 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
       lines.push('Possibly relevant to this request (navigation only — no execution order):')
       for (const s of ctx.suggestedSkills) {
         const purpose = s.purpose ? ` — ${s.purpose.split('\n')[0]}` : ''
-        lines.push(`- **${s.name}** (\`${s.path}\`)${purpose}`)
+        const warning = ctx.prereqWarnings.get(s.id)
+        lines.push(`- **${s.name}** (\`${s.path}\`)${purpose}${warning ? ` · ⚠ 前置未满足: ${warning}` : ''}`)
       }
     }
     lines.push('')

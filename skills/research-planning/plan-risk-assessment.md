@@ -1,6 +1,6 @@
 ---
 name: Plan Risk Assessment
-category: research-decision/risk-assessment
+category: research-planning/plan-risk-assessment
 type: system
 status: active
 version: 1.0
@@ -21,6 +21,14 @@ Use this skill when:
 - A risk list exists but contains neither mitigation nor a trigger for acting.
 - Budget, deadline, compute availability or data-access constraints may make the plan impossible.
 - Two candidate plans must be compared on risk rather than on expected performance.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: method-plan | 评计划风险要先有计划
+```
 
 ## Research Method
 

@@ -1,6 +1,6 @@
 ---
 name: Patent Drafting
-category: academic-writing/technical-writing
+category: academic-writing/patent-drafting
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - A research result is mature enough that its mechanism could be protected.
 - A paper exists and a patent is being derived from it (or directly from the research state).
 - You need to decide whether the contribution is a protectable technical solution or only a finding.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: experiments/simulation-result | 专利要转化实验结果（仿真结果亦可先起稿）
+```
 
 ## Research Method
 

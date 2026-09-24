@@ -19,7 +19,7 @@
  *
  * ## 过程定义本身是一个 Skill（用户可定制）
  *
- * 阶段列表**不再硬编码**：它来自 `research-process` 这个能力（`skills/research-management/
+ * 阶段列表**不再硬编码**：它来自 `research-process` 这个能力（`skills/research-planning/
  * research-process.md`）里的一段机器可读围栏块。用户可以在【设置】-【ConvFusion】-【本地研究方法】
  * 里覆盖该能力的 `Research Method` 章节，**规定自己的研究进展过程** —— 不同学科的过程确实不同。
  *
@@ -35,14 +35,8 @@
  * 判定信号取自**固定词表**（`STAGE_SIGNALS`）—— 用户可以改过程，但改不了判定逻辑，
  * 否则一个笔误就会让"当前阶段"永远判不出来。信号留空/写错 → 该阶段不参与判定。
  */
-/**
- * 判定信号词表。
- *
- * ⚠️ 固定词表是刻意的：用户能改**过程**，但改不了**判定逻辑**。
- * 允许任意表达式会让一个笔误把"当前阶段"永久判错，而且无法校验。
- */
-export declare const STAGE_SIGNALS: readonly ["problem-defined", "literature-evidence", "claims", "method-plan", "experiments", "settled-evidence", "decisions", "manuscript"];
-export type StageSignal = (typeof STAGE_SIGNALS)[number];
+import { type StageSignal } from './stage-signals.js';
+export { STAGE_SIGNALS, buildSignalContext, judgeSignal, type StageSignal } from './stage-signals.js';
 /** 科研过程的一个阶段（与能力类别对应）。 */
 export interface ResearchStage {
     /** 阶段 id。 */

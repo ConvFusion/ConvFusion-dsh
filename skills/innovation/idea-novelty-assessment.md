@@ -1,6 +1,6 @@
 ---
 name: Idea Novelty Assessment
-category: innovation/novelty-assessment
+category: innovation/idea-novelty-assessment
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - An idea is a candidate for commitment and its novelty must be defended.
 - You suspect prior art exists but cannot tell which part of the idea it touches.
 - A reviewer or collaborator claims the idea is a known technique under a new name.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: literature-evidence | 评新颖性要对照最近的前人工作
+```
 
 ## Research Method
 

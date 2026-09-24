@@ -25,7 +25,7 @@
 export const SKILLS = [
   {
     id: 'paper-architecture',
-    category: 'academic-writing/paper-structure',
+    category: 'academic-writing/paper-architecture',
     name: 'Paper Architecture',
     origin: 'paper/writing (outline, chapter_writer)',
     purpose:
@@ -51,6 +51,9 @@ export const SKILLS = [
       'the writing order plus the cross-section context that must be carried forward',
       'an outline audit listing duplicated claims and claims no section covers',
     ],
+    prerequisites: [
+      "experiments/simulation-result | 架构要有可组织的结果（真实或仿真）",
+    ],
     sources: [
       { file: 'modules/paper/writing/prompts/outline_prompt.py' },
       { file: 'modules/paper/writing/prompts/chapter_writer_prompt.py' },
@@ -58,7 +61,7 @@ export const SKILLS = [
   },
   {
     id: 'research-narrative',
-    category: 'academic-writing/argumentation',
+    category: 'academic-writing/research-narrative',
     name: 'Research Narrative and Positioning',
     origin: 'paper/narrative (storyline, quality_check), paper/writing (contribution, related_work)',
     purpose:
@@ -87,6 +90,9 @@ export const SKILLS = [
       'a thematically organised related-work draft ending in an explicit positioning statement',
       'a scored quality assessment naming the weakest criterion and the planned fix',
     ],
+    prerequisites: [
+      "experiments/simulation-result | 叙事要有可讲述的结果（真实或仿真）",
+    ],
     sources: [
       { file: 'modules/paper/narrative/prompts/storyline_prompt.py' },
       { file: 'modules/paper/narrative/prompts/quality_check_prompt.py' },
@@ -96,7 +102,7 @@ export const SKILLS = [
   },
   {
     id: 'section-drafting',
-    category: 'academic-writing/technical-writing',
+    category: 'academic-writing/section-drafting',
     name: 'Section Drafting from Evidence',
     origin: 'paper/writing (title, abstract, intro, method, experiment, conclusion)',
     purpose:
@@ -123,6 +129,9 @@ export const SKILLS = [
       'equation placeholders and figure cross-references for the apparatus step',
       'a note of any evidence the section required but the research state did not contain',
     ],
+    prerequisites: [
+      "experiments/simulation-result | 起草前要有真实实验结果，或有仿真结果（草稿可基于仿真先行）",
+    ],
     sources: [
       { file: 'modules/paper/writing/prompts/title_prompt.py' },
       { file: 'modules/paper/writing/prompts/abstract_prompt.py' },
@@ -134,7 +143,7 @@ export const SKILLS = [
   },
   {
     id: 'manuscript-revision',
-    category: 'academic-writing/revision',
+    category: 'academic-writing/manuscript-revision',
     name: 'Manuscript Revision and Style',
     origin: 'paper/polishing (chapter_polisher, style)',
     purpose:
@@ -161,6 +170,9 @@ export const SKILLS = [
       'the list of places where clarity would have required a content decision',
       'the measured length change per section',
     ],
+    prerequisites: [
+      "manuscript | 修订的对象是已有正文",
+    ],
     sources: [
       { file: 'modules/paper/polishing/prompts/chapter_polisher_prompt.py' },
       { file: 'modules/paper/polishing/prompts/style_prompt.py' },
@@ -168,7 +180,7 @@ export const SKILLS = [
   },
   {
     id: 'equation-formalization',
-    category: 'academic-writing/technical-writing',
+    category: 'academic-writing/equation-formalization',
     name: 'Equation Formalization',
     origin: 'paper/writing (equation), paper/equation (equation)',
     purpose:
@@ -195,6 +207,9 @@ export const SKILLS = [
       'the inline-versus-placeholder decision for each symbol',
       'a consistency report between the equation set and the text',
     ],
+    prerequisites: [
+      "method-plan | 公式来自方法设计",
+    ],
     sources: [
       { file: 'modules/paper/writing/prompts/equation_prompt.py' },
       { file: 'modules/paper/equation/prompts/equation_prompt.py' },
@@ -202,7 +217,7 @@ export const SKILLS = [
   },
   {
     id: 'visual-evidence-selection',
-    category: 'academic-writing/technical-writing',
+    category: 'academic-writing/visual-evidence-selection',
     name: 'Visual Evidence Selection',
     origin: 'paper/artifacts (figure_selector)',
     purpose:
@@ -228,26 +243,31 @@ export const SKILLS = [
       'a caption outline stating the intended conclusion for every selected figure',
       'the list of results that remain unvisualised',
     ],
+    prerequisites: [
+      "experiments/simulation-result | 选图表要先有结果",
+    ],
     sources: [{ file: 'modules/paper/artifacts/prompts/figure_selector_prompt.py' }],
   },
   {
     id: 'submission-compile-and-format',
-    category: 'academic-writing/final-editing',
+    category: 'academic-writing/submission-compile-and-format',
     name: 'Submission Formatting and Compile Repair',
     origin: 'paper/latex (latex_validator, latex_llm_fixer), paper/narrative (reference)',
     purpose:
       'Turn the revised text into a venue-conformant manuscript that compiles: correct LaTeX, escaped special characters, a reference list built from real metadata, and no leftover markup artefacts.',
     whenToUse: [
+      'The manuscript must leave Markdown and become a compilable LaTeX document (every paper does, eventually).',
       'The manuscript fails to compile, or the compile log reports errors that must be addressed.',
       'The text still contains Markdown artefacts such as heading hashes, emphasis markers or raw underscores.',
       'References are missing, are placeholders, or use "Anonymous" as an author.',
     ],
     method: [
+      '0. **Drive the `research_paper_latex` tool — do not hand-write LaTeX.** The manuscript stays Markdown (`papers/<paperId>/paper.md`) and is converted, never re-typed:\n   - `action: "compose"` — turns `paper.md` into `papers/<paperId>/latex/main.tex` (+ `main_intermediate.tex`, which keeps raw `[cite_key]` placeholders so you can read what the converter saw). Markdown headings, inline emphasis and stray `%` are handled here; an existing `main.tex` is backed up first. Pick the template at this step: `conference` (IEEEtran, default) or `journal` (IEEEtran journal option).\n   - `action: "compile"` — runs Tectonic and produces `main.pdf`; returns `{ success, errors }`.\n   - `action: "repair"` — deterministic, LLM-free repair of `main.tex` from the last compile log (escapes stray `%`, fixes double-subscript and math-mode errors). Run it before spending your own effort.\n   - `action: "errors"` — structured errors with line numbers **and the surrounding code**, which is what you need to fix what `repair` could not. Then `compile` again.\n   - `action: "validate"` — advisory list of unrecognised commands/environments; it is not a gate and a nonzero list is not a failure.\n   - `action: "status"` — what is currently in `latex/`.\n   The loop is: `compose` → `compile` → if it fails, `repair` → `compile` → if it still fails, read `errors` and **edit `main.tex` yourself** → `compile`. Stop when `compile` returns `success: true`; do not loop indefinitely.',
       '1. **Separate syntax repair from content.** Every fix in this skill is syntactic; if a correction would change a claim, a number or a citation, stop and route it back to the writing skill.',
       '2. **Fix encoding and escaping first**, because they cascade: escape reserved characters, convert Markdown emphasis and headings into the corresponding LaTeX environments and commands, and replace Unicode math symbols with their commands.',
       '3. **Balance environments and structure** so every begin has an end, required packages are declared, and no empty environment remains.',
       '4. **Repair errors in bounded batches grouped by cause, not by symptom.** When many errors share one cause, fix a representative, recompile and re-read the log rather than patching every occurrence blindly; if the log cannot be parsed, treat the raw log as the error context instead of guessing.',
-      '5. **Build the reference list from real metadata.** Format entries in the venue style, order them by citation number, and omit a missing field rather than filling it with a placeholder — never emit "Anonymous" or fabricated page ranges.',
+      '5. **Build the reference list from real metadata.** Format entries in the venue style, order them by citation number, and omit a missing field rather than filling it with a placeholder — never emit "Anonymous" or fabricated page ranges. Note what the converter does and does not do: it rewrites `[key]`, `[key1, key2]` and `[12]`-style citations into `\\cite{...}` from the `## References` section, but **author–year prose citations like `(Smith et al., 2024)` are left as plain text** — they need a real `.bib`/`\\citep` pass or a rewrite in the manuscript.',
       '6. **Re-verify after each pass**: the document compiles, the reference list contains exactly the cited keys, and the diff contains no change to scientific content.',
     ],
     evidenceRequirements:
@@ -258,6 +278,20 @@ export const SKILLS = [
       'the compile errors grouped by category, with anything unresolved listed',
       'confirmation that no scientific content changed during formatting',
     ],
+    extraSections: [
+      {
+        title: 'Known Limits of the Converter',
+        body: [
+          '- **Markdown tables are passed through as plain text** (pipes and all); they must be turned into `table`/`tabular` LaTeX separately. This matches the legacy pipeline, where tables arrived pre-rendered as artifacts.',
+          '- **Inline emphasis is converted** (`**x**` → `\\textbf{x}`, `*x*` → `\\textit{x}`) while math regions are protected, but an *unpaired* `*` (e.g. a footnote dagger like `f*`) is intentionally left alone.',
+          '- Abstract comes from `## Abstract`; the title from the `#` heading; `## References` feeds `\\bibitem`. Everything else becomes a `\\section`.',
+          "- Tectonic needs a writable cache; the tool points it inside the paper's `latex/` directory, so the first compile may download packages.",
+        ].join('\n'),
+      },
+    ],
+    prerequisites: [
+      "manuscript | 先有正文才谈得上编译成稿",
+    ],
     sources: [
       { file: 'modules/paper/latex/prompts/latex_validator_prompt.py' },
       { file: 'modules/paper/latex/prompts/latex_llm_fixer_prompt.py' },
@@ -266,7 +300,7 @@ export const SKILLS = [
   },
   {
     id: 'venue-fit-decision',
-    category: 'research-decision/go-no-go',
+    category: 'academic-writing/venue-fit-decision',
     name: 'Venue Fit Decision',
     origin: 'paper/venue (paper_decision)',
     purpose:
@@ -291,6 +325,9 @@ export const SKILLS = [
       'the template type the decision implies',
       'concrete upgrade actions, each with the evidence it would require',
       'the named evidence gaps that drove the decision',
+    ],
+    prerequisites: [
+      "experiments/simulation-result | 投稿形态按已有结果（真实或仿真）的证据厚度定",
     ],
     sources: [{ file: 'modules/paper/venue/prompts/paper_decision_prompt.py' }],
   },

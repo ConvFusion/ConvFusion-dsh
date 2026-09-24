@@ -1,6 +1,6 @@
 ---
 name: Technical Report Writing
-category: academic-writing/technical-writing
+category: academic-writing/technical-report-writing
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - An engineering or internal audience must act on the result rather than cite it.
 - A result needs to be recorded before or instead of a paper (industry setting, project deliverable).
 - Reproduction details exist but are scattered across logs, configs and plans.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: experiments/simulation-result | 技术报告基于实验结果（仿真结果亦可先记录）
+```
 
 ## Research Method
 

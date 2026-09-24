@@ -1,34 +1,34 @@
 ---
-name: Research Idea Generation
-category: innovation/idea-generation
+name: Research Theme Generation
+category: innovation/research-theme-generation
 type: system
 status: active
 version: 1.0
 origin: conception/idea-generation
 ---
 
-# Skill: Research Idea Generation
+# Skill: Research Theme Generation
 
 ## Purpose
 
-Produce a portfolio of genuinely distinct candidate research ideas, each attacking a named gap through a stated mechanism — instead of several rewordings of one idea.
+Turn a research topic and a ranked set of gaps into candidate research themes — each stated at the level of a precise research title (most often the paper title) that attacks a named gap through a stated mechanism, instead of several rewordings of one theme.
 
 ## When to Use
 
 Use this skill when:
 
-- A ranked set of gaps exists and you need candidate ways to close them.
-- An existing idea list looks broad but every entry shares the same mechanism.
-- You need cross-domain candidates and want their validity conditions made explicit.
+- A research topic exists and the literature has been reviewed into gaps, and you need candidate themes to commit to.
+- An existing theme list looks broad but every entry shares the same mechanism.
+- You need cross-domain candidate themes and want their validity conditions made explicit.
 
 ## Research Method
 
-1. **Fix the generation target before generating.** For each gap write the one-sentence change in capability the idea must produce. An idea that cannot state this is a restatement of existing work, however appealing it sounds.
-2. **Generate across mechanisms, not within one.** For each gap, produce candidates from at least three different mechanism families — change the representation, change the training signal, change the inference procedure, change the evaluation setting. Mechanism diversity is what makes the later portfolio decision meaningful.
+1. **Fix the generation target before generating.** For each gap write the one-sentence change in capability the theme must produce. A theme that cannot state this is a restatement of existing work, however appealing it sounds.
+2. **Generate across mechanisms, not within one.** For each gap, produce candidates from at least three different mechanism families — change the representation, change the training signal, change the inference procedure, change the evaluation setting. Mechanism diversity is what makes the later theme decision meaningful.
 3. **Force cross-domain transfer to declare itself.** For at least one candidate per gap, name the source field and the imported mechanism, then state what must be re-derived for the import to be valid. Unexamined analogy is the most common source of fake novelty.
-4. **Check the closest work while writing the idea, not after.** If you cannot name what differs from the nearest existing method and why that difference should matter, drop the candidate rather than keeping it with vague novelty language.
-5. **State the falsifiable claim for each idea.** Write the observation that would show it does not work. An idea whose claim cannot fail is not researchable; it is a programme of work.
-6. **Keep the idea separate from its implementation.** Record mechanism and claim only. Architecture, dataset and schedule belong to planning, and committing to them now silently deletes alternatives.
+4. **Check the closest work while writing the theme, not after.** If you cannot name what differs from the nearest existing method and why that difference should matter, drop the candidate rather than keeping it with vague novelty language.
+5. **State each theme at title level, with its falsifiable claim.** A research theme is a strict selection, normally usable as the paper title: write one sentence naming the problem, the intervention and the comparison. Then write the observation that would show it does not work — a theme whose claim cannot fail is a programme of work, not a research theme.
+6. **Keep the theme separate from its implementation.** Record mechanism, claim and title only. Architecture, dataset and schedule belong to planning, and committing to them now silently deletes alternatives.
 7. **Stop at coverage, not at a count.** Stop when every selected gap has at least one candidate from each plausible mechanism family; report the gaps that produced nothing and why, rather than padding the list.
 
 ## Reasoning Guidance
@@ -37,17 +37,17 @@ Use this skill when:
 
 ## Evidence Requirements
 
-Each idea must reference the gap it addresses and the closest work it must be distinguished from. Any cross-domain import must name its source and what was re-derived. No idea may be justified by trend or popularity alone.
+Each candidate theme must reference the gap it addresses and the closest work it must be distinguished from. Any cross-domain import must name its source and what was re-derived. No theme may be justified by trend or popularity alone.
 
 ## Expected Output
 
 Produce:
 
-- candidate ideas, each with its gap, mechanism family and core claim
-- the closest-work comparison that distinguishes each idea
-- a falsification condition per idea
+- candidate research themes, each with its gap, mechanism family and core claim
+- a title-level statement per theme (usable as the paper title), together with its falsification condition
+- the closest-work comparison that distinguishes each theme
 - cross-domain imports with their validity conditions
-- gaps that yielded no viable candidate, with the reason
+- gaps that yielded no viable theme, with the reason
 
 ## Source Prompts (verbatim from ConvFusion)
 

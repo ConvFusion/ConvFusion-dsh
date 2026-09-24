@@ -1,6 +1,6 @@
 ---
 name: Research Presentation Design
-category: academic-writing/technical-writing
+category: academic-writing/presentation-design
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - A result must be presented live (conference, group meeting, review).
 - An existing paper needs to become a talk for audiences with different backgrounds.
 - A result is being questioned and you need to walk an audience through the evidence.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: experiments/simulation-result | 演讲要有可讲的结果（真实或仿真）
+```
 
 ## Research Method
 

@@ -1,6 +1,6 @@
 ---
 name: Hypothesis Formulation
-category: innovation/hypothesis
+category: innovation/hypothesis-formulation
 type: system
 status: active
 version: 1.0
@@ -20,6 +20,14 @@ Use this skill when:
 - A direction has been chosen and the experiment must be made testable.
 - An aim is written as a goal ("study X", "improve Y") rather than a claim.
 - An experiment is planned but no result could count as evidence against it.
+
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: literature-evidence | 假设立在文献证据之上，否则无法判断它是否已被回答
+```
 
 ## Research Method
 

@@ -21,6 +21,14 @@ Use this skill when:
 - A direction is being considered and its novelty depends on what already exists.
 - You are assembling the related-work argument.
 
+## Prerequisites
+
+Each line is a precondition judged by an artifact signal — this skill is only advisable once the named signal has landed on disk. `/` = any-of; multiple lines = all-of.
+
+```text
+requires: literature-evidence | 综述建立在已落地的文献证据之上，而不是检索计划
+```
+
 ## Research Method
 
 1. **Extract per paper on fixed dimensions** (problem, method, evidence, limitation) so that papers become comparable rather than merely summarised.
