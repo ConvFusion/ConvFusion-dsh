@@ -7,6 +7,7 @@ export declare const dictionaries: {
     zh: {
         'settings.nav': string;
         'settings.version.updateAvailable': string;
+        'settings.version.updateHint': string;
         'settings.hero.subtitle': string;
         'settings.badge.customized': string;
         'settings.badge.systemDefaults': string;
@@ -519,6 +520,7 @@ export declare const dictionaries: {
     en: {
         readonly 'settings.nav': "ConvFusion";
         readonly 'settings.version.updateAvailable': "Update available: v{version}";
+        readonly 'settings.version.updateHint': "It is recommended to update directly via DSH Launcher";
         readonly 'settings.hero.subtitle': "Customize capabilities to create your own research methodology";
         readonly 'settings.badge.customized': "{count} customized";
         readonly 'settings.badge.systemDefaults': "Using all system defaults";

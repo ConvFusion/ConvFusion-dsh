@@ -7,7 +7,7 @@
 <p align="center"><strong>专为 DeepSeek Harness 打造的科研操作系统插件</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.4.0-4a43ea" alt="Version 0.4.0">
+  <img src="https://img.shields.io/badge/version-v0.4.1-4a43ea" alt="Version 0.4.1">
   <img src="https://img.shields.io/badge/DeepSeek_Harness-plugin-4a43ea" alt="DeepSeek Harness Plugin">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="MIT License"></a>
 </p>

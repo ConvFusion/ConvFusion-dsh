@@ -2,6 +2,7 @@
 export declare const zh: {
     'settings.nav': string;
     'settings.version.updateAvailable': string;
+    'settings.version.updateHint': string;
     'settings.hero.subtitle': string;
     'settings.badge.customized': string;
     'settings.badge.systemDefaults': string;

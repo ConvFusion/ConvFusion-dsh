@@ -1,6 +1,6 @@
 {
   "name": "dsh-convfusion",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "ConvFusion research operating system as a DeepSeek Harness plugin: research context injection, native skill provider, and runtime observation. Harness is the agent runtime.",
   "type": "module",
   "main": "lib/index.js",

@@ -1047,6 +1047,7 @@ export function ConvFusionProjectSettings({
                 href={update.url || undefined}
                 target="_blank"
                 rel="noreferrer"
+                title={t('settings.version.updateHint')}
                 style={{
                   fontSize: 11,
                   fontWeight: 600,
