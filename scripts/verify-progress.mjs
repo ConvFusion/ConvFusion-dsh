@@ -688,6 +688,21 @@ console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会�
 
 rmSync(join(tmpdir(), 'nonexistent-cf-progress-'), { recursive: true, force: true })
 
+console.log('\n[10] Research Guide：语言规定')
+{
+  const guide = CTX.RESEARCH_GUIDE_TEXT
+  assert(typeof guide === 'string' && guide.includes('Language:'), 'Guide 有 Language 一节')
+  assert(
+    guide.includes('in the language of the user'),
+    '规定「跟用户输入的语言回答」（而不是跟着英文系统提示走）',
+  )
+  assert(guide.includes('中文'), '给出中文示例（中文提问用中文回答）')
+  assert(guide.includes('Never switch the user to English'), '明确禁止「因为系统提示是英文就拿英文回用户」')
+  assert(guide.includes('Write paper materials and data in English'), '规定论文材料与数据用英文')
+  assert(/papers\//.test(guide) && /datasets/.test(guide), '点名 `papers/` 与数据/实验结果')
+  assert(guide.includes('follows the'), '写明其余工作笔记随对话语言')
+}
+
 console.log(`\n${failed === 0 ? '✅' : '❌'} progress: ${passed} passed, ${failed} failed`)
 if (failed > 0) {
   console.log('failures:\n' + failures.map((f) => `  - ${f}`).join('\n'))
