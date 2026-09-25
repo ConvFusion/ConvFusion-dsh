@@ -1,7 +1,7 @@
 /** English is the canonical key set for the ConvFusion browser UI. */
 export const en = {
   'settings.nav': 'ConvFusion',
-  'settings.version.updateAvailable': 'Update available: v{version}',
+  'settings.version.updateAvailable': '(Update available: v{version})',
   'settings.version.updateHint': 'It is recommended to update directly via DSH Launcher',
   'settings.hero.subtitle': 'Customize capabilities to create your own research methodology',
   'settings.badge.customized': '{count} customized',

@@ -3,7 +3,7 @@ import type { en } from './en.js'
 /** Simplified Chinese dictionary; the type rejects missing and extra keys. */
 export const zh = {
   'settings.nav': 'ConvFusion',
-  'settings.version.updateAvailable': '有新版 v{version}',
+  'settings.version.updateAvailable': '(有新版 v{version})',
   'settings.version.updateHint': '建议通过 DSH Launcher 直接更新',
   'settings.hero.subtitle': '定制各项能力，形成你自己的研究方法',
   'settings.badge.customized': '已定制 {count} 项',
