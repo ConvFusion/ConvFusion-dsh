@@ -332,6 +332,8 @@ export declare function describeLocalDependencies(env?: NodeJS.ProcessEnv): Loca
 export interface SettingsState {
     /** 宿主协议版本；与客户端内联值不一致 = 宿主未重启。 */
     protocol: number;
+    /** 插件版本（package.json 单一来源；UA / 徽章 / 更新检查共用）。 */
+    version: string;
     /**
      * 生效配置（文件名的权威来源仍是 settings 文档）。
      *
@@ -372,7 +374,7 @@ export interface SettingsState {
  *
  * 分组在这里做，客户端只负责渲染 —— 设置页不该自己理解 Skill 的存储结构。
  */
-export declare function buildSettingsState(config: Config, store: SkillCustomizationStore, resolvePath?: (c: Config) => string, probeDependencies?: () => LocalDependencyReport, env?: NodeJS.ProcessEnv): SettingsState;
+export declare function buildSettingsState(config: Config, store: SkillCustomizationStore, resolvePath?: (c: Config) => string, probeDependencies?: () => LocalDependencyReport, env?: NodeJS.ProcessEnv, version?: string): SettingsState;
 /** 设置面依赖（由插件入口注入，便于离线测试）。 */
 export interface SettingsRpcDeps {
     /** 当前生效配置（每次调用重新取，文件改名后立即生效）。 */
@@ -403,6 +405,11 @@ export interface SettingsRpcDeps {
      * 见 `server-client.ts` 文件头。
      */
     fetchImpl?: FetchLike;
+    /**
+     * 插件版本（package.json 单一来源；由入口注入 `pkg.version`）。
+     * 缺省 `'0.0.0'` —— 仅测试 / 精简环境会用到，正式装配永远带上真值。
+     */
+    version?: string;
     /** 环境变量（测试注入；缺省 `process.env`）。 */
     env?: NodeJS.ProcessEnv;
     /**
@@ -463,6 +470,11 @@ export interface SettingsRpcDeps {
     }>;
 }
 /**
+ * 比较两个版本串（容忍 `v` 前缀与 `-rc.x` 后缀）：按点分数字段比较，
+ * 返回 `-1 | 0 | 1`。解析失败按 0 处理（防御即可，版本串都是自己维护的）。
+ */
+export declare function compareVersions(a: string, b: string): number;
+/**
  * 建立一个端点分发器。
  *
  * 端点表（客户端约定，改名即破坏设置页）：
@@ -471,6 +483,7 @@ export interface SettingsRpcDeps {
  * |---|---|---|
  * | `state` | `{}` | 整页状态（类别 → Skill → 章节） |
  * | `dependencies/check` | `{}` | 重新探测本地外部依赖（tectonic），供【系统设置】的"重新检查" |
+ * | `version/check` | `{}` | 插件更新检查（GitHub Releases `latest`；离线/无 release 时 `latest:null`） |
  * | `customization/save` | `{ skillId, section, text }` | 写入覆盖（空文本 = 清除） |
  * | `customization/reset` | `{ skillId, section }` | 清除一个章节的覆盖 |
  * | `customization/resetSkill` | `{ skillId }` | 清除一个 Skill 的全部覆盖 |

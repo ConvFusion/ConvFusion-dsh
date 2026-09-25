@@ -178,6 +178,13 @@ export const SETTINGS_ROUTE_PREFIX = '/dsh-convfusion'
 /** 请求体上限（状态是只读的，写请求也很小；4 MiB 足够且能挡住误用）。 */
 export const SETTINGS_MAX_BODY_BYTES = 4 * 1024 * 1024
 
+/** 更新检查：GitHub Releases API（`releases/latest`；尚无任何 release 时返回 404）。 */
+const GITHUB_LATEST_RELEASE_URL = 'https://api.github.com/repos/ConvFusion/ConvFusion-dsh/releases/latest'
+/** 更新检查结果缓存时长（进一次设置页就打一次 GitHub 没必要）。 */
+const VERSION_CHECK_TTL_MS = 10 * 60 * 1000
+/** 更新检查单次请求超时（GitHub 不可达时静默降级，绝不阻塞设置页）。 */
+const VERSION_CHECK_TIMEOUT_MS = 5000
+
 /** 统一信封（Connection 的 `ConnectionRpcResult`）。 */
 export type SettingsRpcResult =
   | { ok: true; value: unknown }
@@ -475,6 +482,8 @@ export function describeLocalDependencies(env: NodeJS.ProcessEnv = process.env):
 export interface SettingsState {
   /** 宿主协议版本；与客户端内联值不一致 = 宿主未重启。 */
   protocol: number
+  /** 插件版本（package.json 单一来源；UA / 徽章 / 更新检查共用）。 */
+  version: string
   /**
    * 生效配置（文件名的权威来源仍是 settings 文档）。
    *
@@ -519,6 +528,7 @@ export function buildSettingsState(
   resolvePath: (c: Config) => string = resolveCustomizationPath,
   probeDependencies: () => LocalDependencyReport = describeLocalDependencies,
   env: NodeJS.ProcessEnv = process.env,
+  version = '0.0.0',
 ): SettingsState {
   const customizations = store.load()
   const path = resolvePath(config)
@@ -572,6 +582,7 @@ export function buildSettingsState(
   return {
     // 宿主内存中的协议版本（与客户端 bundle 内联的那份对比，见 protocol.ts）
     [HOST_PROTOCOL_FIELD]: HOST_PROTOCOL,
+    version,
     // 注意 redactConfig：这条路不经过 DSH 的远端脱敏，必须自己摘掉 secret
     config: redactConfig(config),
     file: { path, exists, skillCount: Object.keys(customizations).length, entryCount },
@@ -630,6 +641,11 @@ export interface SettingsRpcDeps {
    * 见 `server-client.ts` 文件头。
    */
   fetchImpl?: FetchLike
+  /**
+   * 插件版本（package.json 单一来源；由入口注入 `pkg.version`）。
+   * 缺省 `'0.0.0'` —— 仅测试 / 精简环境会用到，正式装配永远带上真值。
+   */
+  version?: string
   /** 环境变量（测试注入；缺省 `process.env`）。 */
   env?: NodeJS.ProcessEnv
   /**
@@ -698,6 +714,75 @@ function asRecordLike(v: unknown): Record<string, unknown> | null {
 }
 
 /**
+ * 比较两个版本串（容忍 `v` 前缀与 `-rc.x` 后缀）：按点分数字段比较，
+ * 返回 `-1 | 0 | 1`。解析失败按 0 处理（防御即可，版本串都是自己维护的）。
+ */
+export function compareVersions(a: string, b: string): number {
+  const parse = (v: string): number[] =>
+    v
+      .trim()
+      .replace(/^[vV]/, '')
+      .split(/[-+]/)[0]
+      .split('.')
+      .map((n) => {
+        const x = Number.parseInt(n, 10)
+        return Number.isNaN(x) ? 0 : x
+      })
+  const pa = parse(a)
+  const pb = parse(b)
+  const len = Math.max(pa.length, pb.length)
+  for (let i = 0; i < len; i++) {
+    const x = pa[i] ?? 0
+    const y = pb[i] ?? 0
+    if (x > y) return 1
+    if (x < y) return -1
+  }
+  return 0
+}
+
+/**
+ * 查 GitHub 上最新的 Release（`releases/latest`）。
+ *
+ * ⚠️ 失败（离线 / 超时 / 尚无任何 release → 404）一律返回 null：
+ * 更新检查是**增值**能力，绝不能因 GitHub 不可达而让设置页报错或变慢。
+ */
+async function fetchLatestRelease(
+  fetchImpl: FetchLike | undefined,
+  timeoutMs: number,
+): Promise<{ latest: string; url: string } | null> {
+  if (typeof fetchImpl !== 'function') return null
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new Error('timeout'))
+    }, timeoutMs)
+  })
+  try {
+    const res = (await Promise.race([
+      fetchImpl(GITHUB_LATEST_RELEASE_URL, {
+        headers: { accept: 'application/vnd.github+json', 'user-agent': 'dsh-convfusion' },
+        signal: controller.signal,
+      }),
+      timeout,
+    ])) as Awaited<ReturnType<FetchLike>>
+    if (!res || !res.ok || res.status === 404) return null
+    const body = (await res.json()) as { tag_name?: unknown; html_url?: unknown }
+    if (typeof body?.tag_name !== 'string' || !body.tag_name) return null
+    return {
+      // 统一去掉 `v` 前缀：客户端渲染时自己加 `v`，两边口径一致
+      latest: body.tag_name.replace(/^[vV]/, ''),
+      url: typeof body.html_url === 'string' ? body.html_url : '',
+    }
+  } catch {
+    return null
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+/**
  * 建立一个端点分发器。
  *
  * 端点表（客户端约定，改名即破坏设置页）：
@@ -706,6 +791,7 @@ function asRecordLike(v: unknown): Record<string, unknown> | null {
  * |---|---|---|
  * | `state` | `{}` | 整页状态（类别 → Skill → 章节） |
  * | `dependencies/check` | `{}` | 重新探测本地外部依赖（tectonic），供【系统设置】的"重新检查" |
+ * | `version/check` | `{}` | 插件更新检查（GitHub Releases `latest`；离线/无 release 时 `latest:null`） |
  * | `customization/save` | `{ skillId, section, text }` | 写入覆盖（空文本 = 清除） |
  * | `customization/reset` | `{ skillId, section }` | 清除一个章节的覆盖 |
  * | `customization/resetSkill` | `{ skillId }` | 清除一个 Skill 的全部覆盖 |
@@ -752,6 +838,7 @@ export function createSettingsRpcHandler(
       deps.resolvePath ?? resolveCustomizationPath,
       describeLocalDependencies,
       env(),
+      deps.version,
     )
 
   /** 服务器请求参数（统一注入 fetch / 超时 / 环境变量）。 */
@@ -759,6 +846,42 @@ export function createSettingsRpcHandler(
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     ...(deps.serverTimeoutMs === undefined ? {} : { timeoutMs: deps.serverTimeoutMs }),
   })
+
+  /**
+   * 更新检查：进程内缓存 + 静默降级（见 {@link fetchLatestRelease}）。
+   * 缓存失败结果同样防抖 —— 不可达时也不能每次进设置页都重试。
+   */
+  let versionCheckCache: { at: number; latest: string | null; url: string | null } | null = null
+  const checkGitHubVersion = async (): Promise<{
+    current: string
+    latest: string | null
+    outdated: boolean
+    url: string | null
+    checkedAt: string | null
+  }> => {
+    const current = deps.version ?? '0.0.0'
+    const now = Date.now()
+    const cached =
+      versionCheckCache && now - versionCheckCache.at < VERSION_CHECK_TTL_MS ? versionCheckCache : null
+    if (cached) {
+      return {
+        current,
+        latest: cached.latest,
+        outdated: cached.latest !== null && compareVersions(cached.latest, current) > 0,
+        url: cached.url,
+        checkedAt: new Date(cached.at).toISOString(),
+      }
+    }
+    const found = await fetchLatestRelease(deps.fetchImpl, VERSION_CHECK_TIMEOUT_MS)
+    versionCheckCache = { at: now, latest: found?.latest ?? null, url: found?.url ?? null }
+    return {
+      current,
+      latest: versionCheckCache.latest,
+      outdated: versionCheckCache.latest !== null && compareVersions(versionCheckCache.latest, current) > 0,
+      url: versionCheckCache.url,
+      checkedAt: new Date(now).toISOString(),
+    }
+  }
 
   /**
    * 当前凭据对应的账号 id（"这一项简报买过没有"要按**账号**分开记）。
@@ -1127,6 +1250,15 @@ export function createSettingsRpcHandler(
          */
         case 'dependencies/check':
           return { ok: true, value: describeLocalDependencies() }
+
+        /**
+         * 插件更新检查：比较当前版本与 GitHub 最新 Release。
+         *
+         * 离线 / 超时 / 尚无任何 release → `latest: null`（界面不显示更新提醒），
+         * 这是**增值**能力，GitHub 不可达绝不能让设置页报错或变慢。
+         */
+        case 'version/check':
+          return { ok: true, value: await checkGitHubVersion() }
 
         /* ── 研究进展（顶部「研究进展」按钮的面板）─────────────────────────
          *

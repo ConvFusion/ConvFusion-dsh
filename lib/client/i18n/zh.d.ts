@@ -1,6 +1,7 @@
 /** Simplified Chinese dictionary; the type rejects missing and extra keys. */
 export declare const zh: {
     'settings.nav': string;
+    'settings.version.updateAvailable': string;
     'settings.hero.subtitle': string;
     'settings.badge.customized': string;
     'settings.badge.systemDefaults': string;

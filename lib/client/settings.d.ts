@@ -109,6 +109,8 @@ interface HostCategory {
 interface HostState {
     /** 宿主协议版本；与 bundle 内联值不一致 = 宿主半边没重启。 */
     protocol?: number;
+    /** 插件版本（package.json 单一来源；旧宿主没有 → 不显示版本徽章）。 */
+    version?: string;
     library: {
         root: string;
         skillCount: number;

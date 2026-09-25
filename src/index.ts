@@ -604,6 +604,9 @@ export function apply(ctx: Context, rawConfig: Partial<ConfigShape> = {}): void 
       // ConvFusion.com 请求在**宿主**侧发出：服务器未开 CORS，且凭据是 secret
       // （见 `server-client.ts` 文件头）。这里注入全局 fetch，测试可替换。
       fetchImpl: globalThis.fetch as unknown as import('./server-client.js').FetchLike,
+      // 插件版本（package.json 单一来源）：设置页显示 + GitHub 更新检查共用。
+      // 与 UA 同源（`convfusionUA`），改版本只改 package.json 一处。
+      version: pkg.version,
       // 「研究进展」按钮按**会话自己的工作区**判定是否研究项目（权威来源，见 session-workspace.ts）
       resolveSessionWorkspace: (sessionId) => resolveSessionWorkspace(ctx, sessionId),
       ...(connection && typeof connection.requestRejection === 'function'

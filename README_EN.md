@@ -7,9 +7,9 @@
 <p align="center"><strong>A research operating system plugin built for DeepSeek Harness</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.3.0-4a43ea" alt="Version 0.3.0">
+  <img src="https://img.shields.io/badge/version-v0.4.0-4a43ea" alt="Version 0.4.0">
   <img src="https://img.shields.io/badge/DeepSeek_Harness-plugin-4a43ea" alt="DeepSeek Harness Plugin">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-22c55e" alt="Apache-2.0 License"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="MIT License"></a>
 </p>
 
 <p align="center">
@@ -158,4 +158,4 @@ current environment (development / production) and warns when the address clearl
 
 ## 📝 License
 
-[Apache License 2.0](./LICENSE)
+[MIT License](./LICENSE)

@@ -146,6 +146,8 @@ interface HostCategory {
 interface HostState {
   /** 宿主协议版本；与 bundle 内联值不一致 = 宿主半边没重启。 */
   protocol?: number
+  /** 插件版本（package.json 单一来源；旧宿主没有 → 不显示版本徽章）。 */
+  version?: string
   library: { root: string; skillCount: number }
   customizableSections: string[]
   categories: HostCategory[]
@@ -803,6 +805,8 @@ export function ConvFusionProjectSettings({
   const [loading, setLoading] = React.useState(true)
   const [tab, setTab] = React.useState<SettingsTab>('local')
   const [staleHost, setStaleHost] = React.useState(false)
+  /** GitHub 最新版本（`version/check` 的结果；null = 无更新 / 检查不可用）。 */
+  const [update, setUpdate] = React.useState<{ latest: string; url: string } | null>(null)
 
   const [categoryId, setCategoryId] = React.useState<string>('')
   const [skillId, setSkillId] = React.useState<string>('')
@@ -908,6 +912,29 @@ export function ConvFusionProjectSettings({
   }, [reload])
 
   /**
+   * 更新检查：**尽力而为**。GitHub 不可达 / 尚无 release / 已是最新 → 静默（不显示）。
+   * 绝不打扰：这条请求失败不会让设置页有任何报错。
+   */
+  React.useEffect(() => {
+    let alive = true
+    void (async () => {
+      try {
+        const res = await send('version/check', {})
+        if (!alive || !res || res.ok !== true) return
+        const v = res.value as { latest?: unknown; outdated?: unknown; url?: unknown }
+        if (v?.outdated === true && typeof v.latest === 'string') {
+          setUpdate({ latest: v.latest, url: typeof v.url === 'string' ? v.url : '' })
+        }
+      } catch {
+        /* 更新检查失败绝不打扰设置页 */
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [send])
+
+  /**
    * 重新探测本地外部依赖（【系统设置】的"重新检查"）。
    *
    * ⚠️ 不能走 {@link call}：`call` 会把返回值当作**整页 HostState** 覆盖进 state，
@@ -1008,7 +1035,29 @@ export function ConvFusionProjectSettings({
           <ConvFusionMark size={24} />
         </div>
         <div style={{ flex: '1 1 auto', minWidth: 0 }}>
-          <div style={S.heroTitle}>ConvFusion</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={S.heroTitle}>ConvFusion</div>
+            {state?.version ? (
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--dsw-alias-label-tertiary)' }}>
+                v{state.version}
+              </span>
+            ) : null}
+            {update ? (
+              <a
+                href={update.url || undefined}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: 'var(--dsw-alias-state-business-primary)',
+                  textDecoration: 'none',
+                }}
+              >
+                {t('settings.version.updateAvailable', { version: update.latest })}
+              </a>
+            ) : null}
+          </div>
           <div style={S.heroSub}>{t('settings.hero.subtitle')}</div>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>

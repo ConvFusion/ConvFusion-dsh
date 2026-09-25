@@ -1,6 +1,7 @@
 /** English is the canonical key set for the ConvFusion browser UI. */
 export declare const en: {
     readonly 'settings.nav': "ConvFusion";
+    readonly 'settings.version.updateAvailable': "Update available: v{version}";
     readonly 'settings.hero.subtitle': "Customize capabilities to create your own research methodology";
     readonly 'settings.badge.customized': "{count} customized";
     readonly 'settings.badge.systemDefaults': "Using all system defaults";
