@@ -58,6 +58,24 @@ export declare const RESEARCH_GUIDE_NAME = "convfusion:research-guide";
  * 因此这里只说明**身份与边界**，绝不写"先做 A 再做 B"（那是 workflow，§12 禁止）。
  */
 export declare const RESEARCH_GUIDE_TEXT: string;
+/**
+ * 取出研究者对 **C00 全局能力「研究过程定义」** 的自定义流程文本。
+ *
+ * ## 为什么必须单独取出来注入
+ *
+ * 这段文字是研究者自己规定的「这项研究怎么推进」（草稿导向、仿真先行、回退到补检索……）。
+ * 它本来只活在能力正文里，而能力正文要**按需加载**才被读到 —— 不注入的话，模型在
+ * 大部分回合里根本看不到它，于是只能靠用户每轮提醒才会照着推进。
+ *
+ * ## 为什么只取「用户写的那部分」
+ *
+ * 系统默认正文刻意只描述阶段、不规定顺序（v2 的 `Category ≠ Workflow`）。
+ * 注入用户覆盖段：写了自定义流程的人，规则**每轮生效**；没写的人，行为完全不变。
+ *
+ * 用户块由 `composeSkillContent` 拼在正文之前，形如 `## Research Method\n\n<正文>`；
+ * 这里优先只取 `Research Method` 那一段，避免把用户改的其它章节也塞进系统提示。
+ */
+export declare function extractProcessGuidance(composed: string | undefined): string | undefined;
 /** 组装 Research Context 所需的运行时输入。 */
 export interface ResearchContextSource {
     /** 当前**研究根目录**（ConvFusion 数据文件所在目录；绝对路径）。 */

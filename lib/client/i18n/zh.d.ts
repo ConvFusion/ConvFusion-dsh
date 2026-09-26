@@ -42,6 +42,7 @@ export declare const zh: {
     'settings.library.customizedSuffix': string;
     'settings.library.categoryHint': string;
     'settings.library.emptyCategory': string;
+    'settings.library.globalHint': string;
     'settings.library.sectionCount': string;
     'settings.library.sectionHint': string;
     'settings.library.sectionCustomizedSuffix': string;
@@ -447,6 +448,7 @@ export declare const zh: {
     'section.Reasoning Guidance': string;
     'section.Evidence Requirements': string;
     'section.Expected Output': string;
+    'taxonomy.category.global-capabilities': string;
     'taxonomy.category.research-understanding': string;
     'taxonomy.category.literature': string;
     'taxonomy.category.innovation': string;

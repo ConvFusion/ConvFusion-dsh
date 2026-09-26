@@ -53,26 +53,28 @@ function assertEq(actual, expect, label) {
 const docs = SKILLS.listSystemSkills()
 
 /* ── 1. 类别编号 ──────────────────────────────────────────────────── */
-console.log('\n[1] 类别编号 C01–C09')
+console.log('\n[1] 类别编号 C00–C09')
 {
-  assertEq(CODES.CATEGORY_CODES.length, 9, '9 个类别（C09 工作评阅是普通类别，不是独立库）')
+  assertEq(CODES.CATEGORY_CODES.length, 10, '10 个类别（C00 全局能力 / C09 工作评阅都是普通类别）')
   const codes = CODES.CATEGORY_CODES.map((c) => c.code)
-  // C09 工作评阅是**追加**的普通类别（横切能力，作用于已有研究资产）：
-  // 插在中间就必须重编 C06–C08，而编号是常量表、被导出与界面引用
-  assertEq(codes.join(','), 'C01,C02,C03,C04,C05,C06,C07,C08,C09', '类别编号连续 C01–C09')
+  // C00 全局能力是**跨阶段的前置**（规定这套研究怎么推进），故置首；
+  // C09 工作评阅作用于已有资产，故置末。
+  assertEq(codes.join(','), 'C00,C01,C02,C03,C04,C05,C06,C07,C08,C09', '类别编号连续 C00–C09')
+  assertEq(codes.at(0), 'C00', '全局能力排在最前（跨阶段前置）')
   assertEq(codes.at(-1), 'C09', '评阅排在最后（横切能力，不专属某个阶段）')
   const orders = CODES.CATEGORY_CODES.map((c) => c.order)
-  assertEq(orders.join(','), '1,2,3,4,5,6,7,8,9', 'order 单调递增（排序依据）')
+  assertEq(orders.join(','), '0,1,2,3,4,5,6,7,8,9', 'order 单调递增（排序依据）')
 
   // 类别顺序必须与 research-process 的阶段意图一致：理解输入在最前、写作靠后
-  assertEq(CODES.CATEGORY_CODES[0].categoryId, 'research-understanding', 'C01 = 理解输入')
-  assertEq(CODES.CATEGORY_CODES[1].categoryId, 'literature', 'C02 = 文献')
-  assertEq(CODES.CATEGORY_CODES[3].categoryId, 'research-planning', 'C04 = 研究计划')
-  assertEq(CODES.CATEGORY_CODES[4].categoryId, 'resource-estimation', 'C05 = 资源估计')
-  assertEq(CODES.CATEGORY_CODES[5].categoryId, 'research-decision', 'C06 = 研究决策（实验前）')
-  assertEq(CODES.CATEGORY_CODES[6].categoryId, 'experiment', 'C07 = 实验验证（含仿真与结果分析）')
-  assertEq(CODES.CATEGORY_CODES[7].categoryId, 'academic-writing', 'C08 = 写作')
-  assertEq(CODES.CATEGORY_CODES[8].categoryId, 'review', 'C09 = 工作评阅（横切，置末）')
+  assertEq(CODES.CATEGORY_CODES[0].categoryId, 'global-capabilities', 'C00 = 全局能力')
+  assertEq(CODES.CATEGORY_CODES[1].categoryId, 'research-understanding', 'C01 = 理解输入')
+  assertEq(CODES.CATEGORY_CODES[2].categoryId, 'literature', 'C02 = 文献')
+  assertEq(CODES.CATEGORY_CODES[4].categoryId, 'research-planning', 'C04 = 研究计划')
+  assertEq(CODES.CATEGORY_CODES[5].categoryId, 'resource-estimation', 'C05 = 资源估计')
+  assertEq(CODES.CATEGORY_CODES[6].categoryId, 'research-decision', 'C06 = 研究决策（实验前）')
+  assertEq(CODES.CATEGORY_CODES[7].categoryId, 'experiment', 'C07 = 实验验证（含仿真与结果分析）')
+  assertEq(CODES.CATEGORY_CODES[8].categoryId, 'academic-writing', 'C08 = 写作')
+  assertEq(CODES.CATEGORY_CODES[9].categoryId, 'review', 'C09 = 工作评阅（横切，置末）')
 
   // 类别名统一 4 个字（用户要求）：防止将来又混入 2 字/5 字名
   for (const c of CODES.CATEGORY_CODES) {
@@ -152,10 +154,11 @@ console.log('\n[3] 排序：技能库与设置页')
   )
   assertEq(
     st.categories.map((c) => c.code).join(','),
-    'C01,C02,C03,C04,C05,C06,C07,C08,C09',
+    'C00,C01,C02,C03,C04,C05,C06,C07,C08,C09',
     '设置页类别按研究过程排序（字母序会让写作排最前）',
   )
-  assertEq(st.categories[0].label, '理解输入', 'C01 中文名')
+  assertEq(st.categories[0].label, '全局能力', 'C00 中文名')
+  assertEq(st.categories[1].label, '理解输入', 'C01 中文名')
   for (const c of st.categories) {
     const codes = c.skills.map((s) => s.code ?? 'Z')
     assertEq(codes.join(','), [...codes].sort().join(','), `${c.code} 内技能按编号排序`)
@@ -171,7 +174,7 @@ console.log('\n[4] 导出研究方法')
   const full = EXPORT.buildMethodsExport({ full: true, now: new Date('2026-01-01T00:00:00Z') })
 
   assertEq(def.skillCount, docs.length, '导出全部技能')
-  assertEq(def.categoryCount, 9, '导出全部类别')
+  assertEq(def.categoryCount, 10, '导出全部类别')
   assertEq(def.full, false, '默认非 full')
   assert(def.markdown.includes('CxxPyy'), '头部说明编号规则')
   assert(def.markdown.includes('## C01 · 理解输入'), '按类别分节且带编号')

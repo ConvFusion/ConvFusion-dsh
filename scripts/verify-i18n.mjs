@@ -39,7 +39,7 @@ assert(
   placeholderMismatches.length === 0,
   `全部插值参数一致${placeholderMismatches.length ? `：${placeholderMismatches.join(', ')}` : ''}`,
 )
-assert(enKeys.filter((k) => k.startsWith('taxonomy.category.')).length === 9, '9 个能力类别均有翻译（含 C09 工作评阅）')
+assert(enKeys.filter((k) => k.startsWith('taxonomy.category.')).length === 10, '10 个能力类别均有翻译（含 C00 全局能力与 C09 工作评阅）')
 assert(enKeys.filter((k) => k.startsWith('taxonomy.skill.')).length === 55, '55 个能力均有翻译')
 assert(enKeys.filter((k) => k.startsWith('section.')).length === 7, '7 个可定制章节均有翻译（含 Prerequisites）')
 for (const dimension of ['Problem', 'Knowledge', 'Innovation', 'Method', 'Experiment', 'Evidence']) {

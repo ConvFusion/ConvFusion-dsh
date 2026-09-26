@@ -1,6 +1,6 @@
 ---
 name: Research Process
-category: research-planning/research-process
+category: global-capabilities/research-process
 type: system
 status: active
 version: 1.0

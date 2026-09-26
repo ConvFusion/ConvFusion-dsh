@@ -703,6 +703,54 @@ console.log('\n[10] Research Guide：语言规定')
   assert(guide.includes('follows the'), '写明其余工作笔记随对话语言')
 }
 
+console.log('\n[11] C00 全局能力：研究者自定义流程被注入')
+{
+  // 不注入的话，这段流程只在"按需加载技能"时才可见 → 模型看不到，就得靠用户每轮提醒才推进。
+  const baseSkill = (id) => LIB.effectiveSkillContentById(id, CUST.createMemoryCustomizationStore())
+  assertEq(
+    CTX.extractProcessGuidance(baseSkill(PROC.PROCESS_SKILL_ID)),
+    undefined,
+    '没写自定义 → 不注入流程（默认仍是：只描述阶段、不规定顺序）',
+  )
+
+  const store = CUST.createMemoryCustomizationStore()
+  store.set(PROC.PROCESS_SKILL_ID, 'Research Method', '先快速产出论文草稿（草稿导向）。')
+  assertEq(
+    CTX.extractProcessGuidance(LIB.effectiveSkillContentById(PROC.PROCESS_SKILL_ID, store)),
+    '先快速产出论文草稿（草稿导向）。',
+    '只取用户写的那一段（不含系统默认正文）',
+  )
+
+  const onlyOther = CUST.createMemoryCustomizationStore()
+  onlyOther.set(PROC.PROCESS_SKILL_ID, 'Purpose', '只改了用途。')
+  assertEq(
+    CTX.extractProcessGuidance(LIB.effectiveSkillContentById(PROC.PROCESS_SKILL_ID, onlyOther)),
+    undefined,
+    '只改了别的章节 → 不当作流程注入',
+  )
+
+  // 端到端：注入后上下文出现「本项目自己的流程」，且原「阶段不是流水线」的边界仍在
+  const ws = mkdtempSync(join(tmpdir(), 'cf-c00-'))
+  // ⚠️ 必须是**研究工作区**（有 project.md）：非研究工作区整体不注入任何上下文
+  writeFileSync(
+    join(ws, 'project.md'),
+    ['---', 'type: research-project', 'topic: T', 'domain: Robotics', '---', '', '## Research Statement', '', 'T', ''].join('\n'),
+  )
+  const sc = (id) => LIB.effectiveSkillContentById(id, store)
+  const text = CTX.renderResearchContext(CTX.collectResearchContext({ workspace: ws, skillContent: sc }), '')
+  assert(text.includes("## Research process (this project's own flow)"), '上下文有「本项目自己的流程」一节')
+  assert(text.includes('先快速产出论文草稿（草稿导向）。'), '用户流程原文被注入')
+  assert(text.includes('follow it when choosing the next step'), '声明该流程优先')
+  assert(text.includes('not a procedure to follow'), '仍保留「阶段不是流水线」的边界说明')
+
+  const plain = CTX.renderResearchContext(
+    CTX.collectResearchContext({ workspace: ws, skillContent: baseSkill }),
+    '',
+  )
+  assert(!plain.includes("this project's own flow"), '没有自定义流程的项目 → 不出现该节')
+  rmSync(ws, { recursive: true, force: true })
+}
+
 console.log(`\n${failed === 0 ? '✅' : '❌'} progress: ${passed} passed, ${failed} failed`)
 if (failed > 0) {
   console.log('failures:\n' + failures.map((f) => `  - ${f}`).join('\n'))

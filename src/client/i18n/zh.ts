@@ -44,6 +44,8 @@ export const zh = {
   'settings.library.customizedSuffix': ' · 已定制 {count}',
   'settings.library.categoryHint': '{count} 项能力 · 类别按研究过程排序',
   'settings.library.emptyCategory': '该类别下暂无可定制能力',
+  'settings.library.globalHint':
+    '全局能力作用于整项研究（跨阶段的前置），当前是「研究过程定义」——它规定这项研究怎么推进，也决定进展面板的阶段。更多 DSH 全局设置可写入 AGENTS.local.md；本处的定制与其它类别一样保存，并会每轮注入对话、直接生效。',
   'settings.library.sectionCount': '{count} 个章节',
   'settings.library.sectionHint': '共 {count} 个可定制章节',
   'settings.library.sectionCustomizedSuffix': ' · 已定制',
@@ -486,6 +488,7 @@ export const zh = {
   'section.Evidence Requirements': '证据要求',
   'section.Expected Output': '预期输出',
 
+  'taxonomy.category.global-capabilities': '全局能力',
   'taxonomy.category.research-understanding': '理解输入',
   'taxonomy.category.literature': '文献调研',
   'taxonomy.category.innovation': '创新假设',

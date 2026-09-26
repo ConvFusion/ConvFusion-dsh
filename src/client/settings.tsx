@@ -1191,6 +1191,10 @@ export function ConvFusionProjectSettings({
                       ? t('settings.library.categoryHint', { count: category.skills.length })
                       : t('settings.library.emptyCategory')}
                   </div>
+                  {/* C00 全局能力：作用域是整项研究（跨阶段前置），并提醒 DSH 级全局设置写在哪 */}
+                  {category?.code === 'C00' ? (
+                    <div style={{ ...S.hint, marginTop: 4 }}>{t('settings.library.globalHint')}</div>
+                  ) : null}
                 </div>
                 <div style={S.field}>
                   <div style={S.label}>{t('settings.library.skill')}</div>

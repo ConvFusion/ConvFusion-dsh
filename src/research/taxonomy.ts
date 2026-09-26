@@ -48,6 +48,16 @@ export interface SkillCategory {
 /** 系统基础分类（v2-Stage2 §6 的 taxonomy；叶子与系统技能 1:1，导航与库一致）。 */
 const SYSTEM_TAXONOMY: ReadonlyArray<{ group: string; name: string; leaves: ReadonlyArray<[string, string]> }> = [
   {
+    /*
+     * C00 全局能力：不专属任何研究阶段，作用域是**整项研究**（跨阶段的前置），
+     * 所以置首而不是置末（对比 C09 工作评阅：它作用于已有资产，故置末）。
+     * 目前只有「研究过程定义」：它规定这套研究怎么推进，也决定进展面板的阶段。
+     */
+    group: 'global-capabilities',
+    name: 'Global Capabilities',
+    leaves: [['research-process', 'Research Process']],
+  },
+  {
     group: 'research-understanding',
     name: 'Research Understanding',
     leaves: [
@@ -85,7 +95,6 @@ const SYSTEM_TAXONOMY: ReadonlyArray<{ group: string; name: string; leaves: Read
     group: 'research-planning',
     name: 'Research Planning',
     leaves: [
-      ['research-process', 'Research Process'],
       ['research-strategy-portfolio', 'Research Strategy Portfolio'],
       ['research-method-design', 'Research Method Design'],
       ['experiment-pipeline-design', 'Experiment Pipeline Design'],

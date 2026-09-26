@@ -47,10 +47,16 @@ export interface CategoryCode {
 /**
  * 类别编号表（**顺序即研究进展**）。
  *
+ * `C00 全局能力` 是**前置的全局类别**：它不专属任何研究阶段，作用域是整项研究
+ * （当前只有「研究过程定义」——它规定这套研究怎么推进，也决定进展面板的阶段）。
+ * 与 `C09 工作评阅`（作用于已有资产）一样是横切能力，区别是 C00 是**跨阶段的前置**，
+ * 所以置**首**而不是置末。
+ *
  * 与 `research-process.ts` 的 `DEFAULT_STAGES` 对齐：
- * problem → literature → innovation → planning → resource → decision → experiment → writing。
+ * topics → literature → innovation → planning → resource → decision → experiment → writing。
  */
 export const CATEGORY_CODES: readonly CategoryCode[] = [
+  { categoryId: 'global-capabilities', code: 'C00', order: 0, label: '全局能力', labelEn: 'Global Capabilities' },
   { categoryId: 'research-understanding', code: 'C01', order: 1, label: '理解输入', labelEn: 'Research Understanding' },
   { categoryId: 'literature', code: 'C02', order: 2, label: '文献调研', labelEn: 'Literature' },
   { categoryId: 'innovation', code: 'C03', order: 3, label: '创新假设', labelEn: 'Innovation' },
@@ -75,10 +81,11 @@ export interface SkillCodeEntry {
  * 技能编号表：`skillId` → `{ code, label }`。
  *
  * ⚠️ 类别内顺序是**研究判断**，不要按字母序重排：
+ *   - C00：只有一个「研究过程定义」（全局能力，无类别内顺序）
  *   - C01：先理解输入 → 判断意图 → 提出话题 → 摸清自己的领域/基础 → 引导方向
  *   - C02：先检索 → 再筛选 → 取全文 → 做综述 → 形成 landscape
  *   - C03：先生成研究主题 → 找缺口 → 评新颖性 → 立假设 → 定贡献
- *   - C04：先定过程 → 组策略 → 展开方法 → 排流水线 → 评计划/研究风险
+ *   - C04：先组策略 → 展开方法 → 排流水线 → 评计划/研究风险
  *   - C05：先估资源需求 → 选基础设施 → 定可行性与资源规划
  *   - C06：先排序主题 → 收敛 → 选择 → go/no-go
  *   - C07：先设计 → **立即仿真** → 选数据集 → 定基线 → 定评测 → 消融 → 复现规范 → 结果/对比分析 → 证据评估
@@ -86,6 +93,9 @@ export interface SkillCodeEntry {
  *   - C09：评阅场合从早到晚
  */
 export const SKILL_CODES: Readonly<Record<string, SkillCodeEntry>> = {
+  // ── C00 全局能力（跨阶段前置：规定这套研究怎么推进）──
+  'research-process': { code: 'C00P01', label: '研究过程定义' },
+
   // ── C01 理解输入 ──
   'input-understanding': { code: 'C01P01', label: '输入理解' },
   'research-intent-assessment': { code: 'C01P02', label: '研究意图判断' },
@@ -109,12 +119,11 @@ export const SKILL_CODES: Readonly<Record<string, SkillCodeEntry>> = {
   'contribution-design': { code: 'C03P05', label: '贡献设计' },
 
   // ── C04 研究计划 ──
-  'research-process': { code: 'C04P01', label: '研究过程定义' },
-  'research-strategy-portfolio': { code: 'C04P02', label: '研究策略组合' },
-  'research-method-design': { code: 'C04P03', label: '研究方法设计' },
-  'experiment-pipeline-design': { code: 'C04P04', label: '实验流水线设计' },
-  'plan-risk-assessment': { code: 'C04P05', label: '计划风险评估' },
-  'research-risk-assessment': { code: 'C04P06', label: '研究风险评估' },
+  'research-strategy-portfolio': { code: 'C04P01', label: '研究策略组合' },
+  'research-method-design': { code: 'C04P02', label: '研究方法设计' },
+  'experiment-pipeline-design': { code: 'C04P03', label: '实验流水线设计' },
+  'plan-risk-assessment': { code: 'C04P04', label: '计划风险评估' },
+  'research-risk-assessment': { code: 'C04P05', label: '研究风险评估' },
 
   // ── C05 资源估计 ──
   'resource-requirement-estimation': { code: 'C05P01', label: '资源需求估算' },

@@ -47,6 +47,7 @@ export declare const dictionaries: {
         'settings.library.customizedSuffix': string;
         'settings.library.categoryHint': string;
         'settings.library.emptyCategory': string;
+        'settings.library.globalHint': string;
         'settings.library.sectionCount': string;
         'settings.library.sectionHint': string;
         'settings.library.sectionCustomizedSuffix': string;
@@ -452,6 +453,7 @@ export declare const dictionaries: {
         'section.Reasoning Guidance': string;
         'section.Evidence Requirements': string;
         'section.Expected Output': string;
+        'taxonomy.category.global-capabilities': string;
         'taxonomy.category.research-understanding': string;
         'taxonomy.category.literature': string;
         'taxonomy.category.innovation': string;
@@ -560,6 +562,7 @@ export declare const dictionaries: {
         readonly 'settings.library.customizedSuffix': " · {count} customized";
         readonly 'settings.library.categoryHint': "{count} capabilities · Categories follow the research process";
         readonly 'settings.library.emptyCategory': "No customizable capabilities in this category";
+        readonly 'settings.library.globalHint': "Global capabilities apply to the whole project (a cross-stage prerequisite); currently “Research Process”, which defines how this research is run and drives the progress stages. Further DSH-wide settings belong in AGENTS.local.md; customizations made here are saved like any other category and injected into every turn.";
         readonly 'settings.library.sectionCount': "{count} sections";
         readonly 'settings.library.sectionHint': "{count} customizable sections";
         readonly 'settings.library.sectionCustomizedSuffix': " · Customized";
@@ -965,6 +968,7 @@ export declare const dictionaries: {
         readonly 'section.Reasoning Guidance': "Reasoning Guidance";
         readonly 'section.Evidence Requirements': "Evidence Requirements";
         readonly 'section.Expected Output': "Expected Output";
+        readonly 'taxonomy.category.global-capabilities': "Global Capabilities";
         readonly 'taxonomy.category.research-understanding': "Research Understanding";
         readonly 'taxonomy.category.literature': "Literature";
         readonly 'taxonomy.category.innovation': "Innovation";

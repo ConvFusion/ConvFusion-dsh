@@ -38,8 +38,9 @@ import { isResearchWorkspace, loadPaper, loadProject } from './workspace.js'
 import { researchTargetsForSession, type ServiceLookupLike } from './session-workspace.js'
 import { recommendSkills, skillSummaries } from './library.js'
 import type { SkillSummary } from './library.js'
-import { assessResearchProcess } from './research-process.js'
+import { assessResearchProcess, PROCESS_SKILL_ID } from './research-process.js'
 import type { ProcessAssessment } from './research-process.js'
+import { BASE_SECTION_HEADER, USER_SECTION_HEADER } from './skill-customization.js'
 import { buildSignalContext } from './stage-signals.js'
 import { assessPrerequisites, renderUnmetPrerequisites } from './prerequisites.js'
 import { buildResearchIndex, loadResearchState, openQuestions } from './research-state.js'
@@ -121,6 +122,41 @@ export const RESEARCH_GUIDE_TEXT = [
   '  conversation language; the user reads them, so do not make them a wall of English.',
 ].join('\n')
 
+/**
+ * 取出研究者对 **C00 全局能力「研究过程定义」** 的自定义流程文本。
+ *
+ * ## 为什么必须单独取出来注入
+ *
+ * 这段文字是研究者自己规定的「这项研究怎么推进」（草稿导向、仿真先行、回退到补检索……）。
+ * 它本来只活在能力正文里，而能力正文要**按需加载**才被读到 —— 不注入的话，模型在
+ * 大部分回合里根本看不到它，于是只能靠用户每轮提醒才会照着推进。
+ *
+ * ## 为什么只取「用户写的那部分」
+ *
+ * 系统默认正文刻意只描述阶段、不规定顺序（v2 的 `Category ≠ Workflow`）。
+ * 注入用户覆盖段：写了自定义流程的人，规则**每轮生效**；没写的人，行为完全不变。
+ *
+ * 用户块由 `composeSkillContent` 拼在正文之前，形如 `## Research Method\n\n<正文>`；
+ * 这里优先只取 `Research Method` 那一段，避免把用户改的其它章节也塞进系统提示。
+ */
+export function extractProcessGuidance(composed: string | undefined): string | undefined {
+  if (!composed) return undefined
+  const userAt = composed.indexOf(USER_SECTION_HEADER)
+  if (userAt < 0) return undefined
+  const baseAt = composed.indexOf(BASE_SECTION_HEADER)
+  const block = composed.slice(userAt + USER_SECTION_HEADER.length, baseAt < 0 ? undefined : baseAt).trim()
+  if (!block) return undefined
+
+  // `composeSkillContent` 给每个被覆盖的章节都加了 `## <章节名>` 标题，
+  // 所以"流程"必然在 `## Research Method` 之下；只改了别的章节 → 不注入（不是流程）。
+  const heading = /^##\s+Research Method\s*$/m.exec(block)
+  if (!heading) return undefined
+  const after = block.slice(heading.index + heading[0].length)
+  const next = /^##\s+\S/m.exec(after)
+  const picked = (next ? after.slice(0, next.index) : after).trim()
+  return picked || undefined
+}
+
 /** 组装 Research Context 所需的运行时输入。 */
 export interface ResearchContextSource {
   /** 当前**研究根目录**（ConvFusion 数据文件所在目录；绝对路径）。 */
@@ -186,6 +222,10 @@ export function collectResearchContext(source: ResearchContextSource): ResearchC
     plans: listPlans(ws),
     skills: skillSummaries(ws),
     process: assessResearchProcess(ws, { ...(source.skillContent ? { skillContent: source.skillContent } : {}) }),
+    ...(() => {
+      const guidance = extractProcessGuidance(source.skillContent?.(PROCESS_SKILL_ID))
+      return guidance ? { processGuidance: guidance } : {}
+    })(),
     suggestedSkills,
     prereqWarnings,
     state: loadResearchState(ws),
@@ -495,9 +535,23 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
     if (landed.length > 0) lines.push(`Landed: ${landed.join(' → ')}`)
     if (pending.length > 0) lines.push(`Not yet: ${pending.join(' · ')}`)
     lines.push('')
+    if (ctx.processGuidance) {
+      // 研究者自定义的全局流程（C00 全局能力）：注入并声明优先。
+      // 不注入的话它只在"按需加载技能"时可见，模型看不到，就得靠用户每轮提醒才推进。
+      lines.push("## Research process (this project's own flow)")
+      lines.push('')
+      lines.push(ctx.processGuidance)
+      lines.push('')
+      lines.push(
+        'This flow is defined by the researcher for this project — follow it when choosing the next ' +
+          'step; where it is more specific, it takes precedence.',
+      )
+      lines.push('')
+    }
     lines.push(
-      'This is a description of the research assets, not a procedure to follow: stages are not a ' +
-        'pipeline, and you may work on any of them in any order the research actually needs.',
+      'The stage list above is a description of the research assets, not a procedure to follow: ' +
+        'stages do not gate anything, and you may work on any of them in any order the research ' +
+        'actually needs.',
     )
     lines.push('')
   }

@@ -39,13 +39,13 @@
  * 因为用户定制在合成时**排在原文之前**，所以"取第一个"天然让**用户的定义优先**。
  */
 
-export const CATEGORY = 'research-planning'
+export const CATEGORY = 'global-capabilities'
 
 export const SKILLS = [
   {
     id: 'research-process',
-    // 研究计划（C04）的元能力：它定义"进展如何判定"，其余能力据此被推荐
-    category: 'research-planning/research-process',
+    // C00 全局能力：跨阶段的前置能力 —— 它规定"这套研究怎么推进"，也定义"进展如何判定"
+    category: 'global-capabilities/research-process',
     name: 'Research Process',
     origin: 'v2/native-process',
     purpose:
