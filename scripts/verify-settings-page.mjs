@@ -127,9 +127,11 @@ console.log('\n[1] 状态组装：类别 → 研究方法 → 可定制章节')
   // 回归：曾按 `section.localeCompare` 排 → 每个能力的首个章节恒为 `Evidence Requirements`，
   // 设置页 ③ 的默认项对几乎所有能力都一样，切 ② 时看起来"③ 没反应"。
   const allSkills = s.categories.flatMap((c) => c.skills)
+  // C00 全局能力只提供「研究方法」一章（见下），所以"首章是 Purpose"只对普通类别断言
+  const regularSkills = s.categories.filter((c) => c.code !== 'C00').flatMap((c) => c.skills)
   assert(
-    allSkills.every((k) => k.sections[0]?.section === 'Purpose'),
-    '每个能力的首个可定制章节都是 Purpose（规范顺序，不是字母序）',
+    regularSkills.every((k) => k.sections[0]?.section === 'Purpose'),
+    '每个（普通类别）能力的首个可定制章节都是 Purpose（规范顺序，不是字母序）',
   )
   assert(
     allSkills.every((k) =>
@@ -146,6 +148,21 @@ console.log('\n[1] 状态组装：类别 → 研究方法 → 可定制章节')
     prereqSkill?.sections.findIndex((x) => x.section === 'Prerequisites'),
     2,
     'Prerequisites 落在规范位置（第 3 项）',
+  )
+
+  // C00 全局能力：③ 只提供**真正全局生效**的章节（Research Method），其余章节只是技能正文，
+  // 按需加载才读到 —— 列成"全局设置"会误导用户以为改了就对整项研究生效。
+  const globalCat = s.categories.find((c) => c.code === 'C00')
+  assert(globalCat !== undefined, '设置页含 C00 全局能力类别')
+  assertEq(
+    globalCat?.skills.flatMap((k) => k.sections.map((x) => x.section)),
+    ['Research Method'],
+    'C00 的 ③ 只有「研究方法」一章（全局生效的那一章）',
+  )
+  assertEq(
+    globalCat?.skills.map((k) => k.skillId),
+    ['research-process'],
+    'C00 当前只含「研究过程定义」',
   )
 
   // 每个章节都带系统原文（用户必须看得见自己在覆盖什么）

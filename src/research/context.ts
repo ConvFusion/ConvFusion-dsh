@@ -154,7 +154,21 @@ export function extractProcessGuidance(composed: string | undefined): string | u
   const after = block.slice(heading.index + heading[0].length)
   const next = /^##\s+\S/m.exec(after)
   const picked = (next ? after.slice(0, next.index) : after).trim()
-  return picked || undefined
+
+  // ⚠️ 该章同时承载**机器可读的阶段定义块**（```text 里含 `stage:` 行）——技能正文明确
+  // 允许用户在那里改自己的研究过程。这一段**不进提示**：它已经由上面的阶段列表
+  // （Current / Landed / Not yet）渲染过，把原文再注入一遍只是重复。
+  const withoutStages = picked.replace(/```[^\n]*\n[\s\S]*?```/g, (fenced) =>
+    /^[ \t]*stage:/m.test(fenced) ? '' : fenced,
+  )
+  // 删掉 stage 块后只剩标签的残行（如"我的过程："）不是指导
+  const cleaned = withoutStages
+    .split(/\r?\n/)
+    .filter((line) => !/^[^：:]{0,40}[：:]$/.test(line.trim()))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return cleaned || undefined
 }
 
 /** 组装 Research Context 所需的运行时输入。 */

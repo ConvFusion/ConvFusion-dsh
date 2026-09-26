@@ -42,7 +42,6 @@ export declare const zh: {
     'settings.library.customizedSuffix': string;
     'settings.library.categoryHint': string;
     'settings.library.emptyCategory': string;
-    'settings.library.globalHint': string;
     'settings.library.sectionCount': string;
     'settings.library.sectionHint': string;
     'settings.library.sectionCustomizedSuffix': string;

@@ -42,8 +42,6 @@ export const en = {
   'settings.library.customizedSuffix': ' · {count} customized',
   'settings.library.categoryHint': '{count} capabilities · Categories follow the research process',
   'settings.library.emptyCategory': 'No customizable capabilities in this category',
-  'settings.library.globalHint':
-    'Global capabilities apply to the whole project (a cross-stage prerequisite); currently “Research Process”, which defines how this research is run and drives the progress stages. Further DSH-wide settings belong in AGENTS.local.md; customizations made here are saved like any other category and injected into every turn.',
   'settings.library.sectionCount': '{count} sections',
   'settings.library.sectionHint': '{count} customizable sections',
   'settings.library.sectionCustomizedSuffix': ' · Customized',

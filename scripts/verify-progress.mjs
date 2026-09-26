@@ -729,6 +729,27 @@ console.log('\n[11] C00 全局能力：研究者自定义流程被注入')
     '只改了别的章节 → 不当作流程注入',
   )
 
+  // ⚠️ 「研究方法」这一章**同时承载机器可读的阶段块**（技能正文允许用户在那里改研究过程）：
+  // 那一段必须被剔掉 —— 阶段定义已由上面的阶段列表渲染，原文再注入只是重复。
+  const stageBlock = ['```text', 'stage: data | 数据审计 | research-understanding | topic-proposed | 报告', '```'].join('\n')
+  const withStages = CUST.createMemoryCustomizationStore()
+  withStages.set(PROC.PROCESS_SKILL_ID, 'Research Method', `我的过程：\n\n${stageBlock}\n\n先做数据审计，再建模。`)
+  const effStages = LIB.effectiveSkillContentById(PROC.PROCESS_SKILL_ID, withStages)
+  const guidance = CTX.extractProcessGuidance(effStages)
+  assertEq(guidance, '先做数据审计，再建模。', '注入的流程里剔掉了 stage 块与只剩标签的残行')
+  assert(
+    PROC.parseStages(effStages)?.some((s) => s.id === 'data'),
+    '阶段块本身仍按用户定义生效（注入剔除不影响过程解析）',
+  )
+
+  const onlyStages = CUST.createMemoryCustomizationStore()
+  onlyStages.set(PROC.PROCESS_SKILL_ID, 'Research Method', stageBlock)
+  assertEq(
+    CTX.extractProcessGuidance(LIB.effectiveSkillContentById(PROC.PROCESS_SKILL_ID, onlyStages)),
+    undefined,
+    '只写了阶段块（相当于只定制过程定义）→ 不注入流程',
+  )
+
   // 端到端：注入后上下文出现「本项目自己的流程」，且原「阶段不是流水线」的边界仍在
   const ws = mkdtempSync(join(tmpdir(), 'cf-c00-'))
   // ⚠️ 必须是**研究工作区**（有 project.md）：非研究工作区整体不注入任何上下文

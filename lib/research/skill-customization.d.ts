@@ -74,6 +74,19 @@ export interface CustomizationPoint {
  */
 export declare const CUSTOMIZABLE_SECTIONS: readonly string[];
 /**
+ * `C00 全局能力` 类别里**真正全局生效**的可定制章节。
+ *
+ * 为什么需要它：全局能力的其余章节（Purpose / When to Use / …）只是技能正文的一部分，
+ * 要**按需加载该技能**时才被读到 —— 它们不是"全局设置"。在【全局能力】下把它们列出来，
+ * 用户会以为改了就对整项研究生效（实际不会），所以这里只列真正每轮注入的那一章：
+ * `Research Method`（既承载研究流程，也承载进展面板的机器可读 `stage:` 块）。
+ *
+ * 注：用户仍可直接编辑定制 JSON 覆盖其它章节（合成逻辑不做白名单），
+ * 只是设置界面**不把它们当作全局设置**提供。
+ */
+export declare const GLOBAL_CATEGORY_ID = "global-capabilities";
+export declare const GLOBAL_CUSTOMIZABLE_SECTIONS: readonly string[];
+/**
  * 章节的**规范序号**（= 它在 `CUSTOMIZABLE_SECTIONS` 里的下标）。
  *
  * 用途：设置页 ③「可定制章节」的**下拉顺序与默认项**都取自这里 ——
