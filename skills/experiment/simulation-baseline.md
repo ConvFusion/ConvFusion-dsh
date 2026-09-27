@@ -33,6 +33,7 @@ Each line is a precondition judged by an artifact signal — this skill is only 
 
 ```text
 requires: method-plan | 仿真为方法设计服务（要先有设计好的方法）
+requires: experiment-budget | 仿真/评测 run 一旦消耗外部资源（API、GPU、人工），也受执行闸约束（见 C04P03；纯本地结构仿真 <5min 免）
 ```
 
 ## Research Method

@@ -144,6 +144,7 @@ export const SKILL_CODES: Readonly<Record<string, SkillCodeEntry>> = {
   'evaluation-protocol': { code: 'C07P05', label: '评测协议' },
   'ablation-design': { code: 'C07P06', label: '消融设计' },
   'reproducible-implementation-spec': { code: 'C07P07', label: '可复现实现规范' },
+  'method-implementation-spec': { code: 'C07P11', label: '方法实现规格' },
   'result-analysis': { code: 'C07P08', label: '结果分析' },
   'comparative-analysis': { code: 'C07P09', label: '对比分析' },
   'evidence-assessment': { code: 'C07P10', label: '证据评估' },

@@ -16,7 +16,7 @@
  *
  * 用法：node scripts/verify-prerequisites.mjs .
  */
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -178,6 +178,46 @@ console.log('\n[7] 定制层可覆盖 Prerequisites（用户块优先 → 发布
       PRE.renderUnmetPrerequisites(st).includes('fulltext-analyzed'),
       '未满足项含定制新增的 fulltext-analyzed',
     )
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
+}
+
+console.log('\n[8] 执行闸信号 `experiment-budget`（预算存在 + 不早于最近实验产物）')
+{
+  const ws = mkdtempSync(join(tmpdir(), 'cf-budget-'))
+  try {
+    mkdirSync(join(ws, 'plans'), { recursive: true })
+    mkdirSync(join(ws, 'experiments', 'r', 'results'), { recursive: true })
+    const budget = join(ws, 'plans', 'run-budget.md')
+    // ⚠️ 产物放在 `results/` **目录**下、文件名本身不含 result —— 判定必须看相对路径，
+    // 只看文件名会漏掉（曾使过期判定形同虚设）。
+    const artifact = join(ws, 'experiments', 'r', 'results', 'main_analysis.json')
+    const now = Date.now() / 1000
+    const budgetOk = () => SIG.judgeSignal(SIG.buildSignalContext(ws), 'experiment-budget').satisfied
+
+    writeFileSync(budget, '# 预算')
+    writeFileSync(artifact, '{}')
+    utimesSync(budget, now - 3600, now - 3600)
+    utimesSync(artifact, now, now)
+    assert(budgetOk() === false, '过期：预算早于 `results/` 下的产物 → 不满足')
+
+    utimesSync(budget, now, now)
+    utimesSync(artifact, now - 60, now - 60)
+    assert(budgetOk() === true, '有效：预算不早于最近实验产物 → 满足')
+
+    // 模板不是授权：更“新”的模板文件不得把预算顶掉
+    const tpl = join(ws, 'plans', 'experiment-budget-template.md')
+    writeFileSync(tpl, '# 模板')
+    utimesSync(tpl, now, now)
+    assert(budgetOk() === true, '模板不算授权（存在更新的 template 也不改变判定）')
+
+    writeFileSync(budget, '# 预算')
+    utimesSync(budget, now - 9999, now - 9999)
+    assert(budgetOk() === false, '预算过期时，即使模板很新也仍不满足')
+
+    rmSync(budget)
+    assert(budgetOk() === false, '无预算（只剩模板）→ 不满足')
   } finally {
     rmSync(ws, { recursive: true, force: true })
   }

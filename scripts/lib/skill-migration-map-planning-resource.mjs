@@ -137,6 +137,7 @@ export const SKILLS = [
     ],
     prerequisites: [
       "method-plan | 流水线是把已定的方法分解为可执行步骤",
+      "experiment-budget | 流水线要真正执行时，必须先有经用户确认的执行前预算（plans/<run>-budget.md）",
     ],
     sources: [
       { file: 'modules/planning/prompts/route_expansion.py' },

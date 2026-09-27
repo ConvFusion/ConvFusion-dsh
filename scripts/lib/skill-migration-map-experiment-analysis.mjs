@@ -100,6 +100,7 @@ export const SKILLS = [
     ],
     prerequisites: [
       "method-plan | 仿真为方法设计服务（要先有设计好的方法）",
+      "experiment-budget | 仿真/评测 run 一旦消耗外部资源（API、GPU、人工），也受执行闸约束（见 C04P03；纯本地结构仿真 <5min 免）",
     ],
     sources: [
       { file: 'modules/experiment/simulation/prompts/experiment_simulation_prompt.py' },
@@ -123,10 +124,11 @@ export const SKILLS = [
     method: [
       '1. **Derive dataset requirements from the claim, not from habit.** List the constructs that must be present (labels, modalities, domains, languages), the required scale, and any distribution the claim depends on. A dataset missing a required construct cannot support the claim no matter how standard it is.',
       '2. **Survey candidates and record provenance.** For each candidate record source, version or commit, licence and terms, size, available splits, known biases, and the works that use it. Prefer version-pinned, publicly downloadable, well-documented sources so the pipeline can be rerun.',
-      '3. **Check comparability with the baselines.** Use the same data version, splits and preprocessing that produced the baseline numbers; where you deviate, state the deviation and why the comparison remains valid.',
-      '4. **Design the split and guard against leakage.** Fix ratios and a seed, split by the correct unit (subject, document, time) so near-duplicates cannot cross splits, and verify that no test material informed training or tuning.',
-      '5. **Specify preprocessing and statistics as requirements for the implementation.** The pipeline must be deterministic, must report per-split sample counts, class balance, missing-value and length distributions, and must write processed data in a documented format while retaining the raw source.',
-      '6. **State the fallback when data is unavailable.** If a source cannot be downloaded or licensed, either substitute a documented alternative or generate a clearly-labelled synthetic dataset for dry runs. Never let fabricated values be presented later as measurements.',
+      '3. **Prefer sources a program can fetch.** Rank candidates by fetchability before merit: a HuggingFace dataset id (or an equivalent pinned HTTP/DOI source) that the coding agent can download, preprocess and checksum unattended beats a richer corpus behind a manual application. The selection must therefore name the exact loading call — `load_dataset(<id>, revision=<rev>)` or its equivalent — plus the expected file layout, so the pipeline requirements handed downstream are generated *from the selection* rather than re-decided at coding time. A manual-only source is admissible only when the claim cannot be tested without it, and then the human access step is declared explicitly as a task with an owner, never left implicit.',
+      '4. **Check comparability with the baselines.** Use the same data version, splits and preprocessing that produced the baseline numbers; where you deviate, state the deviation and why the comparison remains valid.',
+      '5. **Design the split and guard against leakage.** Fix ratios and a seed, split by the correct unit (subject, document, time) so near-duplicates cannot cross splits, and verify that no test material informed training or tuning.',
+      '6. **Specify preprocessing and statistics as requirements for the implementation.** The pipeline must be deterministic, must report per-split sample counts, class balance, missing-value and length distributions, and must write processed data in a documented format while retaining the raw source.',
+      '7. **State the fallback when data is unavailable.** If a source cannot be downloaded or licensed, either substitute a documented alternative or generate a clearly-labelled synthetic dataset for dry runs. Never let fabricated values be presented later as measurements.',
     ],
     evidenceRequirements:
       'Dataset identity (source, version, licence, access date), per-split counts, and a hash or checksum of the processed artefacts. Any claim about data scale or distribution must point at a computed statistic, not an estimate. Simulated or synthetic data must be labelled at every downstream use.',
@@ -324,6 +326,9 @@ export const SKILLS = [
       '3. **Separate stable findings from single-run observations.** A difference seen once, or only at the best epoch, is not a finding. For every finding state the evidence it rests on and its spread across seeds and settings.',
       '4. **Explain mechanism, not only ordering.** For each finding give the result that makes it plausible — ablation row, error pattern, training curve — and mark any explanation that is inference rather than measurement.',
       '5. **Choose figures from the argument.** One figure per claim: main comparison, contribution ablation, behavioural evidence. Specify data source, chart type and message, and drop figures that decorate without carrying an argument. Figure values must be generated from run artefacts, never retyped.',
+      '7. **Turn every figure decision into an executable artefact.** For each figure the analysis owes the paper, emit a **chart specification** — data source file, series, encodings (x, y, colour, marker), ordering, axis limits, uncertainty representation, and the message the caption will assert — together with the **plotting code that realises it**. The code must read the results file directly instead of accepting hand-copied numbers, so that a rerun with new results regenerates the figure without editing the script. One script per figure or one script emitting all figures, with the mapping from figure to script recorded.',
+      '8. **Declare the plotting stack and its conventions.** Python with **matplotlib** is the declared tool unless a figure cannot be drawn with it (then state the exception and its dependency). Fix the conventions in the script rather than leaving them to defaults: a non-interactive backend (`matplotlib.use("Agg")`) so figures render without a display, vector output as **PDF** for the paper plus a **PNG** at a stated DPI for review, a fixed font size, `tight_layout` or explicit layout, and axis labels carrying units. Report the exact filenames the paper will include; a figure whose filename needs escaping (e.g. contains `_`) is renamed, not escaped at the call site.',
+      '9. **Run the plotting code and look at the output.** This is the one experiment stage that executes without a GPU, so it must actually execute: run the plotting script, confirm each figure file exists and is non-trivial in size, and verify it renders — a figure referenced in the manuscript but absent from the compiled output is a failure, not a formatting detail. Record, per reported number, the file and code path that produced it, and flag any figure still waiting on data as explicitly pending rather than leaving a placeholder that looks final.',
       '6. **State limitations and negative results.** Enumerate what the evidence does not cover — settings, scales, failure modes — including runs that did not work. An honest limitation section is part of the result, not an afterthought.',
     ],
     evidenceRequirements:
@@ -363,8 +368,11 @@ export const SKILLS = [
       '4. **Check the robustness of the ranking.** Repeat under secondary metrics, across seeds, and on the hardest and easiest subsets. A ranking that flips under reasonable variation is reported as a tie, not a win.',
       '5. **Quantify practical significance.** Relate the delta to the meaningful range of the metric, the spread of the baseline and the added compute. A statistically real but negligible gain is described as such.',
       '6. **Attribute every comparison to its source.** For reproduced baselines cite the run directory; for cited numbers state the paper, its setting and the direction of any mismatch. Never mix reproduced and cited values in one column without labelling.',
+      "7. **The comparison must place the paper's own method against the best available external alternative.** A results section that only compares the authors' own variants with each other is not a method comparison. The comparison table must contain (i) the proposed method, (ii) the strongest published alternative for the same task, and (iii) current practice as it is actually deployed — naive L1-style use, a default configuration, an off-the-shelf tool. When no external system can be run — a newly proposed benchmark nobody has reported on, a closed model, an unavailable artefact — say so in the text instead of leaving the gap silent, and substitute the strongest anchor that *can* be computed under the same metric: a re-implementation of a published method, current practice, or a rule-based/heuristic policy. Name the substitute and state what it does not cover.",
+      "8. **Mark the paper's own method in the table.** The proposed method's row (row-wise comparison) or column (column-wise comparison) is set in **bold** — conventionally the last row or last column — so a reader finds it without reading the caption, and the caption states the convention. Bold marks *identity*, never victory: do not bold whichever baseline happens to score best, and do not bold the best cells of other rows.",
     ],
     evidenceRequirements:
+      "The comparison must show the proposed method against an external alternative, not only against the authors' own variants; where no external published system can be run on the benchmark, the substitute anchor must be named together with what it cannot show. " +
       'The per-run values behind every aggregate, the test used with its assumptions, the number of comparisons corrected for, and the run or paper source of each row. Comparison tables must separate reproduced from cited numbers and state the comparability of every row.',
     expectedOutput: [
       'comparability-checked comparison table with uncertainty',
@@ -372,6 +380,7 @@ export const SKILLS = [
       'robustness checks across metrics, seeds and subsets',
       'practical-significance statement relative to cost and metric range',
       'explicit list of rows excluded from comparison and why',
+      "a comparison containing the proposed method, the strongest external alternative and current practice, with the proposed method's row or column set in bold",
     ],
     prerequisites: [
       "experiments | 对比分析基于实验产物",

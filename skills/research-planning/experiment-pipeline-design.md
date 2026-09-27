@@ -28,6 +28,7 @@ Each line is a precondition judged by an artifact signal — this skill is only 
 
 ```text
 requires: method-plan | 流水线是把已定的方法分解为可执行步骤
+requires: experiment-budget | 流水线要真正执行时，必须先有经用户确认的执行前预算（plans/<run>-budget.md）
 ```
 
 ## Research Method

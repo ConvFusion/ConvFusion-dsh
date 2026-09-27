@@ -37,6 +37,8 @@ requires: experiments | 对比分析基于实验产物
 4. **Check the robustness of the ranking.** Repeat under secondary metrics, across seeds, and on the hardest and easiest subsets. A ranking that flips under reasonable variation is reported as a tie, not a win.
 5. **Quantify practical significance.** Relate the delta to the meaningful range of the metric, the spread of the baseline and the added compute. A statistically real but negligible gain is described as such.
 6. **Attribute every comparison to its source.** For reproduced baselines cite the run directory; for cited numbers state the paper, its setting and the direction of any mismatch. Never mix reproduced and cited values in one column without labelling.
+7. **The comparison must place the paper's own method against the best available external alternative.** A results section that only compares the authors' own variants with each other is not a method comparison. The comparison table must contain (i) the proposed method, (ii) the strongest published alternative for the same task, and (iii) current practice as it is actually deployed — naive L1-style use, a default configuration, an off-the-shelf tool. When no external system can be run — a newly proposed benchmark nobody has reported on, a closed model, an unavailable artefact — say so in the text instead of leaving the gap silent, and substitute the strongest anchor that *can* be computed under the same metric: a re-implementation of a published method, current practice, or a rule-based/heuristic policy. Name the substitute and state what it does not cover.
+8. **Mark the paper's own method in the table.** The proposed method's row (row-wise comparison) or column (column-wise comparison) is set in **bold** — conventionally the last row or last column — so a reader finds it without reading the caption, and the caption states the convention. Bold marks *identity*, never victory: do not bold whichever baseline happens to score best, and do not bold the best cells of other rows.
 
 ## Reasoning Guidance
 
@@ -44,7 +46,7 @@ requires: experiments | 对比分析基于实验产物
 
 ## Evidence Requirements
 
-The per-run values behind every aggregate, the test used with its assumptions, the number of comparisons corrected for, and the run or paper source of each row. Comparison tables must separate reproduced from cited numbers and state the comparability of every row.
+The comparison must show the proposed method against an external alternative, not only against the authors' own variants; where no external published system can be run on the benchmark, the substitute anchor must be named together with what it cannot show. The per-run values behind every aggregate, the test used with its assumptions, the number of comparisons corrected for, and the run or paper source of each row. Comparison tables must separate reproduced from cited numbers and state the comparability of every row.
 
 ## Expected Output
 
@@ -55,6 +57,7 @@ Produce:
 - robustness checks across metrics, seeds and subsets
 - practical-significance statement relative to cost and metric range
 - explicit list of rows excluded from comparison and why
+- a comparison containing the proposed method, the strongest external alternative and current practice, with the proposed method's row or column set in bold
 
 ## Source Prompts (verbatim from ConvFusion)
 

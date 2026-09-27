@@ -30,7 +30,7 @@ import { loadProjectFile } from './project.js';
  * ⚠️ 固定词表是刻意的：用户能改**过程 / 依赖图**，但改不了**判定逻辑**。
  * 允许任意表达式会让一个笔误把"当前阶段"永久判错，而且无法校验。
  */
-export declare const STAGE_SIGNALS: readonly ["topic-proposed", "problem-defined", "literature-evidence", "claims", "method-plan", "experiments", "settled-evidence", "decisions", "manuscript", "resource-estimate", "simulation-result", "fulltext-analyzed"];
+export declare const STAGE_SIGNALS: readonly ["topic-proposed", "problem-defined", "literature-evidence", "claims", "method-plan", "experiments", "settled-evidence", "decisions", "manuscript", "resource-estimate", "simulation-result", "fulltext-analyzed", "experiment-budget"];
 export type StageSignal = (typeof STAGE_SIGNALS)[number];
 /** 信号判定的运行时上下文（一次性读盘，供阶段评估与前置评估共用）。 */
 export interface SignalContext {
@@ -47,6 +47,13 @@ export interface SignalContext {
     topicCount: number;
     /** `research/literature/fulltext/` 下的全文文件数（pdf/html/txt，不含 manifest）。 */
     fulltextCount: number;
+    /** 最新的执行前预算计划（`plans/*budget*.md`），无则 null。 */
+    budgetPlan: {
+        path: string;
+        mtimeMs: number;
+    } | null;
+    /** `experiments/**` 下最新的缓存/结果文件时间戳；0 = 还没有跑过。 */
+    latestRunArtifactMs: number;
 }
 /** 读盘构建信号判定上下文（每次评估都重新求值以确保动态性）。 */
 export declare function buildSignalContext(workspace: string): SignalContext;

@@ -21,8 +21,8 @@
  * 判定；第一步的落地物是 `research/topics.md` 里的研究话题。
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { join, relative, sep } from 'node:path'
 import { listClaims, listDecisions } from './claims.js'
 import { listEvidence } from './evidence.js'
 import { listPlanDocuments } from './plans.js'
@@ -51,6 +51,7 @@ export const STAGE_SIGNALS = [
   'resource-estimate',
   'simulation-result',
   'fulltext-analyzed',
+  'experiment-budget',
 ] as const
 
 export type StageSignal = (typeof STAGE_SIGNALS)[number]
@@ -70,6 +71,10 @@ export interface SignalContext {
   topicCount: number
   /** `research/literature/fulltext/` 下的全文文件数（pdf/html/txt，不含 manifest）。 */
   fulltextCount: number
+  /** 最新的执行前预算计划（`plans/*budget*.md`），无则 null。 */
+  budgetPlan: { path: string; mtimeMs: number } | null
+  /** `experiments/**` 下最新的缓存/结果文件时间戳；0 = 还没有跑过。 */
+  latestRunArtifactMs: number
 }
 
 /** 读盘构建信号判定上下文（每次评估都重新求值以确保动态性）。 */
@@ -106,7 +111,46 @@ export function buildSignalContext(workspace: string): SignalContext {
     fulltextCount = 0
   }
 
-  return { project, evidence, claims, decisions, plans, literatureEvidence, settledEvidence, hasExperiments, hasManuscript, topicCount, fulltextCount }
+  // 执行前预算：`plans/*budget*.md` 是否存在，以及它相对最近一次实验产物是否**过期**。
+  // 过期 = 缓存/结果文件比预算文件新 —— 说明那次 run 之后又加了实验，旧预算不能授权新 run。
+  // 模板不算授权：文件名含 template 的一律排除（模板是空表，不构成"已报预算"）。
+  let budgetPlan: { path: string; mtimeMs: number } | null = null
+  let latestRunArtifactMs = 0
+  try {
+    const plansDir = join(workspace, 'plans')
+    for (const f of readdirSync(plansDir)) {
+      if (!/budget/i.test(f) || /template/i.test(f) || !/\.md$/i.test(f)) continue
+      const st = statSync(join(plansDir, f))
+      if (!budgetPlan || st.mtimeMs > budgetPlan.mtimeMs) budgetPlan = { path: `plans/${f}`, mtimeMs: st.mtimeMs }
+    }
+  } catch {
+    budgetPlan = null
+  }
+  try {
+    const expDir = join(workspace, 'experiments')
+    const stack = [expDir]
+    while (stack.length) {
+      const dir = stack.pop() as string
+      for (const f of readdirSync(dir)) {
+        const full = join(dir, f)
+        const st = statSync(full)
+        if (st.isDirectory()) {
+          stack.push(full)
+          continue
+        }
+        // 只把"跑出来的产物"当作 run 的痕迹：`results/`（或 `*cache*`）目录下的缓存与结果文件。
+        // ⚠️ 判定必须看**相对路径**：本项目产物是 `results/main_analysis.json`，
+        // 目录名才含 results；只看文件名会把它们全部漏掉（曾导致过期判定形同虚设）。
+        const rel = relative(workspace, full).split(sep).join('/')
+        if (!/\.(json|jsonl)$/i.test(f) || !/(cache|results?)/i.test(rel)) continue
+        if (st.mtimeMs > latestRunArtifactMs) latestRunArtifactMs = st.mtimeMs
+      }
+    }
+  } catch {
+    latestRunArtifactMs = 0
+  }
+
+  return { project, evidence, claims, decisions, plans, literatureEvidence, settledEvidence, hasExperiments, hasManuscript, topicCount, fulltextCount, budgetPlan, latestRunArtifactMs }
 }
 
 /**
@@ -195,6 +239,19 @@ export function judgeSignal(
             : downloaded
               ? `已下载 ${ctx.fulltextCount} 篇全文，但尚无文献证据（摘要/计划不算分析）`
               : '尚无全文（`research/literature/fulltext/`）',
+      }
+    }
+    case 'experiment-budget': {
+      if (!ctx.budgetPlan) {
+        return { satisfied: false, evidence: '尚无执行前预算（`plans/<run>-budget.md`）—— 未经用户确认不得发出真实调用' }
+      }
+      const fresh = ctx.budgetPlan.mtimeMs >= ctx.latestRunArtifactMs
+      const at = new Date(ctx.budgetPlan.mtimeMs).toISOString().slice(0, 16).replace('T', ' ')
+      return {
+        satisfied: fresh,
+        evidence: fresh
+          ? `${ctx.budgetPlan.path}（${at}）不早于最近实验产物，可用于授权本次执行`
+          : `${ctx.budgetPlan.path}（${at}）早于最近实验产物 —— 预算已过期，需重新报预算并取得确认`,
       }
     }
     default:
