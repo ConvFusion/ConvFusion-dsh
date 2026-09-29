@@ -34,6 +34,20 @@ const failures = []
 const assert = (c, l) => { if (c) { passed++; console.log(`  ✓ ${l}`) } else { failed++; failures.push(l); console.log(`  ✗ FAIL ${l}`) } }
 const assertEq = (a, b, l) => { const ok = JSON.stringify(a) === JSON.stringify(b); if (!ok) console.log(`    actual: ${JSON.stringify(a)}\n    expect: ${JSON.stringify(b)}`); assert(ok, l) }
 
+/**
+ * 挂上 profile 条目后再调用插件的 `apply`。
+ *
+ * DSH 0.2.0 起，设置写入的命名空间 = **profile 条目 id**，插件从
+ * `ctx.fiber.entry.options.id` 读它（真实宿主由 `cordis-plugin-loader` 设置）。
+ * 离线 harness 没有 Loader，**必须自己挂** —— 否则 `profileEntryId()` 拿到
+ * undefined，插件会**跳过整个设置装配**，测试就退化成"永远绿的空跑"。
+ * 这正是本次升级里 `settings.register` 被静默跳过的那类假绿灯。
+ */
+const withProfileEntry = (ctx, config) => {
+  ctx.fiber.entry = { options: { id: 'convfusion' } }
+  return PLUGIN.apply(ctx, config)
+}
+
 /* ════════════════════════════════════════════════════════════════════════
  * 真实 Cordis context + mock 服务
  * ════════════════════════════════════════════════════════════════════════ */
@@ -56,7 +70,7 @@ async function buildRoot({ provided, cwd } = {}) {
   const recorded = {
     sections: [], contexts: [], providers: [], tools: [],
     listeners: [], effects: [], commands: 0, commandNames: [], services: {},
-    settingsNamespaces: [], settingsBases: [], webRoutes: [], webRouteHandler: null,
+    settingsWrites: [], settingsPresents: [], webRoutes: [], webRouteHandler: null,
   }
 
   const services = provided ?? [...PLUGIN.inject, 'commands', 'settings', 'connection', 'webServer']
@@ -94,11 +108,15 @@ async function buildRoot({ provided, cwd } = {}) {
       // ⚠️ 插件用 `ctx.inject([...])` 按需挂载，所以缺这两个服务时插件**必须照常工作**，
       // 只是没有设置界面 —— [2] 会验证这一点。
       if (has('settings')) {
+        // DSH 0.2.0 的 `SettingsForms`：**没有** register / installSection。
+        // 设置文档 = profile 条目 config，写入走 update(entryId, patch)。
         c.provide('settings', {
-          register: (ns, schema, options) => {
-            recorded.settingsNamespaces.push(ns)
-            recorded.settingsBases.push(options?.base)
-            return { get: () => options?.base ?? {}, watch: () => () => {} }
+          update: async (ns, patch) => {
+            recorded.settingsWrites.push({ ns, patch })
+          },
+          configure: (presentation) => {
+            recorded.settingsPresents.push(presentation)
+            return () => {}
           },
         })
       }
@@ -171,7 +189,7 @@ console.log('\n[1] 声明齐全时插件正常装配')
   let threw = null
   let fiber = null
   try {
-    fiber = await root.plugin({ name: 'dsh-convfusion', apply: PLUGIN.apply, inject: PLUGIN.inject })
+    fiber = await root.plugin({ name: 'dsh-convfusion', apply: withProfileEntry, inject: PLUGIN.inject })
   } catch (e) {
     threw = e
   }
@@ -219,7 +237,7 @@ console.log('\n[1] 声明齐全时插件正常装配')
     assertEq(root.get('convfusion'), undefined, '卸载后 convfusion 服务被回收（provide 由 fiber 持有）')
     assertEq(root.get('convfusionResearch'), undefined, '卸载后 ResearchContextService 也被回收')
     // 回收干净才能重装 —— 否则重载会撞上 service 已注册
-    const fiber2 = await root.plugin({ name: 'dsh-convfusion-2', apply: PLUGIN.apply, inject: PLUGIN.inject })
+    const fiber2 = await root.plugin({ name: 'dsh-convfusion-2', apply: withProfileEntry, inject: PLUGIN.inject })
     assert(root.get('convfusion') !== undefined, '卸载后可重新装配（DHS 热重载路径）')
     await fiber2.dispose()
     assertEq(root.get('convfusion'), undefined, '第二次卸载同样干净')
@@ -237,7 +255,7 @@ console.log('\n[2] 任一核心依赖缺失 → 明确失败（不静默半装�
     const { root, settle } = await buildRoot({ provided })
     let err = null
     try {
-      root.plugin({ name: 'dsh-convfusion', apply: PLUGIN.apply, inject: PLUGIN.inject })
+      root.plugin({ name: 'dsh-convfusion', apply: withProfileEntry, inject: PLUGIN.inject })
       await settle()
       // 依赖不满足时 Cordis 会把插件挂起而非立即报错 —— 显式检查它没有被激活
       const active = root.get('convfusion') !== undefined
@@ -256,13 +274,17 @@ console.log('\n[2b] 设置面：settings 命名空间 + /dsh-convfusion 路由')
   const { root, recorded } = await buildRoot({ cwd: ws2 })
   let err = null
   try {
-    await root.plugin({ name: 'dsh-convfusion', apply: PLUGIN.apply, inject: PLUGIN.inject })
+    await root.plugin({ name: 'dsh-convfusion', apply: withProfileEntry, inject: PLUGIN.inject })
   } catch (e) {
     err = e
   }
   assert(err === null, '带 settings + connection 的 profile 装配不抛错')
-  assertEq(recorded.settingsNamespaces, ['convfusion'], '注册了 settings 命名空间 "convfusion"')
-  assert(recorded.settingsBases[0] && typeof recorded.settingsBases[0] === 'object', '命名空间带组合层 base')
+  // DSH 0.2.0：不再"注册 settings 命名空间"（`register` 已从宿主删除），改为
+  // (a) 从 `fiber.entry.options.id` 解析条目 id、(b) 登记自带设置页策略。
+  // `configure` 只在 entryId 解析成功**之后**才会被调用 —— 所以这条断言同时守住了
+  // "entryId 取不到 → 整个设置面被静默跳过"这个回归。
+  assertEq(recorded.settingsPresents, [{ auto: false }], '登记了自带设置页策略（auto: false）')
+  assertEq(recorded.settingsWrites.length, 0, '装配阶段不写配置（写入只发生在登录等显式动作）')
 
   assertEq(recorded.webRoutes, ['/dsh-convfusion'], '注册了 /dsh-convfusion 路由')
   assert(typeof recorded.webRouteHandler === 'function', '路由有可调用的处理器')
@@ -287,7 +309,7 @@ console.log('\n[2b] 设置面：settings 命名空间 + /dsh-convfusion 路由')
     const r = await buildRoot({ provided: only })
     let e2 = null
     try {
-      await r.root.plugin({ name: 'dsh-convfusion', apply: PLUGIN.apply, inject: PLUGIN.inject })
+      await r.root.plugin({ name: 'dsh-convfusion', apply: withProfileEntry, inject: PLUGIN.inject })
     } catch (e) {
       e2 = e
     }
@@ -373,7 +395,7 @@ console.log('\n[4] 装配安全性与 workspace 语义')
     const built = await buildRoot({ cwd: plainDir })
     ctx = built.root
     recorded = built.recorded
-    await ctx.plugin({ name: 'dsh-convfusion', apply: PLUGIN.apply, inject: PLUGIN.inject })
+    await ctx.plugin({ name: 'dsh-convfusion', apply: withProfileEntry, inject: PLUGIN.inject })
   } catch (e) {
     err = e
   } finally {
@@ -395,7 +417,7 @@ console.log('\n[4] 装配安全性与 workspace 语义')
   try {
     process.chdir(researchDir)
     const { root: r2, recorded: rec2, settle: settle2 } = await buildRoot()
-    r2.plugin({ name: 'dsh-convfusion', apply: PLUGIN.apply, inject: PLUGIN.inject })
+    r2.plugin({ name: 'dsh-convfusion', apply: withProfileEntry, inject: PLUGIN.inject })
     await settle2()
     const guide2 = rec2.sections[0]
     const text2 = typeof guide2.text === 'function' ? guide2.text({}) : guide2.text

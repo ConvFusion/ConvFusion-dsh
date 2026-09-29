@@ -39,6 +39,7 @@
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Context } from '@deepseek-ai/cordis'
+import { CONVFUSION_MESSAGE_SOURCE, CONVFUSION_PRODUCER } from './message-source.js'
 import {
   buildTurnReport,
   captureProgress,
@@ -50,8 +51,8 @@ import { DEFAULT_AUTO_CONTINUE, shouldAutoContinue, type AutoContinuePolicy } fr
 import { isResearchWorkspace, researchWorkspaceOf } from './workspace.js'
 import { resolveSessionWorkspace } from './session-workspace.js'
 
-/** 插件在会话里标识自己的名字。 */
-export const PROGRESS_PLUGIN = 'convfusion'
+/** 插件在会话里标识自己的名字（唯一出处见 `./message-source.ts`）。 */
+export const PROGRESS_PLUGIN = CONVFUSION_PRODUCER
 
 /** `agent/turn-stopping` 载荷的最小视图。 */
 interface TurnPayload {
@@ -216,7 +217,7 @@ export function mountProgressBridge(
                   '若发现存在多个势均力敌、必须由人取舍的方向，**停下来告诉用户**，不要替用户决定。',
               },
             ],
-            source: { kind: 'plugin', plugin: PROGRESS_PLUGIN },
+            source: { ...CONVFUSION_MESSAGE_SOURCE },
           }),
         )
       } else if (!gate.go && after.advance.clarity !== 'clear') {

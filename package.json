@@ -1,6 +1,6 @@
 {
   "name": "dsh-convfusion",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "description": "ConvFusion research operating system as a DeepSeek Harness plugin: research context injection, native skill provider, and runtime observation. Harness is the agent runtime.",
   "type": "module",
   "main": "lib/index.js",
@@ -31,18 +31,20 @@
     "verify:i18n": "node scripts/verify-i18n.mjs .",
     "verify:host-deps": "node scripts/verify-host-deps.mjs",
     "verify:settings": "node scripts/verify-settings-page.mjs .",
+    "verify:action-construction": "node scripts/verify-action-construction.mjs",
     "verify:server-login": "node scripts/verify-server-login.mjs .",
     "verify:server-login-live": "node scripts/verify-server-login-live.mjs .",
     "clean": "rm -rf lib"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-commands": "^0.1.5-rc.1",
-    "@deepseek-ai/dsh-client-locale": "^0.1.5-rc.1",
-    "@deepseek-ai/dsh-llm": "^0.1.5-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "^0.1.5-rc.1",
-    "@deepseek-ai/dsh-tools": "^0.1.5-rc.1",
-    "@deepseek-ai/dsh-util-values": "^0.1.5-rc.1",
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-client-locale": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-commands": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-util-values": "^0.2.0-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.4",
     "@types/node": "^22.10.0",
     "typescript": "^5.6.0",
     "@types/react": "^18.3.0",
@@ -69,6 +71,7 @@
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-tools": "*",
     "@deepseek-ai/dsh-util-values": "*",
+    "@deepseek-ai/schemastery": "*",
     "react": "^18.0.0"
   },
   "peerDependenciesMeta": {

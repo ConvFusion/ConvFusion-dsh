@@ -7,15 +7,16 @@
  * 这样设置文件绝不会因为定制内容增多而过大。
  *
  * ```text
- * ~/.dsh/settings.yaml
- *   convfusion:
- *     customizationFile: skill-customizations.json   ← 只有文件名
+ * profile 里 entry `id: convfusion` 的 config（DSH 0.2.0 起）
+ *   customizationFile: skill-customizations.json   ← 只有文件名
  *
- * ~/.dsh/convfusion/skill-customizations.json      ← 定制内容在这里
+ * $DSH_HOME/convfusion/skill-customizations.json    ← 定制内容在这里
  * ```
  *
- * 除文件名外只有 `customizationDir`（默认 `$DSH_HOME/convfusion`），
- * 设置面板的"本地研究方法"用它与 {@link resolveCustomizationPath} 展示真实落盘位置。
+ * ⚠️ **DSH 0.2.0 起不再有 `settings.yaml`**：设置文档就是当前 profile 里该插件
+ * 条目的 Cordis `config`（旧 `settings.yaml` 仅被宿主一次性导入后改名）。因此这里
+ * 不再有"注册 settings 命名空间"的动作，配置直接由 `apply(ctx, config)` 拿到；
+ * 要开放给设置页改写的字段必须标 `.volatile()`（见 {@link LiveConfig}）。
  *
  * ## 文献检索凭据（`openalexApiKey`）
  *
@@ -60,6 +61,7 @@
 
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
+import type { Volatile } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import {
   BUILTIN_SERVER_URL,
@@ -155,41 +157,85 @@ export interface Config {
   autoContinueMaxRounds: number
 }
 
-export const Config: Schema<Config> = Schema.object({
+/**
+ * `apply(ctx, config)` 运行期**实际拿到**的配置形状。
+ *
+ * ⚠️ DSH 0.2.0 起，标了 `.volatile()` 的字段解析后是**稳定引用** `Volatile<T>`
+ * （不是裸值）：宿主只**原地更新**它的值、**不重挂**插件 —— 见
+ * `cordis-plugin-loader` 的 `_commitVolatile()`（`volatileEntries(fiber.config)`
+ * → `updateVolatile(ref, source)` → 发 `loader/volatile-update`）。
+ *
+ * 由此得到一个很省事的好处：在 `apply` 里**保存这些引用**、每次 `.get()` 现取，
+ * 配置就**天然实时**，不再需要旧版的 `scope.watch()` 回调去刷新 `source`。
+ *
+ * 用 {@link unwrapLiveConfig} 把它还原成普通的 {@link Config}。
+ */
+export type LiveConfig = { [K in keyof Config]: Volatile<Config[K]> }
+
+// ⚠️ **不要给这里加 `: Schema<LiveConfig>` 注解**：schemastery 的
+// `Schema<S, T, Mode>` 第一泛型是**输入侧**（schema dict 本身），不是输出侧；
+// 硬写 `Schema<LiveConfig>` 会把 `Volatile<string>` 塞进输入位置而报 TS2322。
+// 因此让 TS 自行推断，输出形状就是 {@link LiveConfig}。
+export const Config = Schema.object({
   customizationFile: Schema.string()
     .default('skill-customizations.json')
+    .volatile()
     .description('用户定制 Skill 的文件名（内容存该文件，设置文件不会因此变大）。'),
   customizationDir: Schema.string()
     .default('')
+    .volatile()
     .description('定制文件所在目录；留空 = $DSH_HOME/convfusion。'),
   openalexApiKey: Schema.string()
     .role('secret')
     .default('')
+    .volatile()
     .description('OpenAlex API Key（免费申请：https://openalex.org/）。用于文献检索。'),
   serverUrl: Schema.string()
     .default('')
+    .volatile()
     .description(
       'ConvFusion.com 服务器地址；留空 = 跟随环境配置（开发 localhost:8000 / 生产 convfusion.apibrowser.com:4747）。',
     ),
   convfusionDevApiKey: Schema.string()
     .role('secret')
     .default('')
+    .volatile()
     .description('开发服务器（localhost）的 API Key（cf_live_…）。由【ConvFusion.com】页的登录流程写入。'),
   convfusionProdApiKey: Schema.string()
     .role('secret')
     .default('')
+    .volatile()
     .description('互联网（生产）服务器的 API Key（cf_live_…）。由【ConvFusion.com】页的登录流程写入。'),
   convfusionApiKey: Schema.string()
     .role('secret')
     .default('')
+    .volatile()
     .description('【已废弃】旧版单值 API Key；升级后会自动并入开发服务器槽，可留空。'),
   autoContinue: Schema.boolean()
     .default(true)
+    .volatile()
     .description('方向明确时自动继续推进；遇到需要取舍的抉择会停下来问你。'),
   autoContinueMaxRounds: Schema.number()
     .default(3)
+    .volatile()
     .description('单次会话内最多连续自动推进多少轮。'),
 })
+
+/**
+ * 把运行期配置里的 `Volatile<T>` 引用**就地取值**，还原成普通配置。
+ *
+ * 兼容两种输入：宿主解析后（volatile 字段是引用）与测试/精简环境直接传裸值。
+ * 非引用值原样返回 —— 因此不需要 `typeof value === 'string'` 之类的类型分支。
+ */
+export function unwrapLiveConfig(live: Partial<LiveConfig> | undefined): Partial<Config> {
+  if (live === undefined) return {}
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(live)) {
+    const maybe = value as Partial<Volatile<unknown>> | undefined
+    out[key] = typeof maybe?.get === 'function' ? maybe.get() : value
+  }
+  return out as Partial<Config>
+}
 
 /**
  * 解析定制文件的绝对路径。

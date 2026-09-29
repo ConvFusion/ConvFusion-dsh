@@ -55,7 +55,7 @@
  *
  * | 类 | 落盘位置 | 端点 |
  * |---|---|---|
- * | **配置**（文件名 / 目录） | settings 文档（客户端经 `settingsScope` 读写，不经本渠道） | — |
+ * | **配置**（文件名 / 目录） | profile 条目 `convfusion` 的 config（客户端经 `configForms` 读写，不经本渠道） | — |
  * | **定制内容**（章节覆盖文本） | `$DSH_HOME/convfusion/<file>.json` | `customization/*` |
  *
  * ## v2 与 v0.1.5 的结构差异（重建时最容易错的地方）
@@ -392,9 +392,10 @@ export interface SettingsRpcDeps {
      */
     resolveSessionWorkspace?: (sessionId: string) => string | undefined;
     /**
-     * 把配置补丁写回 **settings 用户层**（保存 API Key / 服务器地址）。
+     * 把配置补丁写回 **profile 条目 config**（保存 API Key / 服务器地址）。
      *
-     * 由插件入口接到 `settingsScope.update()`。缺省 = 设置存储不可用 —— 这时登录必须
+     * 由插件入口接到 `ctx.settings.update(entryId, patch)`（DSH 0.2.0 的
+     * `SettingsForms`）。缺省 = 设置存储不可用 —— 这时登录必须
      * **明确失败**（`storage-unavailable`），而不是"看着登录成功、重启后没了"。
      */
     setConfig?: (patch: Partial<Config>) => Promise<void>;

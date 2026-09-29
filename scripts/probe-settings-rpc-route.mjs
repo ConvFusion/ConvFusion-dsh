@@ -192,7 +192,12 @@ async function buildHost(opts = {}) {
         getContextOrder: () => 0,
       })
       c.provide('skills', { registerProvider: () => () => {} })
-      c.provide('settings', { register: () => ({ get: () => ({}), watch: () => () => {} }) })
+      // DSH 0.2.0 的 SettingsForms（没有 register）；并挂上 profile 条目 id，
+      // 否则插件会跳过设置装配（见 verify-plugin-load.mjs 的 withProfileEntry）。
+      c.provide('settings', {
+        update: async () => {},
+        configure: () => () => {},
+      })
     },
   })
 

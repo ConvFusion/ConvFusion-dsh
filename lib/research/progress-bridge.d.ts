@@ -39,7 +39,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { type TurnProgressReport } from './progress.js';
 import { type AutoContinuePolicy } from './advance.js';
-/** 插件在会话里标识自己的名字。 */
+/** 插件在会话里标识自己的名字（唯一出处见 `./message-source.ts`）。 */
 export declare const PROGRESS_PLUGIN = "convfusion";
 /** 记住某个会话最近一次的回合报告。 */
 export declare function rememberTurnReport(sessionId: string | undefined, report: TurnProgressReport): void;

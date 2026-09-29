@@ -47,6 +47,8 @@ import {
   resolveCustomizationPath,
   resolveServerUrl,
   type Config as ConfigShape,
+  type LiveConfig,
+  unwrapLiveConfig,
 } from './config.js'
 import {
   SETTINGS_ROUTE_PREFIX,
@@ -125,23 +127,44 @@ declare module '@deepseek-ai/cordis' {
  * 那会把可选能力变成硬依赖。这里是结构镜像，与 dsh-additive 同款做法。
  * ════════════════════════════════════════════════════════════════════════ */
 
-interface SettingsLike {
-  register: (
-    ns: string,
-    schema: unknown,
-    options: { base: unknown },
-  ) => {
-    get: () => unknown
-    watch: (cb: () => void) => () => void
-    /**
-     * 把补丁写进该命名空间的**用户层**并落盘。
-     *
-     * 【ConvFusion.com】登录成功后用它保存 `convfusionApiKey` / `serverUrl` ——
-     * 凭据只在本机设置文档与宿主内存之间流动，不经过浏览器。
-     * （镜像 DSH `SettingsScope.update`，不 import 它的类型，理由同文件头。）
-     */
-    update: (patch: object) => Promise<void>
-  }
+/**
+ * `ctx.settings` 的结构镜像（DSH 0.2.0 的 `SettingsForms`）。
+ *
+ * ⚠️ **0.2.0 把旧 API 整体移除**：`SettingsProvider` / `register(…)` /
+ * `installSection(…)` / `SettingsScope`（`get`/`watch`/`update`）在 0.2.0 中
+ * **一个都不存在**，换成 `SettingsForms`：设置文档 = **profile 条目自己的
+ * Cordis `config`**，写入走 `update(entryId, patch, expectedRevision?)`。
+ *
+ * 这里只镜像本插件真正用到的成员（不 import 宿主类型，理由同文件头）。
+ */
+interface SettingsFormsLike {
+  /**
+   * 把补丁合并进该条目（`ns` = **profile 条目 id**，本插件即 `convfusion`）的 config。
+   *
+   * 【ConvFusion.com】登录成功后用它保存 `convfusionApiKey` / `serverUrl` ——
+   * 凭据只在本机 profile 配置与宿主内存之间流动，不经过浏览器。
+   */
+  update: (ns: string, patch: object, expectedRevision?: number) => Promise<void>
+  /**
+   * 登记本插件的设置页策略。本插件**自带**设置页（客户端 `settings.section`），
+   * 所以要 `{ auto: false }` 关掉"按 schema 自动生成表单"，否则同一个插件会在
+   * 【设置】里出现两份界面。
+   */
+  configure?: (presentation: { auto?: boolean }, owner?: unknown) => () => void
+}
+
+/**
+ * 本插件在 profile 里的**条目 id**（设置写入的命名空间）。
+ *
+ * ⚠️ 走结构读取、**不** import `@deepseek-ai/cordis-plugin-loader`：`fiber.entry`
+ * 是那个包对 cordis `Fiber` 的模块增强，把它写进依赖会给插件加一个硬依赖
+ * （同 `WebServerLike` / `ConnectionLike` 的理由）。取不到就返回 `undefined` ——
+ * 宁可不启用写入，也不要把凭据写到一个**猜出来的**命名空间上。
+ */
+function profileEntryId(ctx: Context): string | undefined {
+  const fiber = ctx.fiber as unknown as { entry?: { options?: { id?: unknown } } } | undefined
+  const id = fiber?.entry?.options?.id
+  return typeof id === 'string' && id.length > 0 ? id : undefined
 }
 
 interface ConnectionLike {
@@ -189,14 +212,18 @@ interface WebServerLike {
   }) => () => void
 }
 
-export function apply(ctx: Context, rawConfig: Partial<ConfigShape> = {}): void {
+export function apply(ctx: Context, liveConfig: Partial<LiveConfig> = {}): void {
   // ── 配置：设置里只有「定制文件名」，内容存独立文件（设置文件不会变大）──
   //
-  // ⚠️ 配置必须**可被设置页改写**：用户在【设置】-【ConvFusion】-【本地研究方法】里改文件名后，
-  // 定制内容要立刻写到新文件。因此这里用 `source()` 这个**可替换的取值函数**：
-  // 装配时是入口配置；settings 命名空间一旦可用，就换成"设置文档 > 组合层"的解析结果。
-  const entryConfig = resolveConfig(rawConfig)
-  let source: () => ConfigShape = () => entryConfig
+  // ⚠️ **DSH 0.2.0 起配置模型变了**：设置文档 = 本插件 profile 条目
+  // （`cordis.patch.yml` 里的 `id: convfusion`）的 Cordis `config`，由宿主**直接传给
+  // `apply`**；标了 `.volatile()` 的字段是**稳定引用**，宿主只原地更新其值、**不重挂**
+  // 插件（`cordis-plugin-loader` 的 `_commitVolatile` → `updateVolatile`）。
+  //
+  // 于是 `source()` **每次都现取** → 天然实时：用户在设置页改文件名，下一次
+  // `currentConfig()` 就拿到新值（store 的路径本来就是延迟解析的）。旧版的
+  // `settings.register()` + `scope.watch()` 那套刷新机制在 0.2.0 已不存在。
+  const source: () => ConfigShape = () => resolveConfig(unwrapLiveConfig(liveConfig))
   const currentConfig = (): ConfigShape => source()
   /**
    * 把配置补丁写回 settings 用户层（【ConvFusion.com】登录后保存凭据用）。
@@ -388,27 +415,35 @@ export function apply(ctx: Context, rawConfig: Partial<ConfigShape> = {}): void 
 
   // ── 7. 设置面：命名空间 + 定制内容 RPC ─────────────────────────────────
   // 【设置】-【ConvFusion】由两半组成，缺一不可：
-  //   host  ：注册 settings 命名空间（保存文件名）+ 提供 /convfusion RPC（读写定制文件）
+  //   host  ：提供 /dsh-convfusion RPC（读写定制文件）+ 把凭据写回 profile 配置
   //   client：注册 `settings.section`（浏览器里那一页）
   // 两半都走**可选注入**：精简 profile（无 settings / 无 web）下插件照常工作，
   // 只是没有设置界面 —— 而不是让整个 profile 起不来。
+  //
+  // ⚠️ **0.2.0 起不再"注册 settings 命名空间"**：配置由 profile 条目直接承载
+  // （见 `apply` 开头对 `source()` 的说明）。这里只保留"写回"这一件事。
   ctx.inject(['settings'], (sctx) => {
     // `ctx.get()` 而不是 `sctx.settings`：可选服务的读取统一走"不触发 inject 检查"的
     // 通道，避免"注释说可选、代码却硬访问"这种自相矛盾（客户端踩过一次）。
-    const settings = sctx.get('settings') as SettingsLike | undefined
-    if (!settings || typeof settings.register !== 'function') return
-    const scope = settings.register('convfusion', Config, { base: entryConfig })
-    source = () => resolveConfig(scope.get() as Partial<ConfigShape>)
-    // 【ConvFusion.com】登录成功后要把 `convfusionApiKey` / `serverUrl` 落到用户层
-    // （凭据只在宿主内存与 settings 用户层之间流动，绝不经过浏览器）
-    persistConfig = async (patch: Partial<ConfigShape>) => {
-      await scope.update(patch)
+    const settings = sctx.get('settings') as SettingsFormsLike | undefined
+    if (!settings || typeof settings.update !== 'function') return
+    // 写入的命名空间 = **本插件的 profile 条目 id**（旧 `settings.yaml` 的
+    // `convfusion:` 段会被宿主按同 id 一次性导入，所以 id 必须保持一致）。
+    const entryId = profileEntryId(ctx)
+    if (entryId === undefined) {
+      ctx.logger?.warn('[convfusion] 取不到 profile 条目 id（非 Loader 装配），登录凭据无法保存。')
+      return
     }
-    // 用户在设置页改文件名后，定制内容立即改写到新文件（store 路径是延迟解析的）
-    scope.watch(() => {
-      source = () => resolveConfig(scope.get() as Partial<ConfigShape>)
-      ctx.logger?.info(`[convfusion] customization file → ${resolveCustomizationPath(currentConfig())}`)
-    })
+    // 【ConvFusion.com】登录成功后要把 `convfusionApiKey` / `serverUrl` 落到 profile 配置
+    // （凭据只在宿主内存与 profile 配置之间流动，绝不经过浏览器）
+    persistConfig = async (patch: Partial<ConfigShape>) => {
+      await settings.update(entryId, { ...patch })
+    }
+    // 本插件**自带**设置页 → 关掉"按 schema 自动生成表单"，避免同一个插件出现两份界面。
+    const { configure } = settings
+    if (typeof configure === 'function') {
+      sctx.effect(() => configure({ auto: false }, ctx.fiber))
+    }
   })
 
   // ── 工作区注册表：**等它出现**，不要一次性探测 ─────────────────────────

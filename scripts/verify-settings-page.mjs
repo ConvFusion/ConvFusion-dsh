@@ -1223,10 +1223,12 @@ console.log('\n[6] 客户端 bundle 格式与注册点')
   assert(existsSync(join(PKG, 'lib', 'client', 'index.d.ts')), '客户端类型声明已生成')
 
   // 数据面走同源 fetch；渲染再依赖 DSH 原生 locale。
+  // DSH 0.2.0：设置服务由 `settingsScope` 改为 `configForms`（服务名写错会让客户端
+  // fiber 永停 INACTIVE、整页静默消失，所以这里必须钉住）。
   const clientSrc = readFileSync(join(PKG, 'src', 'client', 'index.tsx'), 'utf8')
   assert(
-    /export const inject = \['slots', 'settingsScope', 'locale'\]/.test(clientSrc),
-    '客户端 inject = slots + settingsScope + locale',
+    /export const inject = \['slots', 'configForms', 'locale'\]/.test(clientSrc),
+    '客户端 inject = slots + configForms + locale',
   )
   assert(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'), 'package 注入 DSH 原生 locale 包')
   assert(!/export const inject = \[[^\]]*connection/.test(clientSrc), 'connection 不在硬 inject 里（已不再需要）')

@@ -34,7 +34,7 @@
  * `system/message`（经 system prompt 段）通道；观测状态只留在**内存**。
  */
 import type { Context } from '@deepseek-ai/cordis';
-import { Config, type Config as ConfigShape } from './config.js';
+import { Config, type Config as ConfigShape, type LiveConfig } from './config.js';
 import { ResearchContextService } from './research/context.js';
 import { type ResearchEventBridge } from './research/runtime-events.js';
 export declare const name = "dsh-convfusion";
@@ -87,5 +87,5 @@ declare module '@deepseek-ai/cordis' {
         convfusion: ConvFusionRuntime;
     }
 }
-export declare function apply(ctx: Context, rawConfig?: Partial<ConfigShape>): void;
+export declare function apply(ctx: Context, liveConfig?: Partial<LiveConfig>): void;
 //# sourceMappingURL=index.d.ts.map

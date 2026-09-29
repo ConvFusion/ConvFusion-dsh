@@ -17,7 +17,8 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import process from 'node:process'
 
-const PKG = resolve(process.argv[2] || 'packages/dsh-convfusion')
+// 仓库已从 monorepo 扁平化为单包（插件即仓库根），默认路径因此是 `.`。
+const PKG = resolve(process.argv[2] || '.')
 const lib = (f) => pathToFileURL(join(PKG, 'lib', f)).href
 
 const S = await import(lib('research/skills.js'))

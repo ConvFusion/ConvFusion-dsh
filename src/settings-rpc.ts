@@ -55,7 +55,7 @@
  *
  * | 类 | 落盘位置 | 端点 |
  * |---|---|---|
- * | **配置**（文件名 / 目录） | settings 文档（客户端经 `settingsScope` 读写，不经本渠道） | — |
+ * | **配置**（文件名 / 目录） | profile 条目 `convfusion` 的 config（客户端经 `configForms` 读写，不经本渠道） | — |
  * | **定制内容**（章节覆盖文本） | `$DSH_HOME/convfusion/<file>.json` | `customization/*` |
  *
  * ## v2 与 v0.1.5 的结构差异（重建时最容易错的地方）
@@ -628,9 +628,10 @@ export interface SettingsRpcDeps {
    */
   resolveSessionWorkspace?: (sessionId: string) => string | undefined
   /**
-   * 把配置补丁写回 **settings 用户层**（保存 API Key / 服务器地址）。
+   * 把配置补丁写回 **profile 条目 config**（保存 API Key / 服务器地址）。
    *
-   * 由插件入口接到 `settingsScope.update()`。缺省 = 设置存储不可用 —— 这时登录必须
+   * 由插件入口接到 `ctx.settings.update(entryId, patch)`（DSH 0.2.0 的
+   * `SettingsForms`）。缺省 = 设置存储不可用 —— 这时登录必须
    * **明确失败**（`storage-unavailable`），而不是"看着登录成功、重启后没了"。
    */
   setConfig?: (patch: Partial<Config>) => Promise<void>
@@ -924,8 +925,9 @@ export function createSettingsRpcHandler(
   /**
    * 把凭据（以及可选的服务器地址）写回设置，并返回**写完之后**的登录状态。
    *
-   * ⚠️ 不能写回后再 `getConfig()` 读一遍：`settingsScope.update()` 是异步提交，
-   * `watch` 也是异步触发的 —— 立刻重读会拿到旧值，界面会显示"未登录"，看起来像失败。
+   * ⚠️ 不能写回后再 `getConfig()` 读一遍：`settings.update()` 是异步提交，
+   * 宿主还要等下一轮才把新值写进 volatile 引用 —— 立刻重读会拿到旧值，
+   * 界面会显示"未登录"，看起来像失败。
    * 所以这里用 patch 与旧配置**显式合并**出返回值。
    */
   const persist = async (

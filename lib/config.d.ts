@@ -7,15 +7,16 @@
  * 这样设置文件绝不会因为定制内容增多而过大。
  *
  * ```text
- * ~/.dsh/settings.yaml
- *   convfusion:
- *     customizationFile: skill-customizations.json   ← 只有文件名
+ * profile 里 entry `id: convfusion` 的 config（DSH 0.2.0 起）
+ *   customizationFile: skill-customizations.json   ← 只有文件名
  *
- * ~/.dsh/convfusion/skill-customizations.json      ← 定制内容在这里
+ * $DSH_HOME/convfusion/skill-customizations.json    ← 定制内容在这里
  * ```
  *
- * 除文件名外只有 `customizationDir`（默认 `$DSH_HOME/convfusion`），
- * 设置面板的"本地研究方法"用它与 {@link resolveCustomizationPath} 展示真实落盘位置。
+ * ⚠️ **DSH 0.2.0 起不再有 `settings.yaml`**：设置文档就是当前 profile 里该插件
+ * 条目的 Cordis `config`（旧 `settings.yaml` 仅被宿主一次性导入后改名）。因此这里
+ * 不再有"注册 settings 命名空间"的动作，配置直接由 `apply(ctx, config)` 拿到；
+ * 要开放给设置页改写的字段必须标 `.volatile()`（见 {@link LiveConfig}）。
  *
  * ## 文献检索凭据（`openalexApiKey`）
  *
@@ -57,6 +58,7 @@
  * （`https://convfusion.apibrowser.com:4747`）是两套环境，地址由 `convfusion.env.json` 按环境给出，
  * 解析顺序见 {@link resolveServerUrl}。
  */
+import type { Volatile } from '@deepseek-ai/cordis';
 import Schema from '@deepseek-ai/schemastery';
 import { type ConvFusionEnvironment } from './server-env.js';
 export { serverUrlPresets, serverSlotOf, serverAddressKey } from './server-env.js';
@@ -135,7 +137,50 @@ export interface Config {
     /** 连续自动推进的轮数上限（防止无人值守跑飞）。 */
     autoContinueMaxRounds: number;
 }
-export declare const Config: Schema<Config>;
+/**
+ * `apply(ctx, config)` 运行期**实际拿到**的配置形状。
+ *
+ * ⚠️ DSH 0.2.0 起，标了 `.volatile()` 的字段解析后是**稳定引用** `Volatile<T>`
+ * （不是裸值）：宿主只**原地更新**它的值、**不重挂**插件 —— 见
+ * `cordis-plugin-loader` 的 `_commitVolatile()`（`volatileEntries(fiber.config)`
+ * → `updateVolatile(ref, source)` → 发 `loader/volatile-update`）。
+ *
+ * 由此得到一个很省事的好处：在 `apply` 里**保存这些引用**、每次 `.get()` 现取，
+ * 配置就**天然实时**，不再需要旧版的 `scope.watch()` 回调去刷新 `source`。
+ *
+ * 用 {@link unwrapLiveConfig} 把它还原成普通的 {@link Config}。
+ */
+export type LiveConfig = {
+    [K in keyof Config]: Volatile<Config[K]>;
+};
+export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
+    customizationFile: Schema<string, string, "volatile-defined">;
+    customizationDir: Schema<string, string, "volatile-defined">;
+    openalexApiKey: Schema<string, string, "volatile-defined">;
+    serverUrl: Schema<string, string, "volatile-defined">;
+    convfusionDevApiKey: Schema<string, string, "volatile-defined">;
+    convfusionProdApiKey: Schema<string, string, "volatile-defined">;
+    convfusionApiKey: Schema<string, string, "volatile-defined">;
+    autoContinue: Schema<boolean, boolean, "volatile-defined">;
+    autoContinueMaxRounds: Schema<number, number, "volatile-defined">;
+}>>, Schemastery.ObjectT<NoInfer<{
+    customizationFile: Schema<string, string, "volatile-defined">;
+    customizationDir: Schema<string, string, "volatile-defined">;
+    openalexApiKey: Schema<string, string, "volatile-defined">;
+    serverUrl: Schema<string, string, "volatile-defined">;
+    convfusionDevApiKey: Schema<string, string, "volatile-defined">;
+    convfusionProdApiKey: Schema<string, string, "volatile-defined">;
+    convfusionApiKey: Schema<string, string, "volatile-defined">;
+    autoContinue: Schema<boolean, boolean, "volatile-defined">;
+    autoContinueMaxRounds: Schema<number, number, "volatile-defined">;
+}>>, "plain">;
+/**
+ * 把运行期配置里的 `Volatile<T>` 引用**就地取值**，还原成普通配置。
+ *
+ * 兼容两种输入：宿主解析后（volatile 字段是引用）与测试/精简环境直接传裸值。
+ * 非引用值原样返回 —— 因此不需要 `typeof value === 'string'` 之类的类型分支。
+ */
+export declare function unwrapLiveConfig(live: Partial<LiveConfig> | undefined): Partial<Config>;
 /**
  * 解析定制文件的绝对路径。
  *

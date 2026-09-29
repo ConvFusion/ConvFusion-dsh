@@ -13,7 +13,7 @@
  * 1. `inject` 里的**每一个**服务都必须真实存在。任一缺失，整个客户端条目会停在
  *    `pending (waiting for service: X)` —— 界面不出现，且不会被当成错误报出来。
  *    数据面走同源 `fetch`，因此这里只需要渲染用的两个服务。
- * 2. `slots` / `settingsScope` 由 DSH 的客户端包提供，不 value-import 它们 ——
+ * 2. `slots` / `configForms` 由 DSH 的客户端包提供，不 value-import 它们 ——
  *    它们本来就是 bundle 的 external，import 值只会在运行期炸。
  */
 
@@ -46,8 +46,9 @@ interface ScopeSnapshot {
 interface SettingsScopeLike {
   getSnapshot(): ScopeSnapshot
   subscribe(listener: () => void): () => void
-  set(field: string, value: unknown): Promise<void>
-  unset(field: string): Promise<void>
+  /** 0.2.0 起写操作返回"宿主是否接受"，不再是无返回值的 `void`。 */
+  set(field: string, value: unknown): Promise<boolean>
+  unset(field: string): Promise<boolean>
 }
 
 interface SlotRegisterOptions {
@@ -77,8 +78,19 @@ interface SlotsService {
 
 interface ClientContext {
   slots: SlotsService
-  settingsScope: {
-    bind(spec: { namespace: string }): SettingsScopeLike
+  /**
+   * DSH 0.2.0 的设置服务。
+   *
+   * ⚠️ **旧 `settingsScope.bind({ namespace })` 已被整体删除**：0.2.0 里客户端
+   * 服务名与形状都变了，换成 `configForms.get(entryId)`（`entryId` = **profile 条目
+   * id**，与宿主 `SettingsForms.update` 的 `ns` 是同一个值）。
+   *
+   * ⚠️ 服务名写错的后果**不是报错**：cordis 的 fiber 会因为 inject 的服务缺失而
+   * 永久停在 `INACTIVE`，`apply` 从不执行 —— 整页（设置页 + 进展面板）静默消失。
+   * 所以这里的名字必须与新宿主一致。
+   */
+  configForms: {
+    get(entryId: string): SettingsScopeLike
   }
   locale: {
     register(namespace: string, dictionaries: Record<string, Record<string, string>>): () => void
@@ -97,7 +109,7 @@ interface ClientContext {
 }
 
 /** 只有这些服务是硬依赖（缺一个，这一页就无从渲染）。 */
-export const inject = ['slots', 'settingsScope', 'locale']
+export const inject = ['slots', 'configForms', 'locale']
 
 /**
  * 【设置】导航里的位置。
@@ -113,7 +125,8 @@ export function apply(ctx: ClientContext): void {
     'convfusion: browser dictionaries',
   )
   const t = ctx.locale.bind(CONVFUSION_LOCALE_NS)
-  const scope = ctx.settingsScope.bind({ namespace: 'convfusion' })
+  // 设置命名空间 = **profile 条目 id**（`cordis.patch.yml` 的 `id: convfusion`）。
+  const scope = ctx.configForms.get('convfusion')
 
   ctx.slots.inject('settings.section', () =>
     ctx.slots.register(

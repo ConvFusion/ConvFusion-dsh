@@ -25,12 +25,12 @@
  *
  * | 内容 | 通道 | 为什么 |
  * |---|---|---|
- * | 定制**文件名** | `settingsScope`（落 `settings.yaml`） | 它是配置，不是内容 |
+ * | 定制**文件名** | `configForms`（落 profile 条目 `convfusion` 的 config） | 它是配置，不是内容 |
  * | 定制**正文** | 同源 `POST /dsh-convfusion/<endpoint>`（落 `$DSH_HOME/convfusion/<file>.json`） | 用户拍板：设置文件绝不能因定制而变大 |
  *
  * ## 依赖约束
  *
- * 只 import `react` 与本 bundle 的本地模块。跨插件服务（`slots` / `settingsScope`）
+ * 只 import `react` 与本 bundle 的本地模块。跨插件服务（`slots` / `configForms`）
  * 通过 cordis 的 inject face 拿到，并在这里**结构化镜像**其契约 ——
  * 不 value-import 任何 `@deepseek-ai/*` 包（bundle 里它们本来就是 external）。
  *

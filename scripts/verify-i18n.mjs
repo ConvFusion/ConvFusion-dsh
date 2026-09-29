@@ -50,7 +50,7 @@ console.log('\n[2] DSH 原生 locale 接入')
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 const index = readFileSync(join(ROOT, 'src/client/index.tsx'), 'utf8')
 assert(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'), 'package 注入 dsh-client-locale')
-assert(/\['slots', 'settingsScope', 'locale'\]/.test(index), '浏览器插件硬依赖 locale 服务')
+assert(/\['slots', 'configForms', 'locale'\]/.test(index), '浏览器插件硬依赖 locale 服务')
 assert(/ctx\.locale\.register\(CONVFUSION_LOCALE_NS, dictionaries\)/.test(index), '字典注册到独立 namespace')
 assert((index.match(/locale: CONVFUSION_LOCALE_NS/g) ?? []).length === 2, '设置页与进展按钮都声明 Slot locale')
 assert(!/navigator\.language|localStorage/.test(index), '没有自建浏览器语言状态')
@@ -77,12 +77,13 @@ const ctx = {
         : template
     },
   },
-  settingsScope: {
-    bind: () => ({
+  // DSH 0.2.0：客户端服务由 `settingsScope.bind({namespace})` 改为 `configForms.get(entryId)`
+  configForms: {
+    get: () => ({
       getSnapshot: () => ({ status: 'ready' }),
       subscribe: () => () => {},
-      set: async () => {},
-      unset: async () => {},
+      set: async () => true,
+      unset: async () => true,
     }),
   },
   slots: {

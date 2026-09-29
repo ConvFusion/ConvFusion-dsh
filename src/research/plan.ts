@@ -15,7 +15,7 @@
  * ```ts
  * agent.followup(createUserMessage({
  *   content: [{ type: 'text', text }],
- *   source: { kind: 'plugin', plugin: 'convfusion' },
+ *   source: { kind: 'plugin:convfusion' },   // DSH 0.2.0：见 ./message-source.ts
  * }))
  * ```
  *
@@ -35,6 +35,7 @@
  */
 
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { CONVFUSION_MESSAGE_SOURCE } from './message-source.js'
 import {
   listPlanDocuments,
   planCompletionCriteria,
@@ -173,13 +174,17 @@ export interface FollowupCapableAgent {
 /**
  * 构造 Plan 的 user 消息。
  *
- * source 取 Harness 认可的 `{ kind:'plugin', plugin:'convfusion' }` —— 内容因此
- * 走**已知的 surface 事件通道**（`user/message`），**绝不**自造会话事件类型。
+ * source 用 {@link CONVFUSION_MESSAGE_SOURCE}（`{ kind: 'plugin:convfusion' }`）——
+ * 内容因此走**已知的 surface 事件通道**（`user/message`），**绝不**自造会话事件类型。
+ *
+ * ⚠️ DSH 0.2.0 删除了 `MessageSourceMap['plugin']`，旧写法
+ * `{ kind: 'plugin', plugin: 'convfusion' }` 已非法；新值与官方 V3→V4 迁移为
+ * 历史会话生成的值一致（详见 `./message-source.ts`）。
  */
 export function createPlanMessage(text: string): unknown {
   return createUserMessage({
     content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: 'convfusion' },
+    source: { ...CONVFUSION_MESSAGE_SOURCE },
   })
 }
 
