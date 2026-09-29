@@ -57,6 +57,20 @@ export type FetchLike = (input: string, init?: {
     headers?: {
         get(name: string): string | null;
     };
+    /**
+     * 正文流（**可选**）：归档/附件下载用它边收边写（进度可见、内存不膨胀）。
+     *
+     * 声明成可选而不是必然：假 fetch 与老运行时可能只有 `arrayBuffer()` ——
+     * 那时退回一次性取回，行为不变（只是没有中途进度）。
+     */
+    body?: {
+        getReader(): {
+            read(): Promise<{
+                done: boolean;
+                value?: Uint8Array;
+            }>;
+        };
+    } | null;
 }>;
 /** 服务器上的账号（`GET /api/v1/auth/me` 的响应，字段名已转 camelCase）。 */
 export interface ServerAccount {
@@ -246,6 +260,28 @@ export interface ServerRequestOptions {
     timeoutMs?: number;
 }
 /**
+ * 正文"卡死"判据：连续这么久**一个字节都没有**才算断，而不是给整段设总时长。
+ *
+ * 为什么不是总时长上限：这条链路的实测速率 ~118 KB/s，一个十几 MB 的工作区快照
+ * 本来就要一两分钟 —— 用总时长卡会把"慢"误判成"死"。而 30 秒没有任何数据，
+ * 在任何链路上都只能是断了。
+ */
+export declare const STALL_TIMEOUT_MS = 30000;
+/**
+ * 二进制下载的选项（归档 / 附件）。在 {@link ServerRequestOptions} 之上加"边收边给"。
+ *
+ * `onChunk` 一给，正文就**不再驻留内存**：调用方拿到一块写一块（写盘），
+ * 因此进度是真的、内存不随文件大小增长。
+ */
+export interface BinaryStreamOptions extends ServerRequestOptions {
+    /** 每收到一块就回调（**顺序**调用，调用方可以同步写盘）。 */
+    onChunk?: (chunk: Uint8Array) => void;
+    /** 累计收到多少字节（进度用；每块一次）。 */
+    onProgress?: (received: number) => void;
+    /** 无数据的容忍时长（毫秒）；缺省 {@link STALL_TIMEOUT_MS}。 */
+    stallTimeoutMs?: number;
+}
+/**
  * **只问"这台服务器活着吗"**：`GET /api/v1/health`（存活探针，无需身份）。
  *
  * ⚠️ **一个字节的凭据都不带**。设置页用它给两个快捷按钮上色（通了=绿），而"服务器是否可达"
@@ -421,15 +457,25 @@ export interface RemoteProjectFile {
  */
 export declare function fetchProjectFiles(base: string, apiKey: string, projectId: string, options?: ServerRequestOptions): Promise<RemoteProjectFile[]>;
 /**
- * 下载项目工作区的 **ZIP 快照**（`GET /projects/{id}/files/archive`）。
+ * 下载项目工作区的 **ZIP 快照**（`GET /projects/{id}/files/archive`），
+ * **边收边写进 `sink`**（不驻留内存、界面能看见进度）。
  *
- * ⚠️ 只把 ZIP 取回来落盘，**不解压**（2026-09 用户拍板：下载只负责把 .zip 存下来，
- * 其余交给用户处理）。文件名用服务器给的（`<owner>-<title>.zip`）—— 服务器才是
- * 命名的权威，插件不自造。
+ * ⚠️ 只把 ZIP 取回来落盘，**不解压**（2026-09 用户拍板）。文件名用服务器给的
+ * （`<owner>-<title>.zip`）—— 服务器才是命名的权威，插件不自造。
+ *
+ * 为什么要 `sink` 而不是返回 `Uint8Array`：这个快照实测 13.6 MB / 475 个文件，
+ * 在 ~118 KB/s 的链路上要**两分钟**。收完再写等于这两分钟里磁盘上什么都没有
+ * （用户 2026-09 报的「一直读取中」）；而且整包驻留内存随工作区规模膨胀。
+ *
+ * @param sink 写盘目标（宿主侧是 {@link openDownloadPart} 的 `.part` 文件）
+ * @returns `received` 实际字节数、`filename` 服务器给的文件名、`fileCount` 服务器声明的条目数
  */
-export declare function fetchProjectArchive(base: string, apiKey: string, projectId: string, options?: ServerRequestOptions): Promise<{
-    bytes: Uint8Array;
+export declare function fetchProjectArchive(base: string, apiKey: string, projectId: string, sink: {
+    write(chunk: Uint8Array): void;
+}, options?: BinaryStreamOptions): Promise<{
+    received: number;
     filename: string | null;
+    fileCount: number | null;
 }>;
 /**
  * 下载一个文件的**原始字节**（不是 JSON，所以不能走 `requestJson`）。

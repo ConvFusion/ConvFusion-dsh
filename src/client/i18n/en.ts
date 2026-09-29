@@ -235,6 +235,8 @@ export const en = {
   'community.exchange.sizeBadge': '{files} files · {size}',
   'community.exchange.zipOnly': 'Only the ZIP is saved into the chosen workspace; no extraction — the rest is up to you.',
   'community.exchange.destHint': 'Saves to: {dest}',
+  'community.exchange.downloading': 'Downloaded {done} / ≈{total}',
+  'community.exchange.downloadingBtn': 'Downloading…',
   'community.exchange.noWorkspaces': 'No DSH workspace available (create one in DSH first).',
   'community.exchange.downloadDone': 'Saved {name} into {dir}.',
     'community.exchange.dirLabel': 'Workspace folder',

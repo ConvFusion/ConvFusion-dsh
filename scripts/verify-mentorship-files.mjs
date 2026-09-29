@@ -12,7 +12,7 @@
  *
  * 用法：node scripts/verify-mentorship-files.mjs [pkgDir]
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -25,6 +25,7 @@ const RPC = await import(lib('settings-rpc.js'))
 const CFG = await import(lib('config.js'))
 const CUST = await import(lib('research/skill-customization.js'))
 const SC = await import(lib('server-client.js'))
+const SYNC = await import(lib('research/workspace-sync.js'))
 
 let passed = 0
 let failed = 0
@@ -68,11 +69,33 @@ function makeHost({ handler, listLocalWorkspaces }) {
       ok: reply.status >= 200 && reply.status < 300,
       status: reply.status,
       json: async () => reply.body,
-      // 二进制端点（归档下载）走这个
+      // 二进制端点（归档下载）走这个 —— 老运行时没有正文流时的兜底
       arrayBuffer: async () => {
         const b = reply.bytes ?? Buffer.from('')
         return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)
       },
+      // 给了 chunks 就暴露**正文流**：走真实的"边收边写"路径（有进度、有落盘中间态）
+      ...(reply.chunks
+        ? {
+            body: {
+              getReader: () => {
+                let i = 0
+                return {
+                  read: async () => {
+                    if (i >= reply.chunks.length) return { done: true, value: undefined }
+                    const value = reply.chunks[i]
+                    i += 1
+                    if (value instanceof Error) throw value
+                    if (typeof reply.chunkDelayMs === 'number' && reply.chunkDelayMs > 0) {
+                      await new Promise((r) => setTimeout(r, reply.chunkDelayMs))
+                    }
+                    return { done: false, value }
+                  },
+                }
+              },
+            },
+          }
+        : {}),
       // 服务器给的文件名走 Content-Disposition（`<owner>-<title>.zip`）
       ...(reply.headers ? { headers: reply.headers } : {}),
     }
@@ -152,6 +175,20 @@ section('[5] 回传指导结果（review/ 前缀）')
     assert(
       (scan.value?.files ?? []).length > 0,
       '导师回传侧仍然照传 review/（两条通道的取舍不同）',
+    )
+    /*
+     * npm 缓存目录必须被排除（2026-09）：某真实工作区的
+     * `papers/paper-main/presentation/.npmcache/_cacache/…` 有 158 个 blob、18.9 MiB，
+     * 占那份工作区快照的 **55%** —— 只因为"落在 papers/** 下"就被判成 recommended，
+     * 于是随发布上传、再被导师原样下载回来。这正是那次"下载 13.6 MB 太慢"的一半。
+     */
+    const cacache =
+      'papers/paper-main/presentation/.npmcache/_cacache/content-v2/sha512/40/cc/ebe1c1a8'
+    assertEq(UP.classify(cacache, 3496008).decision, 'excluded', 'npm 缓存目录（.npmcache）不发布')
+    assertEq(
+      UP.classify('papers/paper-main/presentation/talk-deck.html', 661774).decision,
+      'recommended',
+      '同一目录下的研究资产（讲稿）照常推荐 —— 排除的是缓存，不是整个目录',
     )
   }
 
@@ -367,7 +404,39 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
     { id: 'f2', relative_path: 'research/evidence/E001.md', size: 5 },
     { id: 'f3', relative_path: 'review/指导意见.md', size: 6 },
   ]
-  const ZIP = Buffer.from('PK\u0003\u0004fake-zip-bytes')
+  /**
+   * 造一个**结构上合法**的最小 ZIP（本地文件头 + EOCD）。
+   *
+   * 为什么不能再用随便几个字节：下载端点现在会校验 ZIP 完整性（末尾必须有 EOCD、
+   * 且注释长度让它正好结束在文件末尾、条目数要与 `X-File-Count` 对得上）。
+   * 那正是 2026-09 那次"服务器传了 126 KB 就断，旧代码照样报已保存"的修法。
+   */
+  const makeZip = (entries = 1) => {
+    const local = Buffer.concat([Buffer.from('PK\u0003\u0004'), Buffer.alloc(26, 7)])
+    const eocd = Buffer.alloc(22)
+    eocd.writeUInt32LE(0x06054b50, 0)
+    eocd.writeUInt16LE(entries, 8) // 本盘条目数
+    eocd.writeUInt16LE(entries, 10) // 总条目数
+    return Buffer.concat([local, eocd])
+  }
+  const ZIP = makeZip(3)
+  /** 目录里**下载留下的东西**（`.zip` 与 `.part`）—— 工作区自己的 `workspace/` 不算。 */
+  const leftovers = (dir) => readdirSync(dir).filter((n) => n.endsWith('.zip') || n.endsWith('.part'))
+  /** 一次归档响应：默认用**正文流**（走真实的边收边写路径）。 */
+  const archiveReply = ({ zip = ZIP, entries = 3, chunks, headers = true, chunkDelayMs } = {}) => ({
+    status: 200,
+    bytes: zip,
+    ...(chunks ? { chunks, chunkDelayMs } : { chunks: [zip] }),
+    headers: {
+      get: (k) => {
+        const key = k.toLowerCase()
+        if (!headers) return null
+        if (key === 'content-disposition') return DISPOSITION
+        if (key === 'x-file-count') return String(entries)
+        return null
+      },
+    },
+  })
   /** 造一个工作区目录（可选先放一个研究项目，用来验证"原文件不动"）。 */
   const makeWorkspace = (name, { withResearch = false } = {}) => {
     const dir = join(work, name)
@@ -380,16 +449,12 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
   }
   /** 服务器那把 ZIP 命名成 `<owner>-<title>.zip`，用 Content-Disposition 回给我们。 */
   const DISPOSITION = "attachment; filename*=UTF-8''%E5%AD%A6%E7%94%9F%E7%94%B2-%E9%95%BF%E4%B8%8A%E4%B8%8B%E6%96%87%E6%8E%A8%E7%90%86.zip"
-  const hostFor = (dirs, { filename = true } = {}) =>
+  const hostFor = (dirs, { filename = true, archive = archiveReply() } = {}) =>
     makeHost({
       handler: async (call) => {
         if (call.url.endsWith('/files')) return { status: 200, body: { items: FILES, total_bytes: 15 } }
         assert(call.url.endsWith(`/projects/${PROJECT_ID}/files/archive`), '下载取的是归档端点（ZIP）')
-        return {
-          status: 200,
-          bytes: ZIP,
-          headers: { get: (k) => (filename && k.toLowerCase() === 'content-disposition' ? DISPOSITION : null) },
-        }
+        return filename ? archive : { ...archive, headers: undefined }
       },
       listLocalWorkspaces: async () => ({
         available: true,
@@ -479,6 +544,198 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
   })
   const none = await noFilesHost.handler('mentor/downloadState', { projectId: PROJECT_ID, prefix: 'x' })
   assertEq(none.value?.files, 0, '项目还没有文件 → 预检为 0')
+
+  // ⑧ 预检口径 = **快照口径**（每路径取最新），不是 `/files` 的历史行数
+  {
+    const dupHost = makeHost({
+      handler: async () => ({
+        status: 200,
+        body: {
+          items: [
+            { id: 'a', relative_path: 'review/x.md', size: 10 },
+            { id: 'b', relative_path: 'review/x.md', size: 40 }, // 同一路径的**修订**
+            { id: 'c', relative_path: 'project.md', size: 5 },
+          ],
+          total_bytes: 55,
+        },
+      }),
+      listLocalWorkspaces: async () => ({
+        available: true,
+        items: [{ id: 'ws-0', title: 'w', path: empty, updatedAt: '' }],
+      }),
+    })
+    const st = await dupHost.handler('mentor/downloadState', { projectId: PROJECT_ID, prefix: 'x' })
+    assertEq(st.value?.files, 2, '预检文件数按快照口径（修订不是新增一份）')
+    assertEq(st.value?.bytes, 45, '预检体积同样取最新那份（40 + 5，不是三行相加）')
+  }
+
+  /* ── 2026-09 那次「一直读取中」的修法：边收边写 + 进度 + 不留半成品 ────── */
+
+  // ⑨ 下载期间**宿主如实报出已收字节**（界面按秒问，才有"已下载 x MB"）
+  {
+    const dir = makeWorkspace('dl-progress')
+    const streamed = hostFor([dir], {
+      archive: archiveReply({
+        chunks: [ZIP.subarray(0, 20), ZIP.subarray(20)],
+        chunkDelayMs: 150,
+      }),
+    })
+    const inflight = streamed.handler('mentor/download', {
+      projectId: PROJECT_ID,
+      workspaceId: 'ws-0',
+      prefix: 'progress',
+    })
+    let mid = null
+    for (let i = 0; i < 40 && !(mid?.received > 0); i += 1) {
+      await new Promise((r) => setTimeout(r, 25))
+      mid = (await streamed.handler('mentor/downloadProgress', { projectId: PROJECT_ID })).value
+    }
+    assertEq(mid?.running, true, '下载中 → running=true')
+    assert(mid?.received > 0, `下载中收到的字节数 > 0（实际 ${mid?.received}）`)
+    assert(mid?.received < ZIP.byteLength, '还没传完 → 小于总字节数（不是"收完才报"）')
+
+    const done = await inflight
+    assertEq(done.ok, true, '流式下载最终成功')
+    const after = (await streamed.handler('mentor/downloadProgress', { projectId: PROJECT_ID })).value
+    assertEq(after?.running, false, '下载结束 → running=false')
+    assertEq(after?.received, ZIP.byteLength, '结束时报的字节数 = 落盘字节数')
+    assertEq(
+      (await streamed.handler('mentor/downloadProgress', { projectId: 'another-project' })).value,
+      { received: 0, running: false },
+      '项目对不上 → 0 / 未在跑（进度不串号）',
+    )
+    assertEq(readdirSync(dir).filter((n) => n.endsWith('.part')), [], '成功落盘后没有 .part 残留')
+  }
+
+  // ⑩ 正文被截断（没有 EOCD）→ **不报成功**，且不留半成品
+  {
+    const dir = makeWorkspace('dl-truncated')
+    const cut = makeZip(3).subarray(0, 24) // 有 PK 头，结尾没有中央目录记录
+    const broken = hostFor([dir], { archive: archiveReply({ zip: cut, chunks: [cut] }) })
+    const r = await broken.handler('mentor/download', {
+      projectId: PROJECT_ID,
+      workspaceId: 'ws-0',
+      prefix: 'broken',
+    })
+    assertEq(r.ok, false, '截断的 ZIP → 失败（旧写法会当成功写下来）')
+    assert(String(r.error?.message ?? '').includes('不完整'), '说清是"下载不完整"，不是笼统的失败')
+    assertEq(leftovers(dir), [], '失败不留半成品（既没有 .zip，也没有 .part）')
+  }
+
+  // ⑪ 条目数对不上（服务器说有 3 个，ZIP 里只有 2 个）→ 也算不完整
+  {
+    const dir = makeWorkspace('dl-miscount')
+    const short = makeZip(2)
+    const miscount = hostFor([dir], {
+      archive: archiveReply({ zip: short, entries: 3, chunks: [short] }),
+    })
+    const r = await miscount.handler('mentor/download', {
+      projectId: PROJECT_ID,
+      workspaceId: 'ws-0',
+      prefix: 'miscount',
+    })
+    assertEq(r.ok, false, '条目数对不上 → 失败')
+    assert(
+      String(r.error?.message ?? '').includes('2 个条目'),
+      `错误里说出"只有 2 个条目"（实际：${r.error?.message}）`,
+    )
+  }
+
+  // ⑫ 传了一半**连接就断**（正文流抛错）→ 失败 + 清干净
+  {
+    const dir = makeWorkspace('dl-drop')
+    const dropped = hostFor([dir], {
+      archive: archiveReply({ chunks: [ZIP.subarray(0, 12), new Error('socket hang up')] }),
+    })
+    const r = await dropped.handler('mentor/download', {
+      projectId: PROJECT_ID,
+      workspaceId: 'ws-0',
+      prefix: 'dropped',
+    })
+    assertEq(r.ok, false, '正文中途断掉 → 失败')
+    assert(String(r.error?.message ?? '').includes('socket hang up'), '把底层原因带出来（不是只说"失败"）')
+    assertEq(leftovers(dir), [], '断流不留半成品')
+  }
+
+  // ⑬ 失败的下载必须把 running 收回去（否则界面会一直转圈）
+  {
+    const dir = makeWorkspace('dl-after-fail')
+    const cut = makeZip(3).subarray(0, 24)
+    const failing = hostFor([dir], { archive: archiveReply({ zip: cut, chunks: [cut] }) })
+    const r = await failing.handler('mentor/download', {
+      projectId: PROJECT_ID,
+      workspaceId: 'ws-0',
+      prefix: 'after-fail',
+    })
+    assertEq(r.ok, false, '（前置）这次下载失败')
+    const after = (await failing.handler('mentor/downloadProgress', { projectId: PROJECT_ID })).value
+    assertEq(after?.running, false, '失败后 running=false（界面据此停止轮询、显示错误）')
+
+    // 然后再下一次仍然能成功：进度状态是**这一次**的，不残留
+    const dir2 = makeWorkspace('dl-after-fail-2')
+    const okHost = hostFor([dir2])
+    const ok = await okHost.handler('mentor/download', {
+      projectId: PROJECT_ID,
+      workspaceId: 'ws-0',
+      prefix: 'after-fail',
+    })
+    assertEq(ok.ok, true, '失败之后仍然能正常下载')
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * [8] 正文"卡死"必须有超时（2026-09「一直读取中」的根因之一）
+ *
+ * 旧写法：`Promise.race([fetch, timeout])` 一拿到**响应头**就 clearTimeout，
+ * 之后 `res.arrayBuffer()` 读正文**没有任何超时** —— 正文不来了就永远挂着。
+ * 新的判据是"多久**没有新数据**"（stall），不是给整段设总时长：
+ * 这条链路实测 ~118 KB/s，一个 13.6 MB 的快照本来就要两分钟，慢不等于死。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[8] 下载正文的卡死超时（stall）')
+{
+  const neverEndingFetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    json: async () => ({}),
+    arrayBuffer: () => new Promise(() => {}),
+    body: {
+      getReader: () => ({
+        read: async () => {
+          // 第一块照常给，之后**永远不再来数据** —— 模拟"服务器传了一半就不动了"
+          if (!sent) {
+            sent = true
+            return { done: false, value: Buffer.from('PK\u0003\u0004') }
+          }
+          return new Promise(() => {})
+        },
+      }),
+    },
+  })
+  let sent = false
+
+  const dir = join(work, 'stall-ws')
+  mkdirSync(dir, { recursive: true })
+  const part = SYNC.openDownloadPart(dir, 'stalled')
+  const t0 = Date.now()
+  let err = null
+  try {
+    await SC.fetchProjectArchive('http://localhost:1', KEY, PROJECT_ID, part, {
+      fetchImpl: neverEndingFetch,
+      stallTimeoutMs: 120,
+    })
+  } catch (e) {
+    err = e
+  }
+  const dt = Date.now() - t0
+  assert(err !== null, '正文不再来数据 → 抛错（旧写法会永远挂着）')
+  assert(dt < 3000, `按 stall 判据及时收手（实际 ${dt} ms）`)
+  assert(
+    String(err?.message ?? '').includes('没有收到数据'),
+    `错误文案说清是"多久没有收到数据"（实际：${err?.message}）`,
+  )
+  part.abort()
+  assertEq(readdirSync(dir), [], '卡死后宿主清掉 .part（不留半成品）')
 }
 
 rmSync(work, { recursive: true, force: true })

@@ -86,10 +86,15 @@
  *   `11` 那类"同号却行为不同"：旧宿主不会坏，只是仍然慢，所以照旧升号，
  *   让设置页把"宿主需重启"说出来（不升号的话性能修复看起来像没生效）。
  *
- * ⚠️ `5` 与 `6`–`17` 来自两条**并行开发线**（上游 PR 的国际化 + 本地接入 ConvFusion.com），
+ * ⚠️ `5` 与 `6`–`18` 来自两条**并行开发线**（上游 PR 的国际化 + 本地接入 ConvFusion.com），
  * 合并后统一编号。宿主与客户端必须同号，否则设置页会提示重启。
+ *
+ * - `18`：【下载】改成**流式落盘 + 实时进度**：新增端点 **`mentor/downloadProgress`**
+ *   （`{ projectId }` → `{ received, running }`，本地读、不触网），`mentor/download`
+ *   边收边写 `.part`、校验 ZIP 完整后才改名，正文改用"卡死超时"（不再只盖住响应头）。
+ *   旧宿主没有新端点 → 界面拿不到进度（退回一句「读取中…」），故照旧升号提示重启。
  */
-export const HOST_PROTOCOL = 17
+export const HOST_PROTOCOL = 18
 
 /** 状态响应里的协议字段名（两边共用，避免拼错）。 */
 export const HOST_PROTOCOL_FIELD = 'protocol'

@@ -512,7 +512,8 @@ export declare function compareVersions(a: string, b: string): number;
  * | `mentor/reject` | `{ proposalId }` | 拒绝指导（研究者） |
  * | `mentor/pickDirectory` | `{}` / `{ probe:true }` | 开系统目录选择器（`native` 才可用）；`probe` 只问能力不开窗 |
  * | `mentor/downloadState` | `{ projectId, prefix }` | 【下载】对话框一次拿齐：预检（文件数 / 体积 / 预计文件名）+ **全部**可选工作区 |
- * | `mentor/download` | `{ projectId, workspaceId, prefix }` | 只把 ZIP 存进所选工作区（**不解压、不覆盖**，同名加序号） |
+ * | `mentor/download` | `{ projectId, workspaceId, prefix }` | 只把 ZIP 存进所选工作区（**流式落盘、不解压、不覆盖**，同名加序号） |
+ * | `mentor/downloadProgress` | `{ projectId }` | 下载期间的实时进度 `{ received, running }`（界面按秒问；本地读，不触网） |
  * | `mentor/scanReview` | `{ dir }` | 列出工作区 `review/` 下的文件（上传源） |
  * | `mentor/upload` | `{ projectId, dir, paths:[relPath] }` | 按原相对路径回传 `review/**` |
  *

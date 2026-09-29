@@ -64,6 +64,13 @@ export type FetchLike = (
   arrayBuffer(): Promise<ArrayBuffer>
   /** 响应头（可选）：下载要读服务器的 `Content-Disposition` 拿文件名。 */
   headers?: { get(name: string): string | null }
+  /**
+   * 正文流（**可选**）：归档/附件下载用它边收边写（进度可见、内存不膨胀）。
+   *
+   * 声明成可选而不是必然：假 fetch 与老运行时可能只有 `arrayBuffer()` ——
+   * 那时退回一次性取回，行为不变（只是没有中途进度）。
+   */
+  body?: { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }> } } | null
 }>
 
 /** 服务器上的账号（`GET /api/v1/auth/me` 的响应，字段名已转 camelCase）。 */
@@ -326,6 +333,30 @@ export interface ServerRequestOptions {
   fetchImpl?: FetchLike
   /** 超时（毫秒）；缺省 {@link SERVER_TIMEOUT_MS}。 */
   timeoutMs?: number
+}
+
+/**
+ * 正文"卡死"判据：连续这么久**一个字节都没有**才算断，而不是给整段设总时长。
+ *
+ * 为什么不是总时长上限：这条链路的实测速率 ~118 KB/s，一个十几 MB 的工作区快照
+ * 本来就要一两分钟 —— 用总时长卡会把"慢"误判成"死"。而 30 秒没有任何数据，
+ * 在任何链路上都只能是断了。
+ */
+export const STALL_TIMEOUT_MS = 30_000
+
+/**
+ * 二进制下载的选项（归档 / 附件）。在 {@link ServerRequestOptions} 之上加"边收边给"。
+ *
+ * `onChunk` 一给，正文就**不再驻留内存**：调用方拿到一块写一块（写盘），
+ * 因此进度是真的、内存不随文件大小增长。
+ */
+export interface BinaryStreamOptions extends ServerRequestOptions {
+  /** 每收到一块就回调（**顺序**调用，调用方可以同步写盘）。 */
+  onChunk?: (chunk: Uint8Array) => void
+  /** 累计收到多少字节（进度用；每块一次）。 */
+  onProgress?: (received: number) => void
+  /** 无数据的容忍时长（毫秒）；缺省 {@link STALL_TIMEOUT_MS}。 */
+  stallTimeoutMs?: number
 }
 
 function errorBodyMessage(body: unknown): {
@@ -1067,14 +1098,22 @@ export async function fetchProjectFiles(
  *
  * ⚠️ 失败时仍然要拿到服务器的**结构化错误**（403 未授权 / 404 不存在），
  * 否则界面只能显示"下载失败"，用户不知道是该去建立关系还是刷新列表。
+ *
+ * 两个阶段各有各的超时：**响应头**用 `timeoutMs`（服务器还在打包，超过就该说超时），
+ * **正文**用 `stallTimeoutMs` 的卡死判据（见 {@link readBody}）。
  */
 async function fetchBinary(
   base: string,
   path: string,
   apiKey: string,
-  options: ServerRequestOptions,
+  options: BinaryStreamOptions,
   label: string,
-): Promise<{ bytes: Uint8Array; contentDisposition: string | null }> {
+): Promise<{
+  bytes: Uint8Array
+  contentDisposition: string | null
+  fileCount: number | null
+  received: number
+}> {
   const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike | undefined)
   if (typeof fetchImpl !== 'function') throw new ServerError('unreachable', '当前运行环境没有可用的 fetch。')
   const timeoutMs = options.timeoutMs ?? SERVER_TIMEOUT_MS
@@ -1111,10 +1150,122 @@ async function fetchBinary(
     }
     throw mapHttpError(res.status, body)
   }
-  return {
-    bytes: new Uint8Array(await res.arrayBuffer()),
-    contentDisposition: res.headers?.get('content-disposition') ?? null,
+  const contentDisposition = res.headers?.get('content-disposition') ?? null
+  const fileCount = asNumberOrNull(res.headers?.get('x-file-count'))
+  const received = await readBody(res, options, label, controller)
+  return { bytes: received.bytes, contentDisposition, fileCount, received: received.total }
+}
+
+/** `X-File-Count` 这类头：非数字/缺失都当"没给"，不是 0。 */
+function asNumberOrNull(raw: string | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null
+  const n = Number.parseInt(raw.trim(), 10)
+  return Number.isFinite(n) && n >= 0 ? n : null
+}
+
+/** 人读的字节数（只在错误文案里用；界面那份在客户端）。 */
+function humanBytes(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`
+  return `${n} B`
+}
+
+/**
+ * 读**正文**：有无新数据的**卡死超时**（stall），不是总时长上限。
+ *
+ * ## 为什么必须有这一段
+ *
+ * 2026-09 用户报【指导中】下载一直「读取中…」。根因之一是超时**只盖住了响应头**：
+ * `fetch` 一拿到响应头 `Promise.race` 就结束、计时器被清掉，之后
+ * `res.arrayBuffer()` 读正文**完全没有超时** —— 正文不来了就永远挂着。
+ *
+ * 判据用"**多久没有新数据**"而不是"总共花了多久"：这条链路实测 ~118 KB/s，
+ * 一个 13.6 MB 的工作区快照**本来就要两分钟**，慢不等于死；而连续
+ * {@link STALL_TIMEOUT_MS} 一个字节都没有，才是真的断了。
+ *
+ * @param onChunk 给了它就**边收边交出去**（调用方写盘），否则在内存里攒成整包
+ */
+async function readBody(
+  res: Awaited<ReturnType<FetchLike>>,
+  options: BinaryStreamOptions,
+  label: string,
+  controller: AbortController,
+): Promise<{ bytes: Uint8Array; total: number }> {
+  const stallMs = options.stallTimeoutMs ?? STALL_TIMEOUT_MS
+  const onChunk = options.onChunk
+  const onProgress = options.onProgress
+  const chunks: Uint8Array[] = []
+  let total = 0
+
+  let stalled = false
+  /**
+   * 给一个 await 套上"卡死判据"：**每次等新数据都重新计时**，超时就抛。
+   *
+   * ⚠️ 不能只靠 `controller.abort()`：abort 会让**真实** fetch 的待决 `read()` 抛错，
+   * 但那是运行时行为，不是我们这段逻辑的保证（测试里的假流就不会理它）。
+   * 所以这里与一个会 reject 的计时器 race —— 到点必定收手，同时 abort 释放连接。
+   *
+   * `stall.catch(() => {})`：数据先到时这次 reject 没人接，不接会变成
+   * unhandled rejection（Node 直接报错）。
+   */
+  const withStall = async <T>(p: Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const stall = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        stalled = true
+        controller.abort()
+        reject(
+          new ServerError(
+            'unreachable',
+            `${label}中断：${Math.round(stallMs / 1000)} 秒没有收到数据（已收 ${humanBytes(total)}）—— 网络不稳或服务器中断，请重试。`,
+          ),
+        )
+      }, stallMs)
+    })
+    stall.catch(() => {})
+    try {
+      return await Promise.race([p, stall])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
   }
+  const take = (chunk: Uint8Array): void => {
+    total += chunk.byteLength
+    if (onChunk) onChunk(chunk)
+    else chunks.push(chunk)
+    onProgress?.(total)
+  }
+
+  try {
+    const reader = res.body?.getReader?.()
+    if (reader) {
+      for (;;) {
+        const { done, value } = await withStall(reader.read())
+        if (done) break
+        if (value && value.byteLength > 0) take(value)
+      }
+    } else {
+      // 没有正文流（假 fetch / 老运行时）：退回一次性取回，此时 stall 是整段的上限
+      const buf = new Uint8Array(await withStall(res.arrayBuffer()))
+      if (buf.byteLength > 0) take(buf)
+    }
+  } catch (e) {
+    if (stalled) {
+      throw new ServerError(
+        'unreachable',
+        `${label}中断：${Math.round(stallMs / 1000)} 秒没有收到数据（已收 ${humanBytes(total)}）—— 网络不稳或服务器中断，请重试。`,
+      )
+    }
+    throw new ServerError('unreachable', `${label}失败：${e instanceof Error ? e.message : String(e)}`)
+  }
+  if (onChunk) return { bytes: new Uint8Array(0), total }
+  const merged = new Uint8Array(total)
+  let at = 0
+  for (const c of chunks) {
+    merged.set(c, at)
+    at += c.byteLength
+  }
+  return { bytes: merged, total }
 }
 
 /** 从 `Content-Disposition` 里取文件名（优先 RFC 5987 的 `filename*`，其次 `filename=`）。 */
@@ -1133,29 +1284,37 @@ function filenameFromDisposition(value: string | null): string | null {
 }
 
 /**
- * 下载项目工作区的 **ZIP 快照**（`GET /projects/{id}/files/archive`）。
+ * 下载项目工作区的 **ZIP 快照**（`GET /projects/{id}/files/archive`），
+ * **边收边写进 `sink`**（不驻留内存、界面能看见进度）。
  *
- * ⚠️ 只把 ZIP 取回来落盘，**不解压**（2026-09 用户拍板：下载只负责把 .zip 存下来，
- * 其余交给用户处理）。文件名用服务器给的（`<owner>-<title>.zip`）—— 服务器才是
- * 命名的权威，插件不自造。
+ * ⚠️ 只把 ZIP 取回来落盘，**不解压**（2026-09 用户拍板）。文件名用服务器给的
+ * （`<owner>-<title>.zip`）—— 服务器才是命名的权威，插件不自造。
+ *
+ * 为什么要 `sink` 而不是返回 `Uint8Array`：这个快照实测 13.6 MB / 475 个文件，
+ * 在 ~118 KB/s 的链路上要**两分钟**。收完再写等于这两分钟里磁盘上什么都没有
+ * （用户 2026-09 报的「一直读取中」）；而且整包驻留内存随工作区规模膨胀。
+ *
+ * @param sink 写盘目标（宿主侧是 {@link openDownloadPart} 的 `.part` 文件）
+ * @returns `received` 实际字节数、`filename` 服务器给的文件名、`fileCount` 服务器声明的条目数
  */
 export async function fetchProjectArchive(
   base: string,
   apiKey: string,
   projectId: string,
-  options: ServerRequestOptions = {},
-): Promise<{ bytes: Uint8Array; filename: string | null }> {
+  sink: { write(chunk: Uint8Array): void },
+  options: BinaryStreamOptions = {},
+): Promise<{ received: number; filename: string | null; fileCount: number | null }> {
   const key = requireKey(apiKey)
   const id = (projectId ?? '').trim()
   if (!id) throw new ServerError('bad-request', '缺少 projectId。')
-  const { bytes, contentDisposition } = await fetchBinary(
+  const { contentDisposition, fileCount, received } = await fetchBinary(
     base,
     `/projects/${encodeURIComponent(id)}/files/archive`,
     key,
-    options,
+    { ...options, onChunk: (chunk) => sink.write(chunk) },
     '下载工作区快照',
   )
-  return { bytes, filename: filenameFromDisposition(contentDisposition) }
+  return { received, filename: filenameFromDisposition(contentDisposition), fileCount }
 }
 
 /**

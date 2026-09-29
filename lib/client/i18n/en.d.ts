@@ -222,6 +222,8 @@ export declare const en: {
     readonly 'community.exchange.sizeBadge': "{files} files · {size}";
     readonly 'community.exchange.zipOnly': "Only the ZIP is saved into the chosen workspace; no extraction — the rest is up to you.";
     readonly 'community.exchange.destHint': "Saves to: {dest}";
+    readonly 'community.exchange.downloading': "Downloaded {done} / ≈{total}";
+    readonly 'community.exchange.downloadingBtn': "Downloading…";
     readonly 'community.exchange.noWorkspaces': "No DSH workspace available (create one in DSH first).";
     readonly 'community.exchange.downloadDone': "Saved {name} into {dir}.";
     readonly 'community.exchange.dirLabel': "Workspace folder";

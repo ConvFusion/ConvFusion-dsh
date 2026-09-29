@@ -222,6 +222,8 @@ export declare const zh: {
     'community.exchange.sizeBadge': string;
     'community.exchange.zipOnly': string;
     'community.exchange.destHint': string;
+    'community.exchange.downloading': string;
+    'community.exchange.downloadingBtn': string;
     'community.exchange.noWorkspaces': string;
     'community.exchange.downloadDone': string;
     'community.exchange.dirLabel': string;

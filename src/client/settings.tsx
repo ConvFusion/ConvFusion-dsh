@@ -2752,6 +2752,8 @@ function DownloadDialog({
   files,
   bytes,
   busy,
+  /** 下载中已收到的字节数（宿主如实报告；null = 还没开始/已结束）。 */
+  received,
   notice,
   onSelect,
   onDownload,
@@ -2768,6 +2770,7 @@ function DownloadDialog({
   files: number | null
   bytes: number | null
   busy: boolean
+  received: number | null
   notice: { tone: 'success' | 'error'; text: string } | null
   onSelect: (id: string) => void
   onDownload: () => void
@@ -2780,6 +2783,14 @@ function DownloadDialog({
   const chosen = workspaces?.find((w) => w.id === selection)
   const dest = chosen ? `${chosen.path}/${fileName}` : ''
   const ready = Boolean(selection) && files !== null && files > 0 && !busy
+  /*
+   * 进度条的分母：预检给的字节数是**解压后**的合计（服务器发的是压缩 ZIP），
+   * 所以它只是上界，写「≈」。真实速率实测 ~120 KB/s 时十几 MB 要一两分钟 ——
+   * 这段时间界面必须动，否则「慢」和「死」长得一模一样（2026-09 用户反馈）。
+   */
+  const pct = busy && bytes && bytes > 0 && received !== null
+    ? Math.min(100, Math.round((received / bytes) * 100))
+    : null
   return (
     <div style={S.overlay} role="dialog" aria-modal="true">
       <div style={{ ...S.card, width: 'min(520px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
@@ -2836,6 +2847,36 @@ function DownloadDialog({
               {t('community.exchange.destHint', { dest })}
             </div>
           ) : null}
+          {/* 下载中：真实字节数 + 细进度条。不显示的话，慢链路下界面就是"卡住" */}
+          {busy ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <div style={S.hint}>
+                {received === null || !bytes
+                  ? t('community.action.loading')
+                  : t('community.exchange.downloading', {
+                      done: formatBytes(received),
+                      total: formatBytes(bytes),
+                    })}
+              </div>
+              <div
+                style={{
+                  height: 4,
+                  borderRadius: 2,
+                  background: 'var(--dsw-alias-border-l1)',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${pct ?? 0}%`,
+                    background: 'var(--dsw-alias-brand-primary, #4a43ea)',
+                    transition: 'width 400ms linear',
+                  }}
+                />
+              </div>
+            </div>
+          ) : null}
           {notice ? (
             <div
               style={{
@@ -2860,7 +2901,7 @@ function DownloadDialog({
               disabled={!ready}
               onClick={onDownload}
             >
-              {busy ? t('community.action.loading') : t('community.action.download')}
+              {busy ? t('community.exchange.downloadingBtn') : t('community.action.download')}
             </button>
           </div>
         </div>
@@ -3326,6 +3367,13 @@ function CommunityTab({
     notice: { tone: 'success' | 'error'; text: string } | null
   } | null>(null)
   const [downloadBusy, setDownloadBusy] = React.useState(false)
+  /**
+   * 下载中**已收到的字节数**（宿主 `mentor/downloadProgress` 如实报告）。
+   *
+   * 自己算不出来：浏览器这边是"一次请求一次响应"，字节在宿主进程里落地。
+   * `null` = 还没开始收到数据（与 0 不同：0 是"开始了但一个字节还没到"）。
+   */
+  const [downloadReceived, setDownloadReceived] = React.useState<number | null>(null)
   /** 上传对话框里的工作区目录（导师解压快照后写指导意见的地方）。 */
   const [uploadDir, setUploadDir] = React.useState('')
   /** 当前环境有没有可用的**系统**目录选择器（没有就只给手填输入框）。 */
@@ -3670,14 +3718,44 @@ function CommunityTab({
   const runDownload = async (): Promise<void> => {
     const target = download
     if (!target || !target.selection) return
+    const projectId = target.proposal.projectId
     setDownloadBusy(true)
+    setDownloadReceived(null)
     setDownload((prev) => (prev ? { ...prev, notice: null } : prev))
-    const res = await post('mentor/download', {
-      projectId: target.proposal.projectId,
-      workspaceId: target.selection,
-      prefix: downloadPrefix(target.proposal),
-    })
-    setDownloadBusy(false)
+    /*
+     * 下载期间**按秒问宿主收到了多少字节**。
+     *
+     * 为什么不在这条请求上做流式：浏览器↔宿主是请求/响应模型，`post` 只在整件事做完
+     * 才返回；而真实快照是十几 MB / 一两分钟（实测 13.6 MB、115 秒），那段时间界面
+     * 若只有一个转圈，用户分不清"慢"和"死" —— 2026-09 就是这么被报上来的。
+     * 轮询的代价是本地一次读取（宿主不触网、不读盘），比改通道简单得多。
+     *
+     * 轮询失败**不打断下载**：进度只是好看，不能让一个辅助调用把主流程弄挂。
+     */
+    let timer: ReturnType<typeof setInterval> | undefined
+    const stopPoll = (): void => {
+      if (timer !== undefined) clearInterval(timer)
+      timer = undefined
+    }
+    timer = setInterval(() => {
+      void post('mentor/downloadProgress', { projectId }).then((p) => {
+        if (!p.ok) return
+        const got = (p.value as { received?: number } | undefined)?.received
+        if (typeof got === 'number') setDownloadReceived(got)
+      })
+    }, 1000)
+    let res: Awaited<ReturnType<typeof post>>
+    try {
+      res = await post('mentor/download', {
+        projectId,
+        workspaceId: target.selection,
+        prefix: downloadPrefix(target.proposal),
+      })
+    } finally {
+      stopPoll()
+      setDownloadBusy(false)
+      setDownloadReceived(null)
+    }
     if (!res.ok) {
       setDownload((prev) =>
         prev
@@ -4752,6 +4830,7 @@ function CommunityTab({
           files={download.files}
           bytes={download.bytes}
           busy={downloadBusy}
+          received={downloadReceived}
           notice={download.notice}
           onSelect={(id) => setDownload((prev) => (prev ? { ...prev, selection: id } : prev))}
           onDownload={() => void runDownload()}

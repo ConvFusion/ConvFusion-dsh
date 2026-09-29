@@ -1951,7 +1951,13 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     /it\.id === workspaceId[\s\S]{0,200}?not-found/.test(rpc),
     '工作区按 id 在宿主侧解析（不接受任意路径）',
   )
-  assert(/writeFileUnique\(target\.path/.test(rpc), '写盘走 workspace-sync（RPC 层不做文件写入）')
+  assert(/openDownloadPart\(target\.path/.test(rpc), '写盘走 workspace-sync（RPC 层不做文件写入）')
+  assert(!/writeFileSync\(/.test(rpc), 'RPC 层自己不开文件句柄（写盘全在 workspace-sync）')
+  assert(/case 'mentor\/downloadProgress':/.test(rpc), '有下载进度端点（界面按秒问，宿主本地读）')
+  assert(
+    /fetchProjectArchive\([\s\S]{0,200}?part,/.test(rpc),
+    '下载把 sink 交给 fetchProjectArchive（边收边写，不整包驻留内存）',
+  )
   assert(!/extractZip|unzip|adm-zip/i.test(rpc), '宿主不解压（只存 ZIP，其余交给用户）')
   assert(/uploadReviewFiles\(base, apiKey, projectId, payload/.test(rpc), '回传走 uploadReviewFiles（review/ 前缀）')
   assert(/scanReviewFiles\(dir\)/.test(rpc), '上传源来自扫描（不接受任意路径）')
@@ -1972,6 +1978,8 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     'community.exchange.noWorkspaces',
     'community.exchange.zipOnly',
     'community.exchange.destHint',
+    'community.exchange.downloading',
+    'community.exchange.downloadingBtn',
     'community.exchange.uploadTitle',
     'community.exchange.uploadDone',
     'community.exchange.noPicker',

@@ -251,6 +251,9 @@ export const zh = {
   'community.exchange.sizeBadge': '{files} 个文件 · {size}',
   'community.exchange.zipOnly': '只把 ZIP 保存到所选工作区，不解压，其余你自己处理。',
   'community.exchange.destHint': '保存到：{dest}',
+  // 下载中：分母是**解压后**的合计（服务器发的是压缩 ZIP），所以写「≈」
+  'community.exchange.downloading': '已下载 {done} / ≈{total}',
+  'community.exchange.downloadingBtn': '下载中…',
   'community.exchange.noWorkspaces': '没有可用的 DSH 工作区（先在 DSH 里建一个）。',
   'community.exchange.downloadDone': '已保存 {name} 到 {dir}。',
     'community.exchange.dirLabel': '工作区目录',
