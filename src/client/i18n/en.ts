@@ -63,6 +63,8 @@ export const en = {
   'settings.editor.confirmSkill': 'Restore all sections of “{skill}”? This capability’s customizations will be deleted.',
 
   'community.title': 'ConvFusion.com',
+  'community.entry.label': 'ConvFusion.com',
+  'community.button.title': 'Open ConvFusion.com (account · research network)',
   'community.notice.published': '{title} · state v{version}',
   'community.notice.tokens': '{tokens} Token',
   'community.notice.files': '{count} attachment(s)',

@@ -62,6 +62,8 @@ export declare const en: {
     readonly 'settings.editor.confirmSection': "Restore the system default for “{section}”? Your customization will be deleted.";
     readonly 'settings.editor.confirmSkill': "Restore all sections of “{skill}”? This capability’s customizations will be deleted.";
     readonly 'community.title': "ConvFusion.com";
+    readonly 'community.entry.label': "ConvFusion.com";
+    readonly 'community.button.title': "Open ConvFusion.com (account · research network)";
     readonly 'community.notice.published': "{title} · state v{version}";
     readonly 'community.notice.tokens': "{tokens} Token";
     readonly 'community.notice.files': "{count} attachment(s)";

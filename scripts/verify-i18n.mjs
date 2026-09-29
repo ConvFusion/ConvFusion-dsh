@@ -52,7 +52,7 @@ const index = readFileSync(join(ROOT, 'src/client/index.tsx'), 'utf8')
 assert(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'), 'package 注入 dsh-client-locale')
 assert(/\['slots', 'configForms', 'locale'\]/.test(index), '浏览器插件硬依赖 locale 服务')
 assert(/ctx\.locale\.register\(CONVFUSION_LOCALE_NS, dictionaries\)/.test(index), '字典注册到独立 namespace')
-assert((index.match(/locale: CONVFUSION_LOCALE_NS/g) ?? []).length === 2, '设置页与进展按钮都声明 Slot locale')
+assert((index.match(/locale: CONVFUSION_LOCALE_NS/g) ?? []).length === 3, '设置页、进展按钮、ConvFusion.com 按钮都声明 Slot locale')
 assert(!/navigator\.language|localStorage/.test(index), '没有自建浏览器语言状态')
 
 console.log('\n[3] 客户端 bundle 原生装配')
@@ -99,11 +99,16 @@ const ctx = {
 client.apply(ctx)
 assert(registeredNamespace === 'convfusion', 'apply() 实际注册 convfusion namespace')
 assert(registeredDictionaries?.zh && registeredDictionaries?.en, 'apply() 实际注册中英字典')
-assert(registrations.length === 2, 'apply() 实际注册设置页与进展按钮两个 Slot')
-assert(registrations.every((entry) => entry.locale === 'convfusion'), '两个 Slot 实际绑定 convfusion locale')
+assert(registrations.length === 3, 'apply() 实际注册设置页 + 进展按钮 + ConvFusion.com 按钮三个 Slot')
+assert(registrations.every((entry) => entry.locale === 'convfusion'), '三个 Slot 实际绑定 convfusion locale')
 
 console.log('\n[4] UI 文案边界')
-for (const rel of ['src/client/index.tsx', 'src/client/settings.tsx', 'src/client/progress-panel.tsx']) {
+for (const rel of [
+  'src/client/index.tsx',
+  'src/client/settings.tsx',
+  'src/client/progress-panel.tsx',
+  'src/client/community-panel.tsx',
+]) {
   const source = readFileSync(join(ROOT, rel), 'utf8')
   const sf = ts.createSourceFile(rel, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
   const literals = []

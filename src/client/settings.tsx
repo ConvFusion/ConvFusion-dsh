@@ -176,7 +176,7 @@ interface HostAccount {
 }
 
 /** 【ConvFusion.com】的登录状态（宿主 `AccountState` 的镜像）。 */
-interface HostAccountState {
+export interface HostAccountState {
   serverUrl: string
   defaultServerUrl: string
   serverUrlSource: 'settings' | 'env' | 'config' | 'default'
@@ -3179,7 +3179,15 @@ function ServerPresetButton({
   )
 }
 
-function CommunityTab({
+/**
+ * 【设置】-【ConvFusion】-【ConvFusion.com】这一页的**全部内容**。
+ *
+ * ⚠️ 它同时被两处渲染：设置页的 Tab 2，以及会话头部的顶部按钮浮层
+ * （`./community-panel.js`）。所以它必须**自给自足** —— 自己读 `account/state`、
+ * 自己联网验证、自己持有全部对话状态；宿主状态传 `null` 也能正常站起来
+ * （`initial` 只是首屏的乐观初值，省掉一次闪烁）。
+ */
+export function CommunityTab({
   send,
   initial,
   t,

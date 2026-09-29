@@ -597,6 +597,19 @@ console.log('\n[8] 推进判定与自动继续闸门')
  * **源码/产物层面的回归守卫**（不许再出现这类状态、不许再占用对话流尾部槽位），
  * 也在 node 里求值 bundle，测真正的判定函数。
  * ════════════════════════════════════════════════════════════════════════ */
+
+// token 名单抄自 DSH 的 `@deepseek-ai/dsh-client-ui-theme`（alias 层）；写错名字会静默失效
+// （`[9]` 的进展面板与 `[9b]` 的 ConvFusion.com 浮层共用这一份）。
+const KNOWN_DSW_TOKENS = new Set([
+  '--dsw-alias-bg-base', '--dsw-alias-bg-layer-1', '--dsw-alias-bg-layer-2', '--dsw-alias-bg-layer-3',
+  '--dsw-alias-bg-mask-1', '--dsw-alias-bg-overlay', '--dsw-alias-bg-module-platform',
+  '--dsw-alias-border-l1', '--dsw-alias-border-l2', '--dsw-alias-border-l3', '--dsw-alias-border-l4',
+  '--dsw-alias-brand-primary', '--dsw-alias-button-tool-bar-fill', '--dsw-alias-button-tool-bar-hover',
+  '--dsw-alias-interactive-bg-hover', '--dsw-alias-interactive-bg-active',
+  '--dsw-alias-label-primary', '--dsw-alias-label-secondary', '--dsw-alias-label-tertiary',
+  '--dsw-alias-label-dimmed', '--dsw-alias-label-caption',
+  '--dsw-alias-state-business-primary', '--dsw-alias-state-error-primary', '--dsw-alias-tooltip-bg',
+])
 console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会话全局状态）')
 {
   const src = readFileSync(join(PKG, 'src', 'client', 'progress-panel.tsx'), 'utf8')
@@ -622,17 +635,7 @@ console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会�
   assert(bundle.includes('data-convfusion-progress-percent'), '按钮在图标旁显示百分比')
   assert(!/dsw-alias-bg-elevated|#1b1d22/.test(bundle), '不再使用不存在的 --dsw-alias-bg-elevated / 深色兜底')
 
-  // token 名单抄自 DSH 的 `@deepseek-ai/dsh-client-ui-theme`（alias 层）；写错名字会静默失效
-  const KNOWN_DSW_TOKENS = new Set([
-    '--dsw-alias-bg-base', '--dsw-alias-bg-layer-1', '--dsw-alias-bg-layer-2', '--dsw-alias-bg-layer-3',
-    '--dsw-alias-bg-mask-1', '--dsw-alias-bg-overlay', '--dsw-alias-bg-module-platform',
-    '--dsw-alias-border-l1', '--dsw-alias-border-l2', '--dsw-alias-border-l3', '--dsw-alias-border-l4',
-    '--dsw-alias-brand-primary', '--dsw-alias-button-tool-bar-fill', '--dsw-alias-button-tool-bar-hover',
-    '--dsw-alias-interactive-bg-hover', '--dsw-alias-interactive-bg-active',
-    '--dsw-alias-label-primary', '--dsw-alias-label-secondary', '--dsw-alias-label-tertiary',
-    '--dsw-alias-label-dimmed', '--dsw-alias-label-caption',
-    '--dsw-alias-state-business-primary', '--dsw-alias-state-error-primary', '--dsw-alias-tooltip-bg',
-  ])
+  // token 名单见本节前的 KNOWN_DSW_TOKENS（与 [9b] 共用）
   const usedTokens = [...new Set([...src.matchAll(/var\((--dsw-[a-z0-9-]+)/g)].map((m) => m[1]))]
   assert(usedTokens.length > 0, '面板确实使用 DSH 主题 token')
   for (const token of usedTokens) {
@@ -687,6 +690,77 @@ console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会�
 }
 
 rmSync(join(tmpdir(), 'nonexistent-cf-progress-'), { recursive: true, force: true })
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 9b. 客户端：顶部「ConvFusion.com」按钮 —— 内容**复用**设置页那一个 CommunityTab
+ *
+ * 它在同一个槽位（紧挨进展按钮），区别是**不按工作区判定**：账号、Token、研究工作
+ * 在任何会话里都可能要用到。这里守住三件事：
+ *   ① 与设置页是同一份实现（不是抄一份 UI，改一处两处同时生效）；
+ *   ② 面板是浅色浮层（token 必须真实存在，兜底值必须是浅色）；
+ *   ③ 静态边界：客户端不新增外部地址、不缓存凭据。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[9b] 客户端：顶部 ConvFusion.com 按钮（复用设置页的 CommunityTab）')
+{
+  const panelSrc = readFileSync(join(PKG, 'src', 'client', 'community-panel.tsx'), 'utf8')
+  const settingsSrc = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+  const bundle = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
+
+  assert(/export function CommunityTab\(/.test(settingsSrc), '设置页把 CommunityTab 导出（可被顶部浮层复用）')
+  assert(
+    /import \{ CommunityTab[^}]*\} from '\.\/settings\.js'/.test(panelSrc),
+    'ConvFusion.com 按钮 import 的是设置页那一个 CommunityTab（不是另写一份）',
+  )
+  assert(/<CommunityTab\s/.test(panelSrc), '浮层真的渲染 CommunityTab')
+  assert(!/settings\.tab\.local|settings\.editor/.test(panelSrc), '浮层没有抄设置页的其它内容（只承载这一页）')
+  assert(bundle.includes('id: "convfusion-community"') || bundle.includes("id: 'convfusion-community'"), '注册进同一个会话头部槽位（id = convfusion-community）')
+  assert(bundle.includes('data-convfusion-community-button'), '按钮带自己的标记属性（便于人工与离线确认）')
+  assert(bundle.includes('data-convfusion-community-panel'), '浮层带自己的标记属性')
+
+  /* ── 入口名与设置页标题**必须是两个 key**（用户 2026-09 拍板）────────────
+   *
+   * 顶部入口叫「科V社区」（英文界面仍是 ConvFusion.com），而设置页那一页的名字不动。
+   * 若两处共用 `community.title`，改入口名就会连带改掉设置页里那张卡片的标题 ——
+   * 那是没被要求的改动。这条断言就是防止将来"顺手合并 key"。
+   */
+  const zh = (await import(join(PKG, 'src', 'client', 'i18n', 'zh.ts'))).zh
+  const en = (await import(join(PKG, 'src', 'client', 'i18n', 'en.ts'))).en
+  assert(/community\.entry\.label/.test(panelSrc), '顶部入口用独立 key community.entry.label（不复用 community.title）')
+  assert(!/t\('community\.title'\)/.test(panelSrc), '浮层里不出现 community.title（设置页的名字不受影响）')
+  assertEq(zh['community.entry.label'], '科V社区', '中文界面顶部入口叫「科V社区」')
+  assertEq(en['community.entry.label'], 'ConvFusion.com', '英文界面顶部入口仍是 ConvFusion.com')
+  assertEq(zh['community.title'], 'ConvFusion.com', '设置页那一页的名字未被改动')
+
+  // 面板 = 自己画的浮层：底色/文字色必须用真实 token，兜底值必须是浅色
+  const usedTokens = [...new Set([...panelSrc.matchAll(/var\((--dsw-[a-z0-9-]+)/g)].map((m) => m[1]))]
+  assert(usedTokens.length > 0, '浮层确实使用 DSH 主题 token')
+  for (const token of usedTokens) {
+    assert(KNOWN_DSW_TOKENS.has(token), `token ${token} 是 DSH 真实存在的 alias token`)
+  }
+  assert(/--dsw-alias-bg-layer-2[^)]*,\s*#fff/i.test(panelSrc), '浮层底色用 bg-layer-2，兜底值是**浅色**')
+
+  // 静态边界：同源、无外部地址、不在浏览器里存凭据
+  assert(!/https?:\/\//.test(panelSrc), '浮层不写死任何服务器地址（内容全部经宿主 account/*）')
+  assert(!/localStorage|sessionStorage/.test(panelSrc), '浮层不在浏览器里缓存凭据')
+
+  // 复用是**结构上的**：bundle 只有一个 CommunityTab 定义（重复实现会各带一份）
+  const communityTabDefs = bundle.split('function CommunityTab(').length - 1
+  assertEq(communityTabDefs, 1, 'bundle 里只有一份 CommunityTab 实现（顶部浮层没有另造一份）')
+
+  // 导出面：离线测试与 HMR 都靠它拿到按钮
+  let mod = null
+  try {
+    let captured = null
+    new Function('window', bundle)({ __ModuleLoader__: { load: (m) => { captured = m } } })
+    mod = captured.factory(createRequire(import.meta.url))
+  } catch (e) {
+    assert(false, `bundle 可在 node 求值：${e instanceof Error ? e.message : String(e)}`)
+  }
+  if (mod) {
+    assertEq(typeof mod.ConvFusionComButton, 'function', 'bundle 导出 ConvFusionComButton')
+    assertEq(typeof mod.CommunityTab, 'function', 'bundle 导出 CommunityTab（两处共用同一个实现）')
+  }
+}
 
 console.log('\n[10] Research Guide：语言规定')
 {

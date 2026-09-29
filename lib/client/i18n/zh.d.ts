@@ -62,6 +62,8 @@ export declare const zh: {
     'settings.editor.confirmSection': string;
     'settings.editor.confirmSkill': string;
     'community.title': string;
+    'community.entry.label': string;
+    'community.button.title': string;
     'community.notice.published': string;
     'community.notice.tokens': string;
     'community.notice.files': string;

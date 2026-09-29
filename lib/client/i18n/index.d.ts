@@ -67,6 +67,8 @@ export declare const dictionaries: {
         'settings.editor.confirmSection': string;
         'settings.editor.confirmSkill': string;
         'community.title': string;
+        'community.entry.label': string;
+        'community.button.title': string;
         'community.notice.published': string;
         'community.notice.tokens': string;
         'community.notice.files': string;
@@ -583,6 +585,8 @@ export declare const dictionaries: {
         readonly 'settings.editor.confirmSection': "Restore the system default for “{section}”? Your customization will be deleted.";
         readonly 'settings.editor.confirmSkill': "Restore all sections of “{skill}”? This capability’s customizations will be deleted.";
         readonly 'community.title': "ConvFusion.com";
+        readonly 'community.entry.label': "ConvFusion.com";
+        readonly 'community.button.title': "Open ConvFusion.com (account · research network)";
         readonly 'community.notice.published': "{title} · state v{version}";
         readonly 'community.notice.tokens': "{tokens} Token";
         readonly 'community.notice.files': "{count} attachment(s)";

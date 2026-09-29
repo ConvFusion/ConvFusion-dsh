@@ -6,6 +6,7 @@
  * ```text
  * settings.section                       ← 【设置】-【ConvFusion】（本体在 ./settings.js）
  * conversation.session.header.utilities  ← 顶部「研究进展」按钮（本体在 ./progress-panel.js）
+ *                                        ← 顶部「ConvFusion.com」按钮（本体在 ./community-panel.js）
  * ```
  *
  * ## 两个容易踩的坑（重建时必看，来自 v0.1.5 的实测记录）
@@ -22,6 +23,7 @@ import logoUrl from '../../assets/favicon.svg'
 import { CONVFUSION_LOCALE_NS, dictionaries, type Translate } from './i18n/index.js'
 import { ConvFusionProjectSettings, loadSettingsState } from './settings.js'
 import { applyNavIcon, installNavIcon } from './nav-icon.js'
+import { ConvFusionComButton } from './community-panel.js'
 import {
   ResearchProgressButton,
   readProgressValue,
@@ -31,7 +33,10 @@ import {
 /** 供离线测试直接调用（bundle 的 `apply`/`inject` 之外再导出这些）。 */
 export { loadSettingsState, applyNavIcon, installNavIcon, logoUrl }
 export { preferredCategory, preferredSection, preferredSkill } from './settings.js'
+/** 【ConvFusion.com】这一页的正文：设置页与顶部浮层共用同一份（离线验证也要能拿到）。 */
+export { CommunityTab } from './settings.js'
 export { ResearchProgressButton, readProgressValue, shortenPath }
+export { ConvFusionComButton }
 
 /* ════════════════════════════════════════════════════════════════════════
  * 服务的结构化契约（镜像，不 import：见文件头第 2 条）
@@ -159,6 +164,22 @@ export function apply(ctx: ClientContext): void {
         locale: CONVFUSION_LOCALE_NS,
       },
       ResearchProgressButton as unknown as React.ComponentType<unknown>,
+    ),
+  )
+
+  // ── ConvFusion.com（顶部按钮 → 展开【设置】-【ConvFusion】-【ConvFusion.com】）──
+  // 与进展按钮同一个槽位、紧挨其后（order 21）。区别只有一条：**不按工作区判定** ——
+  // 账号、Token、研究工作/指导关系在任何会话里都可能要用到。
+  // 内容直接复用设置页那一个 `CommunityTab`（见 ./community-panel.js 的文件头）。
+  ctx.slots.inject('conversation.session.header.utilities', () =>
+    ctx.slots.register(
+      {
+        name: 'conversation.session.header.utilities',
+        id: 'convfusion-community',
+        order: 21,
+        locale: CONVFUSION_LOCALE_NS,
+      },
+      ConvFusionComButton as unknown as React.ComponentType<unknown>,
     ),
   )
 

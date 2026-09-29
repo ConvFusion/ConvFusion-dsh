@@ -65,6 +65,8 @@ export const zh = {
   'settings.editor.confirmSkill': '恢复「{skill}」的全部章节？该能力的定制会被删除。',
 
   'community.title': 'ConvFusion.com',
+  'community.entry.label': '科V社区',
+  'community.button.title': '打开科V社区（账号 · 研究网络）',
   'community.notice.published': '{title} · 研究状态 v{version}',
   'community.notice.tokens': '{tokens} Token',
   'community.notice.files': '{count} 附件',

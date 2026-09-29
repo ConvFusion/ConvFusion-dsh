@@ -6,6 +6,7 @@
  * ```text
  * settings.section                       ← 【设置】-【ConvFusion】（本体在 ./settings.js）
  * conversation.session.header.utilities  ← 顶部「研究进展」按钮（本体在 ./progress-panel.js）
+ *                                        ← 顶部「ConvFusion.com」按钮（本体在 ./community-panel.js）
  * ```
  *
  * ## 两个容易踩的坑（重建时必看，来自 v0.1.5 的实测记录）
@@ -20,11 +21,15 @@ import logoUrl from '../../assets/favicon.svg';
 import { type Translate } from './i18n/index.js';
 import { loadSettingsState } from './settings.js';
 import { applyNavIcon, installNavIcon } from './nav-icon.js';
+import { ConvFusionComButton } from './community-panel.js';
 import { ResearchProgressButton, readProgressValue, shortenPath } from './progress-panel.js';
 /** 供离线测试直接调用（bundle 的 `apply`/`inject` 之外再导出这些）。 */
 export { loadSettingsState, applyNavIcon, installNavIcon, logoUrl };
 export { preferredCategory, preferredSection, preferredSkill } from './settings.js';
+/** 【ConvFusion.com】这一页的正文：设置页与顶部浮层共用同一份（离线验证也要能拿到）。 */
+export { CommunityTab } from './settings.js';
 export { ResearchProgressButton, readProgressValue, shortenPath };
+export { ConvFusionComButton };
 interface ScopeSnapshot {
     status: 'loading' | 'ready' | 'unavailable';
     value: {
