@@ -48,6 +48,18 @@ import {
   type PaperDownloadDeps,
 } from './paper-download.js'
 import {
+  LEVELS as AC_LEVELS,
+  buildPrompt as acBuildPrompt,
+  evaluateDesign as acEvaluateDesign,
+  evaluateAnswer as acEvaluateAnswer,
+  levelSummary as acLevelSummary,
+  normaliseState as acNormaliseState,
+  parseAnswer as acParseAnswer,
+  sampleState as acSampleState,
+  type Design as AcDesign,
+  type ResearchState as AcState,
+} from './action-construction/index.js'
+import {
   INTERMEDIATE_TEX,
   LATEX_SUBDIR,
   MAIN_TEX,
@@ -124,6 +136,7 @@ export const OUTPUT_TOOL = 'research_output'
 export const LITERATURE_TOOL = 'research_literature_search'
 export const PAPER_DOWNLOAD_TOOL = 'research_paper_download'
 export const PAPER_LATEX_TOOL = 'research_paper_latex'
+export const ACTION_CONSTRUCTION_TOOL = 'research_action_construction'
 
 /** 把错误对象转成工具返回值（不抛异常，让模型看到原因并纠正）。 */
 function fail(error: string, extra: Record<string, unknown> = {}): Record<string, JsonValue> {
@@ -1774,6 +1787,215 @@ export function defineResearchTools(
     },
   })
 
+  /* ── Action Construction（Paper 4 的度量，纯计算）────────────────────── */
+  /**
+   * 论文 d4 的度量：一个决策买到的信息量取决于**动作是怎么写下来的**。
+   * 这里只做度量与规范化，不发模型调用——在 DSH 里"写动作"的是当前 agent 本身。
+   */
+  const actionConstructionTool = defineTool({
+    name: ACTION_CONSTRUCTION_TOOL,
+    description:
+      'Measure how much information a research action buys, as a function of how it was ' +
+      'written down (Action Construction, paper d4). An action such as "run an ablation" ' +
+      'names neither the mechanism nor the arms nor the seeds, so an executor must invent ' +
+      'them; the metric averages information gain per unit cost over the designs the answer ' +
+      'could mean, and reports the gap to an optimal design as a pointer gap, a resolution ' +
+      'gap and a feasibility term.\n' +
+      'Two scales are returned: `bound_share` (share of the unconstrained cost-efficiency ' +
+      'bound, the informativeness scale) and `compliant` (a design the stated budget cannot ' +
+      'pay for counts as buying nothing, normalised by the affordable optimum).\n' +
+      'Actions:\n' +
+      '- `prompt`: the prompt an agent at a given level receives (L1 named / L2 intent / ' +
+      'L3 structured / L4 + predicted); use it to ask a model for an action.\n' +
+      '- `evaluate`: score an answer (raw text parsed at `level`) or a structured `design`.\n' +
+      '- `sample`: return a synthetic research state from the built-in panel (demo/testing).\n' +
+      'Pass `state` for a real research state; otherwise `state_index` selects a synthetic one. ' +
+      'No model call is made and no file is written.',
+    parameters: {
+      action: {
+        type: 'string',
+        description: 'One of: prompt | evaluate | sample.',
+        enum: ['prompt', 'evaluate', 'sample'],
+      },
+      level: {
+        type: 'string',
+        description:
+          'Representation level. L1 named / L2 intent / L3 structured / L4 structured+predicted. ' +
+          'Defaults to L3.',
+        enum: [...AC_LEVELS],
+      },
+      answer: {
+        type: 'string',
+        description:
+          'For `evaluate`: the agent answer verbatim. It is parsed at `level` (last occurrence ' +
+          'of each field wins; a design that cannot discriminate two hypotheses counts as a ' +
+          'failed answer, not a repaired one).',
+      },
+      design: {
+        type: 'object',
+        additionalProperties: true,
+        description:
+          'For `evaluate`: a structured design instead of raw text, e.g. ' +
+          '{"action_type":"component_scan","target":1,"arms":[0,1,2,3,4,5],"n":11}.',
+      },
+      state: {
+        type: 'object',
+        additionalProperties: true,
+        description:
+          'The research state: {question, method, partial_results, mechanisms[6], arms[6], ' +
+          'prior[6], budget, truth?}. Mechanism count must match the environment (6).',
+      },
+      state_index: {
+        type: 'number',
+        description: 'Which synthetic state to use when `state` is omitted (0..29). Default 0.',
+      },
+      seed: {
+        type: 'number',
+        description: 'Seed for the synthetic panel. Default 11.',
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => {
+        const v = value as {
+          ok?: boolean
+          error?: string
+          action?: string
+          level?: string
+          prompt?: string
+          summary?: string
+          parse_status?: string
+          state?: AcState
+          evaluation?: {
+            ig_per_cost?: number
+            bound_share?: number
+            compliant?: number
+            feasible?: boolean
+            cost?: number | null
+            budget?: number
+            guess_rate?: number
+            pointer_gap?: number
+            resolution_gap?: number
+            status?: string
+          }
+        }
+        if (v.ok === false) return [{ type: 'text' as const, text: `Action construction failed: ${v.error ?? ''}` }]
+        if (v.action === 'prompt' && v.prompt) {
+          return [
+            {
+              type: 'text' as const,
+              text: `Prompt for ${v.level} (${v.summary ?? ''}):\n\n${v.prompt}`,
+            },
+          ]
+        }
+        if (v.state && !v.evaluation) {
+          const s = v.state
+          return [
+            {
+              type: 'text' as const,
+              text:
+                `Synthetic state: ${s.question}\n${s.partial_results}\nBelief: ` +
+                `${s.prior.map((p, i) => `h${i} ${p.toFixed(2)}`).join(' | ')} | budget ${s.budget}`,
+            },
+          ]
+        }
+        const e = v.evaluation
+        if (!e) return [{ type: 'text' as const, text: 'Action construction returned no evaluation.' }]
+        if (e.status !== 'ok') {
+          return [
+            {
+              type: 'text' as const,
+              text:
+                `No usable design (parse status: ${v.parse_status ?? 'unknown'}): ` +
+                `information gain 0, whole gap attributed to the resolution gap.`,
+            },
+          ]
+        }
+        const cost = e.cost === null || e.cost === undefined ? 'n/a' : e.cost.toFixed(2)
+        const overBudget = e.feasible === false ? ' OVER BUDGET' : ''
+        return [
+          {
+            type: 'text' as const,
+            text:
+              `IG/cost ${(e.ig_per_cost ?? 0).toFixed(4)} · ` +
+              `${(100 * (e.bound_share ?? 0)).toFixed(1)}% of the bound · ` +
+              `compliant ${(e.compliant ?? 0).toFixed(3)} · ` +
+              `cost ${cost} vs budget ${e.budget?.toFixed(1)}${overBudget} · ` +
+              `executor invents ${(100 * (e.guess_rate ?? 0)).toFixed(0)}% of the design · ` +
+              `gap: pointer ${(e.pointer_gap ?? 0).toFixed(4)} / resolution ${(e.resolution_gap ?? 0).toFixed(4)}`,
+          },
+        ]
+      },
+    },
+    isConcurrencySafe: () => true,
+    async execute(args) {
+      const a = (args ?? {}) as Record<string, unknown>
+      const action = String(a.action ?? 'evaluate')
+      const level = String(a.level ?? 'L3')
+      try {
+        if (!AC_LEVELS.includes(level as (typeof AC_LEVELS)[number])) {
+          return fail(`Unknown level "${level}".`, { allowed: [...AC_LEVELS] })
+        }
+        if (!['prompt', 'evaluate', 'sample'].includes(action)) {
+          return fail(`Unknown action "${action}".`, { allowed: ['prompt', 'evaluate', 'sample'] })
+        }
+        const state: AcState = a.state
+          ? acNormaliseState(a.state)
+          : acSampleState(Number(a.state_index ?? 0), Number(a.seed ?? 11))
+
+        if (action === 'prompt') {
+          return losslessJson({
+            ok: true,
+            action,
+            level,
+            summary: acLevelSummary(level as (typeof AC_LEVELS)[number]),
+            prompt: acBuildPrompt(state, level as (typeof AC_LEVELS)[number]),
+            state,
+          }) as unknown as Record<string, JsonValue>
+        }
+        if (action === 'sample') {
+          return losslessJson({
+            ok: true,
+            action,
+            state,
+            hint: 'Pass this state with action="prompt" to get the L3 prompt, or with ' +
+              'action="evaluate" and an answer to score it.',
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        // evaluate
+        if (a.answer === undefined && a.design === undefined) {
+          return fail('`evaluate` needs either `answer` (raw text) or `design` (structured).', {
+            hint: 'Use action="prompt" first to see what the agent is asked to write.',
+          })
+        }
+        const structured = a.design as AcDesign | undefined
+        const evaluation =
+          a.answer !== undefined
+            ? acEvaluateAnswer(state, String(a.answer), level)
+            : acEvaluateDesign(state, (structured ?? null) as AcDesign | null)
+        return losslessJson({
+          ok: true,
+          action: 'evaluate',
+          level,
+          state,
+          evaluation,
+          parse_status: 'parse_status' in evaluation ? evaluation.parse_status : 'direct',
+        }) as unknown as Record<string, JsonValue>
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e))
+      }
+    },
+    presentCall: (args) => {
+      const a = args as { action?: string; level?: string }
+      return {
+        card: 'generic',
+        title: `Action construction · ${a.action ?? 'evaluate'} ${a.level ?? ''}`.trim(),
+        kind: 'execute',
+      }
+    },
+  })
+
   return [
     projectTool as ToolDefinition,
     evidenceTool as ToolDefinition,
@@ -1786,6 +2008,7 @@ export function defineResearchTools(
     literatureTool as ToolDefinition,
     paperDownloadTool as ToolDefinition,
     paperLatexTool as ToolDefinition,
+    actionConstructionTool as ToolDefinition,
   ]
 }
 
