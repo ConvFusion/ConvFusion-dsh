@@ -56,6 +56,7 @@ import { loadSkillLibrary } from './library.js'
 import { listPlans, loadPlanLibrary, syncPlanHistoryDetailed } from './plan-library.js'
 import { createPlanMessage } from './plan.js'
 import { listEvidence } from './evidence.js'
+import { readActionRecords, readActionState, summariseActionRecords } from './action-construction/index.js'
 import { writeMethodsExport } from './methods-export.js'
 import type { SkillCustomizationStore } from './skill-customization.js'
 
@@ -81,6 +82,9 @@ interface CommandRuntimeLike {
 
 /** 品牌展示。 */
 export const RESEARCH_LABEL = '/research'
+
+/** 提示 agent 该写哪个文件；显示用，不参与判定。 */
+const ACTION_STATE_HINT = 'research/action-state.json — write it via research_action_construction action="set_state"'
 
 /**
  * 研究目录骨架。
@@ -150,7 +154,46 @@ function openProject(workspace: string, topic: string): { created: boolean } {
 }
 
 /**
- * 当前研究状态摘要（`/research` 无参数）。
+ * `/research` 状态里的「动作构造」块（论文 d4）。
+ *
+ * 只在工作区真的配了状态或记录过评测时返回内容 —— 没配就返回空数组，
+ * 不往用户的状态显示里堆噪音。导出是为了可测：`verify-action-construction.mjs` 直接断言它。
+ */
+export function actionConstructionStatus(workspace: string): string[] {
+  const actionState = readActionState(workspace)
+  const actionSummary = summariseActionRecords(workspace)
+  if (!actionState && actionSummary.count === 0) return []
+
+  const lines: string[] = ['']
+  if (actionState) {
+    const belief = actionState.prior.map((p, i) => `h${i} ${p.toFixed(2)}`).join(' | ')
+    lines.push(
+      `Action state: budget ${actionState.budget} · belief ${belief} · ` +
+        `${actionState.mechanisms.length} candidate mechanisms`,
+    )
+  } else {
+    lines.push(`Action state: not set (\`${ACTION_STATE_HINT}\`)`)
+  }
+  if (actionSummary.count > 0) {
+    lines.push(
+      `Action construction: ${actionSummary.count} evaluation(s), ` +
+        `${actionSummary.inBudget} within the stated budget`,
+    )
+    for (const record of readActionRecords(workspace, 3).reverse()) {
+      const cost = record.cost === null ? 'n/a' : record.cost.toFixed(2)
+      lines.push(
+        `  - ${record.at.slice(0, 16).replace('T', ' ')} ${record.level}: ` +
+          `IG/cost ${record.ig_per_cost.toFixed(4)} · ${(100 * record.bound_share).toFixed(1)}% of the bound · ` +
+          `cost ${cost}/${record.budget.toFixed(1)} · ${record.feasible ? 'in budget' : 'OVER BUDGET'}`,
+      )
+    }
+  } else {
+    lines.push('Action construction: state set, no evaluation recorded yet')
+  }
+  return lines
+}
+
+/** 当前研究状态摘要（`/research` 无参数）。
  *
  * 列出**各阶段产出的 Plan 及其状态** —— 这正是"每个阶段形成一份可优化、可继续运行的
  * Plan"的体现：用户在这里看到"手上现在有哪些方案、各自到哪一步"。
@@ -205,6 +248,8 @@ function describeProject(workspace: string): string {
     `Skills: ${skills.counts.total} (system ${skills.counts.system} · user ${skills.counts.user} · derived ${skills.counts.derived})`,
   )
   lines.push(`Evidence: ${evidence.length} item(s)`)
+
+  lines.push(...actionConstructionStatus(workspace))
   lines.push('')
   lines.push('Continue with natural language — e.g. "analyse the direction", "design the experiment",')
   lines.push('"re-check the baseline claim". The agent decides what to do; there is no step list to follow.')

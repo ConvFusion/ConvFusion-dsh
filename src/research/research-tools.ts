@@ -48,14 +48,24 @@ import {
   type PaperDownloadDeps,
 } from './paper-download.js'
 import {
+  ACTION_LOG_FILE,
+  ACTION_STATE_FILE,
   LEVELS as AC_LEVELS,
+  appendActionRecord as acAppendRecord,
   buildPrompt as acBuildPrompt,
+  constructFromCandidates as acConstructFromCandidates,
+  explainConstruction as acExplainConstruction,
+  extractCandidates as acExtractCandidates,
   evaluateDesign as acEvaluateDesign,
   evaluateAnswer as acEvaluateAnswer,
   levelSummary as acLevelSummary,
   normaliseState as acNormaliseState,
-  parseAnswer as acParseAnswer,
+  readActionRecords as acReadRecords,
+  readActionState as acReadState,
   sampleState as acSampleState,
+  summariseActionRecords as acSummariseRecords,
+  toRecord as acToRecord,
+  writeActionState as acWriteState,
   type Design as AcDesign,
   type ResearchState as AcState,
 } from './action-construction/index.js'
@@ -78,7 +88,7 @@ import {
 } from './latex-compile.js'
 import { parseSections, stripFrontmatter, findSection, parseFrontmatter } from './markdown.js'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import {
   createEvidence,
   evidenceClaim,
@@ -1791,6 +1801,12 @@ export function defineResearchTools(
   /**
    * 论文 d4 的度量：一个决策买到的信息量取决于**动作是怎么写下来的**。
    * 这里只做度量与规范化，不发模型调用——在 DSH 里"写动作"的是当前 agent 本身。
+   *
+   * 在 `/research` 里的用法（实验前）：
+   *   set_state（把这次实验的机制集/臂/信念/预算写下来）
+   *     → prompt（拿到该层级的提示词）→ evaluate（打分）→ record（落盘）
+   *   → 预算闸门 + `action-construction` 信号据此判断"这个动作写成了可执行设计、且预算付得起"
+   *     → 才允许发真实调用。
    */
   const actionConstructionTool = defineTool({
     name: ACTION_CONSTRUCTION_TOOL,
@@ -1809,13 +1825,32 @@ export function defineResearchTools(
       'L3 structured / L4 + predicted); use it to ask a model for an action.\n' +
       '- `evaluate`: score an answer (raw text parsed at `level`) or a structured `design`.\n' +
       '- `sample`: return a synthetic research state from the built-in panel (demo/testing).\n' +
-      'Pass `state` for a real research state; otherwise `state_index` selects a synthetic one. ' +
-      'No model call is made and no file is written.',
+      '- `state`: show the state this workspace scores against (`research/action-state.json`).\n' +
+      '- `set_state`: write that state (the candidate mechanisms, the arms, the belief and ' +
+      'the budget the experiment is decided under) so the next action can be measured.\n' +
+      '- `record`: evaluate an action and append the result to ' +
+      '`research/action-construction.jsonl` — the trace the experiment gate reads.\n' +
+      '- `report`: summarise the recorded evaluations (count, in-budget rate, latest).\n' +
+      '- `extract`: build action objects from actions that already exist — the steps of a ' +
+      'plan (`plan`) or a list of action texts (`actions`). Each item is classified as ' +
+      'measurable by this metric (an ablation-design action) or not, and measurable ones get ' +
+      'a constructed object plus both scores (as written / constructed). Use `record: true` ' +
+      'to log the ones you are about to run. This is the path that works while the decision ' +
+      'layer (paper 1) does not exist yet: plan steps and the agent\'s own proposals are ' +
+      'already actions, they are just not written in a measurable form.\n' +
+      'State resolution order: explicit `state` argument, else the workspace state written by ' +
+      '`set_state`, else `state_index` for a synthetic demo state. `record` and the experiment ' +
+      'gate need a *real* workspace state — a synthetic panel state is for demos only. ' +
+      'No model call is made; only `set_state` and `record` write to the workspace.',
     parameters: {
       action: {
         type: 'string',
-        description: 'One of: prompt | evaluate | sample.',
-        enum: ['prompt', 'evaluate', 'sample'],
+        description:
+          'One of: prompt | evaluate | sample | state | set_state | record | report | extract. ' +
+          '`record` = evaluate + append to the workspace log (what the experiment gate reads).',
+        enum: [
+          'prompt', 'evaluate', 'sample', 'state', 'set_state', 'record', 'report', 'extract',
+        ],
       },
       level: {
         type: 'string',
@@ -1853,6 +1888,37 @@ export function defineResearchTools(
         type: 'number',
         description: 'Seed for the synthetic panel. Default 11.',
       },
+      note: {
+        type: 'string',
+        description:
+          'For `record`: why this action was chosen (kept next to the numbers in the log).',
+      },
+      plan: {
+        type: 'string',
+        description:
+          'For `extract`: workspace-relative Markdown to mine for action-like steps, e.g. ' +
+          '"plans/experiment-pipeline.md". Checklist items, numbered steps and plan-step ' +
+          'table rows are recognised.',
+      },
+      text: {
+        type: 'string',
+        description: 'For `extract`: Markdown text to mine instead of a file.',
+      },
+      actions: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'For `extract`: explicit action texts to construct objects for (e.g. pasted from a ' +
+          'plan, or the actions an agent proposed). Each is parsed, or its design shape is ' +
+          'inferred from the wording.',
+      },
+      ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'For `extract` with `record: true`: which extracted ids to log. Default: the first ' +
+          'constructed action the stated budget can pay for (never a silent bulk write).',
+      },
     },
     output: {
       schema: { type: 'object', additionalProperties: true },
@@ -1862,6 +1928,15 @@ export function defineResearchTools(
           error?: string
           action?: string
           level?: string
+          source?: string
+          path?: string
+          configured?: boolean
+          hint?: string
+          next?: string
+          count?: number
+          inBudget?: number
+          latest?: { ig_per_cost: number; bound_share: number; feasible: boolean; cost: number | null; budget: number }
+          recent?: Array<{ level: string; ig_per_cost: number; bound_share: number; feasible: boolean; cost: number | null; budget: number; at: string; note?: string }>
           prompt?: string
           summary?: string
           parse_status?: string
@@ -1880,6 +1955,61 @@ export function defineResearchTools(
           }
         }
         if (v.ok === false) return [{ type: 'text' as const, text: `Action construction failed: ${v.error ?? ''}` }]
+
+        const describeState = (s: AcState): string =>
+          `${s.question}\n${s.partial_results}\nBelief: ` +
+          `${s.prior.map((p, i) => `h${i} ${p.toFixed(2)}`).join(' | ')} | budget ${s.budget}`
+
+        /* state / set_state / report: the workspace flow around the metric */
+        if (v.action === 'state') {
+          if (v.configured === false) {
+            return [{ type: 'text' as const, text: `${v.hint ?? 'No action state yet.'} (${v.path ?? ''})` }]
+          }
+          return [{ type: 'text' as const, text: `Action state (${v.path ?? ''}):\n${v.state ? describeState(v.state) : ''}` }]
+        }
+        if (v.action === 'set_state') {
+          return [
+            {
+              type: 'text' as const,
+              text: `Action state written → ${v.path ?? ''}\n${v.state ? describeState(v.state) : ''}\n${v.next ?? ''}`,
+            },
+          ]
+        }
+        if (v.action === 'report') {
+          const lines = [`Action construction log (${v.path ?? ''}): ${v.count ?? 0} evaluation(s), ${v.inBudget ?? 0} within the stated budget.`]
+          for (const r of (v.recent ?? []).slice().reverse()) {
+            const cost = r.cost === null || r.cost === undefined ? 'n/a' : r.cost.toFixed(2)
+            lines.push(
+              `  - ${r.at.slice(0, 16).replace('T', ' ')} ${r.level}: IG/cost ${r.ig_per_cost.toFixed(4)} · ` +
+                `${(100 * r.bound_share).toFixed(1)}% of the bound · cost ${cost}/${r.budget.toFixed(1)} · ` +
+                `${r.feasible ? 'in budget' : 'OVER BUDGET'}${r.note ? ` · ${r.note}` : ''}`,
+            )
+          }
+          return [{ type: 'text' as const, text: lines.join('\n') }]
+        }
+        if (v.action === 'extract') {
+          const lines: string[] = []
+          const items = (v as unknown as { items?: Array<{ id: string; actionType: string | null; text: string; design: { target: number | null; arms: number[] | null; n: number | null }; constructed: { ig_per_cost: number; bound_share: number; feasible: boolean; cost: number | null; budget: number }; as_written: { ig_per_cost: number; guess_rate: number } }> }).items ?? []
+          const skipped = (v as unknown as { skipped?: Array<{ id: string; text: string; reason: string }> }).skipped ?? []
+          const recorded = (v as unknown as { recorded?: string[] }).recorded ?? []
+          lines.push(
+            `Action objects: ${items.length} measurable · ${skipped.length} not covered by this metric` +
+              (recorded.length > 0 ? ` · recorded: ${recorded.join(', ')}` : ''),
+          )
+          for (const item of items) {
+            const e = item.constructed
+            const cost = e.cost === null ? 'n/a' : e.cost.toFixed(2)
+            lines.push(
+              `  ${item.id}  ${item.actionType ?? '?'} → target ${item.design.target}, arms [${(item.design.arms ?? []).join(',')}], seeds ${item.design.n}` +
+                `  ·  ${(100 * e.bound_share).toFixed(1)}% of the bound · cost ${cost}/${e.budget.toFixed(1)} · ${e.feasible ? 'in budget' : 'OVER BUDGET'}` +
+                `  ·  as written ${item.as_written.ig_per_cost.toFixed(4)} (executor invents ${(100 * item.as_written.guess_rate).toFixed(0)}%)`,
+            )
+          }
+          for (const item of skipped.slice(0, 5)) {
+            lines.push(`  ${item.id}  skipped — ${item.reason}`)
+          }
+          return [{ type: 'text' as const, text: lines.join('\n') }]
+        }
         if (v.action === 'prompt' && v.prompt) {
           return [
             {
@@ -1889,15 +2019,7 @@ export function defineResearchTools(
           ]
         }
         if (v.state && !v.evaluation) {
-          const s = v.state
-          return [
-            {
-              type: 'text' as const,
-              text:
-                `Synthetic state: ${s.question}\n${s.partial_results}\nBelief: ` +
-                `${s.prior.map((p, i) => `h${i} ${p.toFixed(2)}`).join(' | ')} | budget ${s.budget}`,
-            },
-          ]
+          return [{ type: 'text' as const, text: `Synthetic state:\n${describeState(v.state)}` }]
         }
         const e = v.evaluation
         if (!e) return [{ type: 'text' as const, text: 'Action construction returned no evaluation.' }]
@@ -1913,6 +2035,7 @@ export function defineResearchTools(
         }
         const cost = e.cost === null || e.cost === undefined ? 'n/a' : e.cost.toFixed(2)
         const overBudget = e.feasible === false ? ' OVER BUDGET' : ''
+        const recorded = v.action === 'record' ? `\nrecorded → ${v.path ?? ''}` : ''
         return [
           {
             type: 'text' as const,
@@ -1922,62 +2045,232 @@ export function defineResearchTools(
               `compliant ${(e.compliant ?? 0).toFixed(3)} · ` +
               `cost ${cost} vs budget ${e.budget?.toFixed(1)}${overBudget} · ` +
               `executor invents ${(100 * (e.guess_rate ?? 0)).toFixed(0)}% of the design · ` +
-              `gap: pointer ${(e.pointer_gap ?? 0).toFixed(4)} / resolution ${(e.resolution_gap ?? 0).toFixed(4)}`,
+              `gap: pointer ${(e.pointer_gap ?? 0).toFixed(4)} / resolution ${(e.resolution_gap ?? 0).toFixed(4)}` +
+              recorded,
           },
         ]
       },
     },
     isConcurrencySafe: () => true,
-    async execute(args) {
+    async execute(args, exec) {
       const a = (args ?? {}) as Record<string, unknown>
       const action = String(a.action ?? 'evaluate')
       const level = String(a.level ?? 'L3')
+      const workspace = resolveWorkspace(exec?.agent)
       try {
         if (!AC_LEVELS.includes(level as (typeof AC_LEVELS)[number])) {
           return fail(`Unknown level "${level}".`, { allowed: [...AC_LEVELS] })
         }
-        if (!['prompt', 'evaluate', 'sample'].includes(action)) {
-          return fail(`Unknown action "${action}".`, { allowed: ['prompt', 'evaluate', 'sample'] })
+        const allowed = ['prompt', 'evaluate', 'sample', 'state', 'set_state', 'record', 'report', 'extract']
+        if (!allowed.includes(action)) return fail(`Unknown action "${action}".`, { allowed })
+
+        /* ── `state` / `set_state`: the state this workspace scores against ── */
+        if (action === 'state') {
+          const state = acReadState(workspace)
+          if (!state) {
+            return losslessJson({
+              ok: true,
+              action,
+              configured: false,
+              path: ACTION_STATE_FILE,
+              hint:
+                'No action state yet. Write one with action="set_state" and a `state` object ' +
+                '({question, method, partial_results, mechanisms[6], arms[6], prior[6], budget, truth?}) ' +
+                'so the next experiment can be measured instead of just named.',
+            }) as unknown as Record<string, JsonValue>
+          }
+          return losslessJson({ ok: true, action, configured: true, path: ACTION_STATE_FILE, state }) as unknown as Record<string, JsonValue>
         }
-        const state: AcState = a.state
-          ? acNormaliseState(a.state)
-          : acSampleState(Number(a.state_index ?? 0), Number(a.seed ?? 11))
+        if (action === 'set_state') {
+          if (a.state === undefined) {
+            return fail('`set_state` needs a `state` object.', { path: ACTION_STATE_FILE })
+          }
+          const path = acWriteState(workspace, a.state)
+          return losslessJson({
+            ok: true,
+            action,
+            path,
+            state: acReadState(workspace),
+            next: 'Use action="prompt" to get the L3 prompt, then action="record" to log the evaluation.',
+          }) as unknown as Record<string, JsonValue>
+        }
+        if (action === 'report') {
+          const summary = acSummariseRecords(workspace)
+          return losslessJson({
+            ok: true,
+            action,
+            path: ACTION_LOG_FILE,
+            count: summary.count,
+            inBudget: summary.inBudget,
+            latest: summary.latest,
+            recent: acReadRecords(workspace, 5),
+          }) as unknown as Record<string, JsonValue>
+        }
+        if (action === 'sample') {
+          const state = acSampleState(Number(a.state_index ?? 0), Number(a.seed ?? 11))
+          return losslessJson({
+            ok: true,
+            action,
+            state,
+            note:
+              'Synthetic panel state — good for a demo, but `record` and the experiment gate ' +
+              'expect the workspace state (action="set_state").',
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        /* ── state resolution: explicit > workspace > synthetic ── */
+        let state: AcState | null = null
+        let source = ''
+        if (a.state !== undefined) {
+          state = acNormaliseState(a.state)
+          source = 'argument'
+        } else {
+          state = acReadState(workspace)
+          source = state ? ACTION_STATE_FILE : ''
+        }
+        if (!state) {
+          if (a.state_index !== undefined) {
+            state = acSampleState(Number(a.state_index), Number(a.seed ?? 11))
+            source = 'synthetic panel'
+          } else {
+            return fail(
+              `No state to score against: this workspace has no ${ACTION_STATE_FILE}.`,
+              {
+                fix: 'Write one with action="set_state" (recommended), pass `state` explicitly, ' +
+                  'or pass `state_index` to try a synthetic state.',
+              },
+            )
+          }
+        }
+
+        if (action === 'extract') {
+          // Build action objects from actions that already exist in the workspace.  This is
+          // the path that works before the decision layer exists: plan steps and proposals
+          // are actions already, they are just not written in a measurable form.
+          const fromActions = Array.isArray(a.actions)
+            ? (a.actions as unknown[]).map((x) => `- [ ] ${String(x)}`).join('\n')
+            : ''
+          let fromPlan = ''
+          let planPath = ''
+          if (a.plan !== undefined) {
+            planPath = String(a.plan)
+            const full = isAbsolute(planPath) ? planPath : join(workspace, planPath)
+            if (!existsSync(full)) {
+              return fail(`Plan not found: ${planPath}`, { workspace })
+            }
+            fromPlan = readFileSync(full, 'utf8')
+          }
+          const fromText = a.text !== undefined ? String(a.text) : ''
+          const markdown = [fromPlan, fromText, fromActions].filter(Boolean).join('\n')
+          if (!markdown.trim()) {
+            return fail('`extract` needs `plan` (a Markdown file), `text` (Markdown) or `actions`.')
+          }
+          const candidates = acExtractCandidates(markdown, planPath || 'actions')
+          const constructed = acConstructFromCandidates(state, candidates)
+          const byId = new Map(constructed.map((item) => [item.candidate.id, item]))
+
+          let recorded: string[] = []
+          if (a.record === true) {
+            const requested = Array.isArray(a.ids) ? (a.ids as unknown[]).map(String) : []
+            const selected = requested.length > 0
+              ? requested.filter((id) => byId.has(id))
+              : [...byId.values()].filter((item) => item.constructed.feasible).slice(0, 1).map((i) => i.candidate.id)
+            for (const id of selected) {
+              const item = byId.get(id)
+              if (!item) continue
+              acAppendRecord(
+                workspace,
+                acToRecord(item.constructed, {
+                  level,
+                  answer: item.candidate.text,
+                  design: item.design,
+                  note: `${item.candidate.id}: ${item.candidate.text.slice(0, 80)}`,
+                }),
+              )
+              recorded.push(id)
+            }
+          }
+
+          return losslessJson({
+            ok: true,
+            action,
+            level,
+            source,
+            plan: planPath || null,
+            candidates: candidates.length,
+            measurable: constructed.length,
+            items: constructed.map((item) => ({
+              id: item.candidate.id,
+              text: item.candidate.text,
+              actionType: item.candidate.actionType,
+              confidence: item.candidate.confidence,
+              calls: item.candidate.calls,
+              materialisedFrom: item.materialisedFrom ?? null,
+              design: item.design,
+              as_written: item.asWritten,
+              constructed: item.constructed,
+              note: acExplainConstruction(item),
+            })),
+            skipped: candidates
+              .filter((c) => !c.measurable)
+              .map((c) => ({ id: c.id, text: c.text, reason: c.reason ?? 'not an ablation-design action' })),
+            recorded,
+            hint:
+              'Review the constructed objects (target/arms/seeds), edit the ones you disagree ' +
+              'with, then run. `record: true` logs the selected ids so the experiment gate can ' +
+              'see them.',
+          }) as unknown as Record<string, JsonValue>
+        }
 
         if (action === 'prompt') {
           return losslessJson({
             ok: true,
             action,
             level,
+            source,
             summary: acLevelSummary(level as (typeof AC_LEVELS)[number]),
             prompt: acBuildPrompt(state, level as (typeof AC_LEVELS)[number]),
             state,
           }) as unknown as Record<string, JsonValue>
         }
-        if (action === 'sample') {
-          return losslessJson({
-            ok: true,
-            action,
-            state,
-            hint: 'Pass this state with action="prompt" to get the L3 prompt, or with ' +
-              'action="evaluate" and an answer to score it.',
-          }) as unknown as Record<string, JsonValue>
-        }
 
-        // evaluate
+        /* ── evaluate / record ── */
         if (a.answer === undefined && a.design === undefined) {
-          return fail('`evaluate` needs either `answer` (raw text) or `design` (structured).', {
+          return fail('`evaluate`/`record` need either `answer` (raw text) or `design` (structured).', {
             hint: 'Use action="prompt" first to see what the agent is asked to write.',
           })
         }
         const structured = a.design as AcDesign | undefined
-        const evaluation =
-          a.answer !== undefined
-            ? acEvaluateAnswer(state, String(a.answer), level)
-            : acEvaluateDesign(state, (structured ?? null) as AcDesign | null)
+        const answered = a.answer !== undefined
+        const evaluation = answered
+          ? acEvaluateAnswer(state, String(a.answer), level)
+          : acEvaluateDesign(state, (structured ?? null) as AcDesign | null)
+
+        if (action === 'record') {
+          const record = acToRecord(evaluation, {
+            level,
+            answer: answered ? String(a.answer) : null,
+            design: structured ?? null,
+            ...(a.note !== undefined ? { note: String(a.note) } : {}),
+          })
+          const path = acAppendRecord(workspace, record)
+          return losslessJson({
+            ok: true,
+            action,
+            level,
+            source,
+            path,
+            state,
+            evaluation,
+            record,
+          }) as unknown as Record<string, JsonValue>
+        }
+
         return losslessJson({
           ok: true,
           action: 'evaluate',
           level,
+          source,
           state,
           evaluation,
           parse_status: 'parse_status' in evaluation ? evaluation.parse_status : 'direct',

@@ -24,13 +24,14 @@ import { listClaims, listDecisions } from './claims.js';
 import { listEvidence } from './evidence.js';
 import { listPlanDocuments } from './plans.js';
 import { loadProjectFile } from './project.js';
+import { summariseActionRecords } from './action-construction/index.js';
 /**
  * 判定信号词表。
  *
  * ⚠️ 固定词表是刻意的：用户能改**过程 / 依赖图**，但改不了**判定逻辑**。
  * 允许任意表达式会让一个笔误把"当前阶段"永久判错，而且无法校验。
  */
-export declare const STAGE_SIGNALS: readonly ["topic-proposed", "problem-defined", "literature-evidence", "claims", "method-plan", "experiments", "settled-evidence", "decisions", "manuscript", "resource-estimate", "simulation-result", "fulltext-analyzed", "experiment-budget"];
+export declare const STAGE_SIGNALS: readonly ["topic-proposed", "problem-defined", "literature-evidence", "claims", "method-plan", "experiments", "settled-evidence", "decisions", "manuscript", "resource-estimate", "simulation-result", "fulltext-analyzed", "experiment-budget", "action-construction"];
 export type StageSignal = (typeof STAGE_SIGNALS)[number];
 /** 信号判定的运行时上下文（一次性读盘，供阶段评估与前置评估共用）。 */
 export interface SignalContext {
@@ -54,6 +55,10 @@ export interface SignalContext {
     } | null;
     /** `experiments/**` 下最新的缓存/结果文件时间戳；0 = 还没有跑过。 */
     latestRunArtifactMs: number;
+    /** 是否已写下可度量的动作状态（`research/action-state.json`）。 */
+    hasActionState: boolean;
+    /** 动作构造记录（`research/action-construction.jsonl`）的条数、在预算内的条数与最近一条。 */
+    actionConstruction: ReturnType<typeof summariseActionRecords>;
 }
 /** 读盘构建信号判定上下文（每次评估都重新求值以确保动态性）。 */
 export declare function buildSignalContext(workspace: string): SignalContext;

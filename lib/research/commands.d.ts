@@ -48,6 +48,13 @@ import type { SkillCustomizationStore } from './skill-customization.js';
 /** 品牌展示。 */
 export declare const RESEARCH_LABEL = "/research";
 /**
+ * `/research` 状态里的「动作构造」块（论文 d4）。
+ *
+ * 只在工作区真的配了状态或记录过评测时返回内容 —— 没配就返回空数组，
+ * 不往用户的状态显示里堆噪音。导出是为了可测：`verify-action-construction.mjs` 直接断言它。
+ */
+export declare function actionConstructionStatus(workspace: string): string[];
+/**
  * 注册 `/research`（ConvFusion 的唯一命令）。
  *
  * @param customizationStore 用户定制来源：导出研究方法时要导**生效版本**（基线 + 定制）

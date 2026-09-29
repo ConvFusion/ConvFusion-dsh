@@ -223,6 +223,61 @@ console.log('\n[8] 执行闸信号 `experiment-budget`（预算存在 + 不早�
   }
 }
 
+console.log('\n[9] 动作构造信号 `action-construction`（动作写成可执行设计 + 预算付得起）')
+{
+  const ws = mkdtempSync(join(tmpdir(), 'cf-action-'))
+  try {
+    mkdirSync(join(ws, 'research'), { recursive: true })
+    const state = join(ws, 'research', 'action-state.json')
+    const log = join(ws, 'research', 'action-construction.jsonl')
+    const ok = () => SIG.judgeSignal(SIG.buildSignalContext(ws), 'action-construction').satisfied
+    const record = (feasible, cost) =>
+      JSON.stringify({
+        at: new Date().toISOString(),
+        level: 'L3',
+        answer: null,
+        design: { action_type: 'component_scan', target: 1, arms: [0, 1, 2, 3, 4, 5], n: 11 },
+        ig_per_cost: 0.1388,
+        bound_share: 0.968,
+        compliant: feasible ? 0.968 : 0,
+        feasible,
+        cost,
+        budget: 8,
+        guess_rate: 0,
+        pointer_gap: 0.0491,
+        resolution_gap: 0,
+      })
+
+    assert(ok() === false, '没有动作状态 → 不满足')
+
+    writeFileSync(
+      state,
+      JSON.stringify({
+        question: 'q',
+        method: 'm',
+        partial_results: 'p',
+        mechanisms: ['a', 'b', 'c', 'd', 'e', 'f'],
+        arms: ['a', 'b', 'c', 'd', 'e', 'f'],
+        prior: [0.14, 0.23, 0.14, 0.23, 0.14, 0.14],
+        budget: 8,
+        truth: null,
+      }),
+    )
+    assert(ok() === false, '有状态但还没有评测记录 → 不满足')
+
+    writeFileSync(log, `${record(false, 8.45)}\n`)
+    assert(ok() === false, '最近一次超出预算 → 不满足（正是论文报告的失效模式）')
+
+    writeFileSync(log, `${record(false, 8.45)}\n${record(true, 7.6)}\n`)
+    assert(ok() === true, '最近一次在预算内 → 满足')
+
+    writeFileSync(log, `${record(true, 7.6)}\n${record(false, 8.45)}\n`)
+    assert(ok() === false, '判断看**最近一次**：之后又写了付不起的设计 → 不满足')
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) {
   console.log('Failures:', failures)

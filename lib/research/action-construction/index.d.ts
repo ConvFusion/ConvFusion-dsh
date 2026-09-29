@@ -21,6 +21,8 @@ export { ARMS_GRID, BASELINE_ARM, DESIGN_SPECS, N_GRID, OBS_GRID, bestDesign, be
 export { guessRate, readingSet } from './executor.js';
 export { FORMATS, FORMATS_EXT, LENGTH_MATCHED_L3, LENGTH_PADDED_L1, buildPrompt, levelSummary, statePrompt, } from './prompts.js';
 export { formatLevel, normaliseArms, parseAnswer } from './parse.js';
+export { constructFromCandidates, designCost, designInformationGain, explainConstruction, extractCandidates, materialiseDesign, type ActionCandidate, type ConstructedAction, } from './extract.js';
 export { evaluate, evaluateAnswer, evaluateDesign } from './evaluate.js';
 export { ARM_NAMES, MECHANISM_NAMES, normaliseState, sampleState } from './states.js';
+export { ACTION_LOG_FILE, ACTION_STATE_FILE, actionLogPath, actionStatePath, appendActionRecord, readActionRecords, readActionState, summariseActionRecords, toRecord, writeActionState, type ActionRecord, } from './workspace.js';
 //# sourceMappingURL=index.d.ts.map

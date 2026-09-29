@@ -15,7 +15,8 @@
  * quantifications, arms, prompts — must match exactly.
  */
 
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -173,6 +174,7 @@ async function main() {
 
   /* ── 6. the tool the plugin actually calls ─────────────────────────────── */
   const tools = await import(join(ROOT, 'lib', 'research', 'research-tools.js'))
+  const signals = await import(join(ROOT, 'lib', 'research', 'stage-signals.js'))
   const registered = tools.defineResearchTools(() => '/tmp')
   const tool = registered.find((t) => t.name === tools.ACTION_CONSTRUCTION_TOOL)
   if (!tool) {
@@ -216,6 +218,100 @@ async function main() {
     if (bad.ok !== false) report('tool guard', 'evaluate without answer/design should fail loudly')
     const rendered = tool.output.render({ action: 'evaluate' }, evaluated)
     console.log(`tool render: ${rendered[0].text}`)
+  }
+
+  /* ── 7. the workspace flow inside /research: set_state → record → gate ──── */
+  const ws = mkdtempSync(join(tmpdir(), 'ac-flow-'))
+  try {
+    mkdirSync(join(ws, 'research'), { recursive: true })
+    const flowTool = tools.defineResearchTools(() => ws).find((t) => t.name === tools.ACTION_CONSTRUCTION_TOOL)
+    const signalOk = () => signals.judgeSignal(signals.buildSignalContext(ws), 'action-construction').satisfied
+
+    if (signalOk() !== false) report('flow.gate', 'a workspace with no action state must not pass the gate')
+    const notSet = await flowTool.execute({ action: 'state' }, {})
+    if (notSet.ok !== true || notSet.configured !== false) report('flow.state', 'unset state should report configured=false')
+
+    const setResult = await flowTool.execute({ action: 'set_state', state: fixture.states[0] }, {})
+    if (setResult.ok !== true || setResult.path !== 'research/action-state.json') {
+      report('flow.set_state', JSON.stringify(setResult).slice(0, 160))
+    }
+
+    const overBudget = await flowTool.execute(
+      { action: 'record', level: 'L3', answer: 'TARGET: h1 | ARMS: 0,1,2,3,4,5 | SEEDS: 11', note: 'as written' },
+      {},
+    )
+    if (overBudget.ok !== true || overBudget.evaluation?.feasible !== false) {
+      report('flow.record', 'the six-arm design is expected to be over budget on state 0')
+    }
+    if (signalOk() !== false) report('flow.gate', 'an unaffordable design must not pass the gate')
+
+    const affordable = await flowTool.execute(
+      { action: 'record', level: 'L3', answer: 'TARGET: h1 | ARMS: 2,3,4,5 | SEEDS: 12', note: 'trimmed' },
+      {},
+    )
+    if (affordable.ok !== true || affordable.evaluation?.feasible !== true) {
+      report('flow.record (trimmed)', JSON.stringify(affordable.evaluation ?? {}).slice(0, 160))
+    }
+    if (signalOk() !== true) report('flow.gate', 'an affordable design should pass the gate')
+
+    const reportResult = await flowTool.execute({ action: 'report' }, {})
+    if (reportResult.count !== 2 || reportResult.inBudget !== 1) {
+      report('flow.report', `count=${reportResult.count} inBudget=${reportResult.inBudget}`)
+    }
+    // the `/research` status block is rendered from the same files
+    const records = ac.readActionRecords(ws, 5)
+    if (records.length !== 2) report('flow.log', `expected 2 records on disk, found ${records.length}`)
+    const commands = await import(join(ROOT, 'lib', 'research', 'commands.js'))
+    const status = commands.actionConstructionStatus(ws)
+    const statusText = status.join('\n')
+    if (!statusText.includes('Action construction: 2 evaluation(s), 1 within the stated budget')) {
+      report('flow.status', statusText.replace(/\n/g, ' | ').slice(0, 200))
+    }
+    if (!statusText.includes('OVER BUDGET')) report('flow.status', 'the log line should mark the over-budget record')
+    const emptyStatus = commands.actionConstructionStatus(mkdtempSync(join(tmpdir(), 'ac-empty-')))
+    if (emptyStatus.length !== 0) report('flow.status (unconfigured)', 'an untouched workspace must add no status lines')
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
+
+  /* ── 8. constructing objects for actions that already exist ────────────── */
+  {
+    const KNOWN = [
+      ['A1', 'TARGET: h1 | ARMS: 0,1,2,3,4,5 | SEEDS: 11', 'component_scan', [0, 1, 2, 3, 4, 5], 11],
+      ['A2', '做一次 memory 模块的消融实验，跑一条臂，2 个 seeds', 'single_ablation', [0], 2],
+      ['A3', '对比 memory 与 attention 两个模块（两两对比），8 seeds', 'binary_contrast', [0, 1], 8],
+      ['A4', '全臂扫描：0,1,2,3,4,5，4 seeds', 'component_scan', [0, 1, 2, 3], 4],
+    ]
+    const markdown = KNOWN.map(([id, text]) => `- [ ] ${id} ${text}`).join('\n')
+    const candidates = ac.extractCandidates(markdown, 'verify')
+    const constructed = ac.constructFromCandidates(fixture.states[0], candidates)
+    if (constructed.length !== KNOWN.length) {
+      report('extract.count', `expected ${KNOWN.length} constructed objects, got ${constructed.length}`)
+    }
+    for (const [id, , type, arms, n] of KNOWN) {
+      const item = constructed.find((c) => c.candidate.id === id)
+      if (!item) {
+        report(`extract.${id}`, 'not extracted')
+        continue
+      }
+      if (item.candidate.actionType !== type) {
+        report(`extract.${id}.type`, `ts=${item.candidate.actionType} expected=${type}`)
+      }
+      if (!sameJson(item.design.arms, arms) || item.design.n !== n) {
+        report(`extract.${id}.design`, `ts=${JSON.stringify(item.design)} expected arms=${JSON.stringify(arms)} n=${n}`)
+      }
+      if (item.materialisedFrom !== 'text fields') {
+        report(`extract.${id}.source`, `materialised from ${item.materialisedFrom}, expected the stated fields`)
+      }
+    }
+    // a step that is an action but not an ablation-design action must be reported, not scored
+    const prose = ac.extractCandidates('- [ ] A5 撰写相关工作并补 12 条参考文献', 'verify')
+    if (prose.length !== 1 || prose[0].measurable !== false || !prose[0].reason) {
+      report('extract.not-measurable', JSON.stringify(prose).slice(0, 160))
+    }
+    if (ac.constructFromCandidates(fixture.states[0], prose).length !== 0) {
+      report('extract.not-measurable', 'a drafting step must not produce a scored object')
+    }
   }
 
   const ok = failures === 0
