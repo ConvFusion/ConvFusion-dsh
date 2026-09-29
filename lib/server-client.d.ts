@@ -559,6 +559,22 @@ export interface MentorshipProposal {
         description: string | null;
     };
     status: ProposalStatus;
+    /**
+     * 指导进展（服务器 `review_files`）：该项目 `review/` 下**去重后**的指导结果份数。
+     *
+     * 三态，**不许合并**（与 `brief_paid` 一脉相承的纪律）：
+     * - `n`（含 `0`）—— 服务器明确知道（读权限在，数了就是这么多）；
+     * - `null` —— **不可知**：查看者对该项目没有读权限，或项目已软删除；
+     * - `undefined` —— 这个响应里**没有**这个字段（**旧服务器**，`review_files` 落地之前）。
+     *
+     * `null` 与 `undefined` 的处分不同：前者是"服务器说不知道"（不必再去问），
+     * 后者是"服务器这一版还不会说"（宿主退回逐项目读 `/files` 自己数，见 `mentor/list`）。
+     *
+     * ⚠️ 它**不等于** `GET /projects/{id}/files` 里 `review/` 前缀的**行数**：
+     * `file_metadata` 不可变不覆盖，同一路径重复上传会留下多行历史，服务器按
+     * `DISTINCT relative_path` 计数（一次修订不是一份意见）。
+     */
+    reviewFiles?: number | null;
     expiresAt: string;
     createdAt: string;
 }

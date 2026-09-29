@@ -3472,19 +3472,23 @@ function CommunityTab({
     setOpen(null)
     setDetail(null)
     // 不传条数：抽样与条数是**服务器**的策略（插件不复制服务端策略）
-    const res = await post('work/list', {})
+    /*
+     * 两条请求互不依赖（一个是研究网络里的公开工作，一个是"我涉及的提案"），
+     * 所以**并发发**：这一页的等待时间从"两者之和"变成"两者中较慢的那个"。
+     *
+     * 顺带刷新"我发起的提案"：【可指导】每行要靠它显示「等待响应」角标，
+     * 而提案状态只有 `mentor/list` 知道 —— 不刷新的话角标一刷新页面就丢。
+     * 失败**不清空**已有提案（拿不到 ≠ 没发起过）。
+     */
+    const [res, mine] = await Promise.all([post('work/list', {}), post('mentor/list', {})])
     setWorksLoading(false)
+    if (mine.ok) setProposals((mine.value as { proposals: HostProposal[] }).proposals ?? [])
     if (!res.ok) {
       setWorksError(res.error ?? { code: 'unknown', message: t('community.error.readWorkList') })
       setWorks(null)
       return
     }
     setWorks((res.value as { items: HostWork[] }).items ?? [])
-    // 顺带刷新"我发起的提案"：【可指导】每行要靠它显示「等待响应」角标，
-    // 而提案状态只有 `mentor/list` 知道 —— 不刷新的话角标一刷新页面就丢。
-    // 失败**不清空**已有提案（拿不到 ≠ 没发起过）。
-    const mine = await post('mentor/list', {})
-    if (mine.ok) setProposals((mine.value as { proposals: HostProposal[] }).proposals ?? [])
   }, [post])
 
   /* ── 指导关系（第三个 Tab）──────────────────────────────────────────── */

@@ -7,7 +7,8 @@
  *   1. 下载：写进**用户选的 DSH 工作区**（`mentor/downloadState` 取目标列表 + 预检，
  *      `mentor/download` 逐文件写入研究根；范围按角色分：导师 `all`、学生 `review`）；
  *   2. 上传：`workspace/review/` 的扫描与按原相对路径回传（服务器只允许写 `review/**`）；
- *   3. 列表：ACCEPTED 提案的指导进展标注（`reviewFiles`）。
+ *   3. 列表：ACCEPTED 提案的指导进展标注（`reviewFiles`）——
+ *      新服务器（`review_files` 在列表里）只发 **1 次**请求；旧服务器退回逐项目读 `/files`。
  *
  * 用法：node scripts/verify-mentorship-files.mjs [pkgDir]
  */
@@ -220,8 +221,10 @@ section('[5] 回传指导结果（review/ 前缀）')
  * [6] mentor/list 的进展标注：ACCEPTED 的提案带 reviewFiles（导师传了几份）
  *
  * ⚠️ 提案状态接受之后就不变了，列表会永远停在"已接受"；用户要看的是指导进展。
- * 这个事实只在项目文件里，所以宿主在 mentor/list 里补齐：
- * 逐个项目读一次 `/files`，数 `review/` 下的条目。
+ * 这个事实的来源分两种，**判据是字段在不在**（见 ConvFusion-server
+ * `docs/mentorship-list-performance.md` §3）：
+ *   · 新服务器：列表里直接给 `review_files`（三态 n / 0 / null）→ 宿主照用，**1 次请求**；
+ *   · 旧服务器：响应里没有这个字段 → 宿主退回逐项目读 `/files` 自己数 `review/` 前缀。
  * ════════════════════════════════════════════════════════════════════════ */
 section('[6] mentor/list 带出指导进展（reviewFiles）')
 {
@@ -240,12 +243,65 @@ section('[6] mentor/list 带出指导进展（reviewFiles）')
     created_at: '2026-09-19T00:00:00Z',
   }
   const PROPOSED = { ...ACCEPTED, id: 'p-proposed', status: 'PROPOSED' }
+  const callsFiles = (host) => host.calls.filter((c) => c.url.endsWith('/files')).length
 
-  // 导师已传 2 份 review/ 文件 → reviewFiles = 2
-  const withReview = makeHost({
+  /* ── 新服务器：字段就在列表里 ────────────────────────────────────────── */
+
+  // 服务器按 DISTINCT relative_path 数好的值直接用；
+  // 同一个 review/a.md 传过两次的那份历史（/files 里是 2 行）**不能**被数成 2 份。
+  const served = makeHost({
+    handler: async (call) => {
+      if (call.url.endsWith('/mentorship-proposals')) {
+        return { status: 200, body: [{ ...ACCEPTED, review_files: 2 }] }
+      }
+      // 走到这里 = 又去拉文件清单了 —— 那正是这次要消掉的 N+1
+      return {
+        status: 200,
+        body: {
+          items: [
+            { id: 'f1', relative_path: 'review/a.md', size: 10 },
+            { id: 'f2', relative_path: 'review/a.md', size: 10 },
+            { id: 'f3', relative_path: 'review/b.png', size: 20 },
+            { id: 'f4', relative_path: 'project.md', size: 30 },
+          ],
+          total_bytes: 70,
+        },
+      }
+    },
+  })
+  const servedRes = await served.handler('mentor/list', {})
+  assertEq(servedRes.ok, true, 'mentor/list 成功')
+  assertEq(servedRes.value?.proposals?.[0]?.reviewFiles, 2, '新服务器：直接用 review_files（2 份）')
+  assertEq(callsFiles(served), 0, '新服务器：**不再**逐项目读 /files（1 + N → 1 次请求）')
+
+  // 0（导师还没传）也是"明确知道"，同样不该再去问
+  const zero = makeHost({
+    handler: async (call) => {
+      if (call.url.endsWith('/mentorship-proposals')) return { status: 200, body: [{ ...ACCEPTED, review_files: 0 }] }
+      return { status: 200, body: { items: [], total_bytes: 0 } }
+    },
+  })
+  assertEq((await zero.handler('mentor/list', {})).value?.proposals?.[0]?.reviewFiles, 0, '新服务器：0 = 明确没有')
+  assertEq(callsFiles(zero), 0, '0 与 2 一样，都不需要再读文件清单')
+
+  // `null` = 服务器说"不可知"（无读权限 / 项目已软删除）→ 照抄，**不要去问**
+  const unknowable = makeHost({
+    handler: async (call) => {
+      if (call.url.endsWith('/mentorship-proposals')) return { status: 200, body: [{ ...ACCEPTED, review_files: null }] }
+      return { status: 403, body: { error: { code: 'FULL_STATE_ACCESS_REQUIRED', message: 'no', details: {} } } }
+    },
+  })
+  const unknownRes = await unknowable.handler('mentor/list', {})
+  assertEq(unknownRes.value?.proposals?.[0]?.reviewFiles, null, '不可知 → null（**不是** 0）')
+  assertEq(callsFiles(unknowable), 0, '服务器已说不可知，再去问也是 403 → 不必多一次请求')
+
+  /* ── 旧服务器：响应里没有 review_files → 退回逐项目读 /files ─────────── */
+
+  // 旧服务器仍要能工作：导师已传 2 份 review/ 文件 → reviewFiles = 2
+  const legacyHost = makeHost({
     handler: async (call) => {
       if (call.url.endsWith('/mentorship-proposals')) return { status: 200, body: [ACCEPTED] }
-      assert(call.url.endsWith(`/projects/${PROJECT_ID}/files`), '为 ACCEPTED 补读项目文件列表')
+      assert(call.url.endsWith(`/projects/${PROJECT_ID}/files`), '旧服务器：为 ACCEPTED 补读项目文件列表')
       return {
         status: 200,
         body: {
@@ -259,9 +315,9 @@ section('[6] mentor/list 带出指导进展（reviewFiles）')
       }
     },
   })
-  const listed = await withReview.handler('mentor/list', {})
-  assertEq(listed.ok, true, 'mentor/list 成功')
-  assertEq(listed.value?.proposals?.[0]?.reviewFiles, 2, '只数 review/ 下的条目（project.md 不算）')
+  const legacyRes = await legacyHost.handler('mentor/list', {})
+  assertEq(legacyRes.ok, true, '旧服务器：mentor/list 仍成功')
+  assertEq(legacyRes.value?.proposals?.[0]?.reviewFiles, 2, '旧服务器：只数 review/ 下的条目（project.md 不算）')
 
   // 导师还没传 → 0（界面据此显示"等待指导意见"并不给【下载】）
   const noReview = makeHost({
@@ -270,7 +326,7 @@ section('[6] mentor/list 带出指导进展（reviewFiles）')
         ? { status: 200, body: [ACCEPTED] }
         : { status: 200, body: { items: [{ id: 'f1', relative_path: 'plans/p0.md', size: 1 }] } },
   })
-  assertEq((await noReview.handler('mentor/list', {})).value?.proposals?.[0]?.reviewFiles, 0, '没有 review/ → 0')
+  assertEq((await noReview.handler('mentor/list', {})).value?.proposals?.[0]?.reviewFiles, 0, '旧服务器：没有 review/ → 0')
 
   // 提案还没被接受 → 不必问文件（省一次请求）
   const proposed = makeHost({

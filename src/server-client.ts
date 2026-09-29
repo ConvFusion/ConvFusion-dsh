@@ -1580,6 +1580,22 @@ export interface MentorshipProposal {
   successPaymentAmount: number
   successCondition: { type: string; description: string | null }
   status: ProposalStatus
+  /**
+   * 指导进展（服务器 `review_files`）：该项目 `review/` 下**去重后**的指导结果份数。
+   *
+   * 三态，**不许合并**（与 `brief_paid` 一脉相承的纪律）：
+   * - `n`（含 `0`）—— 服务器明确知道（读权限在，数了就是这么多）；
+   * - `null` —— **不可知**：查看者对该项目没有读权限，或项目已软删除；
+   * - `undefined` —— 这个响应里**没有**这个字段（**旧服务器**，`review_files` 落地之前）。
+   *
+   * `null` 与 `undefined` 的处分不同：前者是"服务器说不知道"（不必再去问），
+   * 后者是"服务器这一版还不会说"（宿主退回逐项目读 `/files` 自己数，见 `mentor/list`）。
+   *
+   * ⚠️ 它**不等于** `GET /projects/{id}/files` 里 `review/` 前缀的**行数**：
+   * `file_metadata` 不可变不覆盖，同一路径重复上传会留下多行历史，服务器按
+   * `DISTINCT relative_path` 计数（一次修订不是一份意见）。
+   */
+  reviewFiles?: number | null
   expiresAt: string
   createdAt: string
 }
@@ -1671,6 +1687,19 @@ function parseSuccessCondition(raw: unknown): { type: string; description: strin
   return { type: asString(b?.type) || 'MUTUAL_COMPLETION', description: asString(b?.description) || null }
 }
 
+/**
+ * `review_files` 的**三态**解析 —— 不许把"没有这个字段"读成"有 0 份"。
+ *
+ * `asNumber` 那一类容错读取在这里是**有害**的：它会把缺失与 0 合成同一个值，
+ * 而这两件事在界面上是两个结论（"服务器说没有" vs "服务器这一版不会说"）。
+ * 所以这里只认可显式给出的整数或显式 `null`，其余一律退成 `undefined`（未知）。
+ */
+function parseReviewFiles(raw: unknown): number | null | undefined {
+  if (raw === null) return null
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return Math.trunc(raw)
+  return undefined
+}
+
 function parseProposal(raw: unknown): MentorshipProposal {
   const b = asRecord(raw)
   if (!b) throw new ServerError('bad-response', '指导提案：响应格式不对。')
@@ -1690,6 +1719,7 @@ function parseProposal(raw: unknown): MentorshipProposal {
     successPaymentAmount: asNumber(b.success_payment_amount),
     successCondition: parseSuccessCondition(b.success_condition),
     status: (asString(b.status) || 'PROPOSED') as ProposalStatus,
+    reviewFiles: parseReviewFiles(b.review_files),
     expiresAt: asString(b.expires_at),
     createdAt: asString(b.created_at),
   }
