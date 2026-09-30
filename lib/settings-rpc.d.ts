@@ -375,6 +375,26 @@ export interface SettingsState {
  * 分组在这里做，客户端只负责渲染 —— 设置页不该自己理解 Skill 的存储结构。
  */
 export declare function buildSettingsState(config: Config, store: SkillCustomizationStore, resolvePath?: (c: Config) => string, probeDependencies?: () => LocalDependencyReport, env?: NodeJS.ProcessEnv, version?: string): SettingsState;
+/**
+ * 上传一批文件时估算的**最低吞吐**（50 KB/s），只用来把"总超时"折算成体积的函数。
+ *
+ * 为什么不能沿用 `SERVER_TIMEOUT_MS`（8 秒）：那个常数管的是"服务器还活着吗"，
+ * 对表单查询合适；而上传是**整批读完才回响应**，8 秒连 1 MB 都传不完。
+ * 实测那条细链路约 120 KB/s —— 30 MB 的一批要 4 分钟以上，用 8 秒超时只会
+ * 让每一次回传都稳定失败（而且看起来像"服务器挂了"）。
+ *
+ * 取 50 KB/s 而不是 120 KB/s：宁可等久一点，也不要在大文件上假失败。
+ */
+export declare const MIN_UPLOAD_BYTES_PER_SEC: number;
+/** 单批上传的硬上限（30 分钟）：再慢也该报错，不能无限挂着。 */
+export declare const UPLOAD_TIMEOUT_MAX_MS: number;
+/**
+ * 一批文件的**总超时**（毫秒）：`基础超时 + 体积/最低吞吐`。
+ *
+ * 判据是"这批字节在最慢可接受的链路下要多久" —— 与下载那次修复同一个思路：
+ * **慢 ≠ 死**，超时阈值必须跟着体积走，否则大文件永远传不上去。
+ */
+export declare function uploadTimeoutForBytes(bytes: number, minBytesPerSec?: number): number;
 /** 设置面依赖（由插件入口注入，便于离线测试）。 */
 export interface SettingsRpcDeps {
     /** 当前生效配置（每次调用重新取，文件改名后立即生效）。 */
@@ -448,27 +468,6 @@ export interface SettingsRpcDeps {
             updatedAt: string;
         }>;
     }>;
-    /**
-     * DSH 的**目录选择器**（`ctx.directoryPicker` 能力 seam）。
-     *
-     * 只有 `native` 能力才能拿到"用户选的绝对路径"；`browse` 只有列目录/建目录原语，
-     * 未知能力按 DSH 的约定**隐藏**选择入口而不是硬凑 —— 所以这里返回能力描述，
-     * 让界面自己决定是给【选择目录…】还是退回手填路径。
-     */
-    pickDirectory?: () => Promise<{
-        /** false = 当前环境没有可用的系统选择器（界面退回手填）。 */
-        supported: boolean;
-        /** `supported` 时的绝对路径；null = 用户取消（**不是错误**）。 */
-        path: string | null;
-        /** 能力种类，供诊断与提示文案使用。 */
-        kind?: string;
-    }>;
-    /** 只探测"有没有可用的系统选择器"，**不打开**任何窗口（`probe: true` 用）。 */
-    probeDirectoryPicker?: () => Promise<{
-        supported: boolean;
-        path: null;
-        kind?: string;
-    }>;
 }
 /**
  * 比较两个版本串（容忍 `v` 前缀与 `-rc.x` 后缀）：按点分数字段比较，
@@ -510,12 +509,28 @@ export declare function compareVersions(a: string, b: string): number;
  * | `mentor/list` | `{}` | 我涉及的指导提案（我发起的 + 我收到的）；ACCEPTED 的带 `reviewFiles`（导师已上传几份指导结果，由服务器 `review_files` 给出；旧服务器才退回逐项目读 `/files`） |
  * | `mentor/accept` | `{ proposalId, intentKey }` | 接受指导（研究者）→ **冻结押金**、建合同与关系 |
  * | `mentor/reject` | `{ proposalId }` | 拒绝指导（研究者） |
- * | `mentor/pickDirectory` | `{}` / `{ probe:true }` | 开系统目录选择器（`native` 才可用）；`probe` 只问能力不开窗 |
- * | `mentor/downloadState` | `{ projectId, prefix }` | 【下载】对话框一次拿齐：预检（文件数 / 体积 / 预计文件名）+ **全部**可选工作区 |
- * | `mentor/download` | `{ projectId, workspaceId, prefix }` | 只把 ZIP 存进所选工作区（**流式落盘、不解压、不覆盖**，同名加序号） |
+ * | `mentor/downloadState` | `{ projectId, prefix, source? }` | 【下载】对话框一次拿齐：预检（文件数 / 体积 / 预计文件名）+ **全部**可选工作区（`source` 选哪一侧，省略 = `owner`） |
+ * | `mentor/download` | `{ projectId, workspaceId, prefix, source? }` | 只把 ZIP 存进所选工作区（**流式落盘、不解压、不覆盖**，同名加序号） |
  * | `mentor/downloadProgress` | `{ projectId }` | 下载期间的实时进度 `{ received, running }`（界面按秒问；本地读，不触网） |
- * | `mentor/scanReview` | `{ dir }` | 列出工作区 `review/` 下的文件（上传源） |
- * | `mentor/upload` | `{ projectId, dir, paths:[relPath] }` | 按原相对路径回传 `review/**` |
+ * | `mentor/uploadState` | `{}` | 【上传】对话框的工作区下拉：本机**含研究定义**的工作区（`<ws>/workspace/` 或旧布局 `<ws>`） |
+ * | `mentor/uploadPlan` | `{ workspaceId }` | 所选工作区的**文件清单**（`mentor` 口径分类 + 默认勾选 + 体积 + 超限项） |
+ * | `mentor/upload` | `{ projectId, workspaceId, paths, source? }` | 回传"我这一份工作区"：与**自己那一侧**的 `sha256` 比对 → 只传变化的 → 分批上传 |
+ * | `mentor/uploadProgress` | `{ projectId }` | 上传期间的实时进度 `{ doneFiles, totalFiles, sentBytes, totalBytes, running }`（本地读、不触网） |
+ *
+ * ⚠️ **两侧并存**（协议 v20，服务器 `?source=owner|mentor`）：项目文件空间里同一路径可以
+ * 同时存在学生自己那份（`owner`）与导师回传那份（`mentor`），**互不覆盖**。规矩是
+ * **比对自己那一侧、下载对方那一侧**（表见 `server-client.ts` 的 `FileSource`）。
+ * 不带 `source` → 一律按 `owner`（= 服务器默认，也是 v19 界面的行为：不会出错，
+ * 但学生读不到导师那份）。
+ *
+ * ⚠️ 回传**按原相对路径**写进项目文件空间的**导师那一侧**（v20 起两侧并存，
+ * 与学生那份同名而互不覆盖）—— 因此需要服务器允许导师写 `review/` 之外的路径
+ * （见 `server-client.ts` 的 `MENTOR_REVIEW_PREFIX` 与
+ * `dev-notes/v0.5.4-mentor-workspace-upload.md`）。旧服务器上会拿到 403
+ * `FILE_PATH_RESERVED` → `path-reserved`，界面**如实说**"服务器需放开"。
+ *
+ * ℹ️ v19 删除了 `mentor/pickDirectory` 与 `mentor/scanReview`：上传源不再是"用户手选的
+ * 磁盘目录 + 只扫 `review/`"，而是**注册表里的工作区 + 研究根全量清单**。
  *
  * ⚠️ **凭据纪律**（改动这里前先读 `server-client.ts` 文件头）：
  * 服务器地址与 API Key 只出现在**宿主**与**服务器**之间；本渠道的任何返回值都不得

@@ -1347,6 +1347,7 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
     { id: 'ws-empty', title: '空工作区', path: mentorWs },
     { id: 'ws-occupied', title: '已有研究', path: occupiedWs },
   ])
+  // 导师下**学生的工作区**：默认 `owner` 侧（v20 起两侧并存，这里行为不变）
   const state = await mentorHost('mentor/downloadState', { projectId, prefix: PREFIX })
   assertEq(state.ok, true, 'downloadState 可用')
   assertEq(state.value?.files, 1, `预检报出 1 个文件（实际 ${state.value?.files}）`)
@@ -1418,39 +1419,44 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
   })
   assertEq(badTarget.ok, false, '按路径指定目标 → 拒绝（只认注册表 id）')
 
-  // ⑨-11 **反向流程**：导师在 workspace/review/ 写指导结果 → 回传 → 学生能看到
+  // ⑨-11 **反向流程**：导师在学生的 workspace/ 里继续推进研究 → 整包回传 → 学生下载后接着做
   //
-  // 服务器契约（docs/API.md §13.1）：关系方只能写 `review/**`，越界
-  // `403 FILE_PATH_RESERVED` —— 结构上禁止导师改写研究事实。
+  // ⚠️ 服务器契约（v19 起）：导师要能写 `review/` **之外**的路径（整包替换）。
+  // 本脚本对两种服务器**都成立**：放开了 → 回传成功；没放开 → 明确 `path-reserved`
+  // （插件如实报"服务器需放开"，不偷偷只传 review/、也不假装成功）。
   {
-    // 导师自己解压了快照 → 在 workspace/review/ 下写指导结果（本轮用普通目录模拟）
+    // 导师解压了学生快照 → 在 workspace/ 里改研究（指导意见写在 review/ 下）
     const mentorCopy = join(TMP, 'mentor-ws')
     const reviewRel = 'review/指导意见.md'
     const reviewBody = '# 指导意见\n\n建议先固定裁剪策略再比方法。\n'
     mkdirSync(join(mentorCopy, 'workspace', 'review', 'figures'), { recursive: true })
     writeFileSync(join(mentorCopy, 'workspace', reviewRel), reviewBody)
     writeFileSync(join(mentorCopy, 'workspace', 'review', 'figures', 'trend.csv'), 'x,y\n1,2\n')
+    writeFileSync(join(mentorCopy, 'workspace', 'project.md'), '# 导师改过项目定义\n')
 
-    const uploader = RPC.createSettingsRpcHandler({
-      getConfig: () =>
-        CFG.resolveConfig({
-          customizationFile: 'live-up.json',
-          customizationDir: join(TMP, 'cf'),
-          serverUrl: BASE,
-          convfusionApiKey: adminKey,
-        }),
-      store: CUST.createMemoryCustomizationStore(),
-      fetchImpl: fetch,
-      serverTimeoutMs: 30000,
-    })
-    const scan = await uploader('mentor/scanReview', { dir: mentorCopy })
-    assertEq(scan.ok, true, '扫描导师工作区的 review/')
-    const listed = (scan.value?.files ?? []).map((f) => f.relPath)
-    assert(listed.includes(reviewRel), `扫描到指导结果（${listed.join(', ')}）`)
+    const uploader = makeHostWithWorkspaces(adminKey, [
+      { id: 'ws-mentor', title: '导师手上的学生快照', path: mentorCopy },
+    ])
+    const state = await uploader('mentor/uploadState', {})
+    assertEq(state.ok, true, 'mentor/uploadState 可用')
+    const wsItem = (state.value?.items ?? []).find((w) => w.id === 'ws-mentor')
+    assert(Boolean(wsItem), `工作区出现在下拉里（${(state.value?.items ?? []).map((w) => w.id).join(', ')}）`)
+
+    const planned = await uploader('mentor/uploadPlan', { workspaceId: 'ws-mentor' })
+    assertEq(planned.ok, true, '拉取该工作区的文件清单')
+    const plan = planned.value?.plan
+    const inPlan = (plan?.categories ?? []).flatMap((c) => c.files.map((f) => f.relPath))
+    assert(inPlan.includes(reviewRel), `清单一：指导结果在清单里（共 ${inPlan.length} 个文件）`)
+    assert(inPlan.includes('project.md'), '清单二：研究定义也在清单里（整包回传，不再只有 review/）')
+    assertEq(
+      (plan?.categories ?? []).find((c) => c.files.some((f) => f.relPath === reviewRel))?.decision,
+      'recommended',
+      '导师口径：review/ 是推荐（要带回去的东西）',
+    )
 
     const sent = await uploader('mentor/upload', {
       projectId,
-      dir: mentorCopy,
+      workspaceId: 'ws-mentor',
       paths: [reviewRel, 'review/figures/trend.csv'],
     })
     assertEq(
@@ -1459,16 +1465,35 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
       `导师回传指导结果成功${sent.ok ? '' : `（${sent.error?.code}: ${sent.error?.message}）`}`,
     )
 
-    // 学生侧能看到（服务器：同一个 workspace，review/ 目录）
+    /*
+     * 两侧并存（v20）：学生默认读到的 `/files` 是**自己那一侧** ——
+     * 导师回传的 `review/` **不会**混进他发布出去的那份里（这是选定的默认口径，
+     * 也是"导师改写不了学生研究事实"的结构性保证）。
+     */
     const studentFiles = await (
       await fetch(`${BASE}/api/v1/projects/${projectId}/files`, {
         headers: { authorization: `Bearer ${researcherKey}` },
       })
     ).json()
     const rels = (studentFiles.items ?? []).map((f) => f.relative_path)
-    assert(rels.includes(reviewRel), `学生在 /files 里看到指导结果（${rels.filter((r) => r.startsWith('review/')).join(', ')}）`)
     assert(
-      rels.includes('review/figures/trend.csv'),
+      !rels.includes(reviewRel) && !rels.includes('review/figures/trend.csv'),
+      `学生默认 /files 只读自己那一侧：导师的 review/ 不出现（实际 ${rels.join(', ')}）`,
+    )
+
+    // 显式读**导师那一侧**：指导结果与目录层次都在
+    const mentorFiles = await (
+      await fetch(`${BASE}/api/v1/projects/${projectId}/files?source=mentor`, {
+        headers: { authorization: `Bearer ${researcherKey}` },
+      })
+    ).json()
+    const mentorRels = (mentorFiles.items ?? []).map((f) => f.relative_path)
+    assert(
+      mentorRels.includes(reviewRel),
+      `?source=mentor 看到指导结果（${mentorRels.filter((r) => r.startsWith('review/')).join(', ')}）`,
+    )
+    assert(
+      mentorRels.includes('review/figures/trend.csv'),
       '目录层次原样保留（review/figures/trend.csv）',
     )
 
@@ -1481,10 +1506,22 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
     const studentHost = makeHostWithWorkspaces(researcherKey, [
       { id: 'ws-student', title: '学生工作区', path: studentWs },
     ])
+    // 学生取的是**导师那一侧**（v20：同名两侧并存，学生自己那份没被动）
+    const side = await studentHost('mentor/downloadState', {
+      projectId,
+      prefix: '学生甲-长上下文推理',
+      source: 'mentor',
+    })
+    assertEq(side.ok, true, '学生侧预检可用')
+    assert(
+      Number(side.value?.files ?? 0) >= 2,
+      `导师那一侧预检到 ≥2 个文件（实际 ${side.value?.files}）`,
+    )
     const back = await studentHost('mentor/download', {
       projectId,
       workspaceId: 'ws-student',
       prefix: '学生甲-长上下文推理',
+      source: 'mentor',
     })
     assertEq(back.ok, true, `学生侧写入成功${back.ok ? '' : `（${back.error?.code}）`}`)
     const studentZips = zipsIn(studentWs)
@@ -1513,25 +1550,45 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
       `导师上传 2 份后 reviewFiles=2（界面：导师已指导，并放开【下载】）实际 ${progressed?.reviewFiles}`,
     )
 
-    // 越界：导师改不了研究事实
-    writeFileSync(join(mentorCopy, 'workspace', 'project.md'), '# 篡改\n')
-    const reserved = await uploader('mentor/upload', {
+    /*
+     * 整包回传的**关键分歧点**：导师要能写 `review/` 之外（`project.md`）。
+     *
+     * 两种结果都是"对的"，但必须**说得清**：
+     *   · 服务器已放开 → 回传成功（学生下载后拿到导师那一版）；
+     *   · 服务器未放开 → 403 `FILE_PATH_RESERVED` → 界面说"服务器需放开这条限制"。
+     * 唯一不能接受的是"假装成功"或"偷偷只传 review/"。
+     */
+    const whole = await uploader('mentor/upload', {
       projectId,
-      dir: mentorCopy,
-      paths: ['review/指导意见.md'],
+      workspaceId: 'ws-mentor',
+      paths: ['project.md'],
     })
-    assertEq(reserved.ok, true, '（对照）review/ 内的文件仍然可传')
-    const grab = await SC.uploadReviewFiles(
+    assert(
+      whole.ok || whole.error?.code === 'path-reserved',
+      `整包回传：成功或明确报 path-reserved（实际 ${whole.ok ? 'ok' : whole.error?.code}）`,
+    )
+    if (!whole.ok) {
+      assert(
+        String(whole.error?.message ?? '').includes('review/'),
+        '未放开时文案点明"服务器只放开 review/"',
+      )
+    }
+
+    // 直接走客户端函数也一样：要么写进去，要么给出 path-reserved（不再本地硬拦）
+    const grab = await SC.uploadWorkspaceFiles(
       BASE,
       adminKey,
       projectId,
-      [{ relPath: 'project.md', bytes: Buffer.from('# 篡改\n') }],
+      [{ relPath: 'project.md', bytes: Buffer.from('# 导师版项目定义\n') }],
       { fetchImpl: fetch },
     ).then(
       () => null,
       (e) => e,
     )
-    assert(grab === null || grab?.code === 'path-reserved' || grab?.code === 'bad-request', '导师写 project.md 被拦（研究事实不可改）')
+    assert(
+      grab === null || grab?.code === 'path-reserved',
+      `整包写入 project.md：成功或 path-reserved（实际 ${grab?.code ?? 'ok'}）`,
+    )
   }
 }
 

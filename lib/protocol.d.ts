@@ -93,8 +93,23 @@
  *   （`{ projectId }` → `{ received, running }`，本地读、不触网），`mentor/download`
  *   边收边写 `.part`、校验 ZIP 完整后才改名，正文改用"卡死超时"（不再只盖住响应头）。
  *   旧宿主没有新端点 → 界面拿不到进度（退回一句「读取中…」），故照旧升号提示重启。
+ *
+ * - `19`：【上传】从"手选磁盘目录 + 只扫 `review/`"换成**"选 DSH 工作区 + 研究根全量清单"**：
+ *   新增 `mentor/uploadState`（本机可选工作区）、`mentor/uploadPlan`（所选工作区的文件清单，
+ *   `mentor` 口径分类）、`mentor/uploadProgress`（{ doneFiles, totalFiles, sentBytes, totalBytes }），
+ *   并**删除** `mentor/pickDirectory` 与 `mentor/scanReview`；`mentor/upload` 的入参由
+ *   `{ dir, paths }` 改为 `{ workspaceId, paths }`（工作区按**注册表 id** 在宿主侧解析）。
+ *   旧宿主没有新端点 → `unknown-endpoint`，界面提示"宿主侧需要重启"。
+ *
+ * - `20`：**分侧读**（服务器 2026-09 起项目文件空间有两侧：学生 `owner` / 导师 `mentor`，
+ *   同一路径并存互不覆盖，读接口用 `?source=owner|mentor`，省略 = `owner`）。
+ *   `mentor/downloadState` / `mentor/download` / `mentor/upload` 因此多一个 `source`：
+ *   界面按**自己的角色**定侧 —— **比对自己那一侧，下载对方那一侧**
+ *   （导师：上传比 `mentor` 侧、下载读 `owner` 侧；学生：上传比 `owner` 侧、
+ *   下载读 `mentor` 侧）。宿主省略该字段时按 `owner` 处理（= 旧行为，不会出错，
+ *   但学生读不到导师那份），故照旧升号让"宿主需重启"说出来。
  */
-export declare const HOST_PROTOCOL = 18;
+export declare const HOST_PROTOCOL = 20;
 /** 状态响应里的协议字段名（两边共用，避免拼错）。 */
 export declare const HOST_PROTOCOL_FIELD = "protocol";
 //# sourceMappingURL=protocol.d.ts.map

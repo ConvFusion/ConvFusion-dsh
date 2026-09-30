@@ -6,13 +6,25 @@
  *
  *   1. 下载：写进**用户选的 DSH 工作区**（`mentor/downloadState` 取目标列表 + 预检，
  *      `mentor/download` 逐文件写入研究根；范围按角色分：导师 `all`、学生 `review`）；
- *   2. 上传：`workspace/review/` 的扫描与按原相对路径回传（服务器只允许写 `review/**`）；
+ *   2. 上传：**选 DSH 工作区**（只列含研究定义的）→ 拉研究根文件清单（`mentor` 口径：
+ *      `review/` 与论文 PDF 推荐、机器产物排除）→ 与服务器 `sha256` 比对后**增量**分批回传，
+ *      进度按秒可问（服务器侧需放开"协作者只能写 `review/**`"）；
  *   3. 列表：ACCEPTED 提案的指导进展标注（`reviewFiles`）——
  *      新服务器（`review_files` 在列表里）只发 **1 次**请求；旧服务器退回逐项目读 `/files`。
  *
  * 用法：node scripts/verify-mentorship-files.mjs [pkgDir]
  */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -113,6 +125,19 @@ function makeHost({ handler, listLocalWorkspaces }) {
   return { handler: handlerFn, calls }
 }
 
+/**
+ * 断言某个 `/files` 请求读的是哪一侧（v20 服务器 `?source=owner|mentor`，默认 owner）。
+ *
+ * `owner` 一侧**不带参数**（那是服务器的默认，也是旧服务器的唯一一侧）。
+ */
+function assertReadSide(url, side, label) {
+  const has = String(url).includes('source=mentor')
+  assert(
+    side === 'mentor' ? has : !has,
+    `${label}（实际 ${url}）`,
+  )
+}
+
 const work = mkdtempSync(join(tmpdir(), 'cf-mentor-'))
 const STUDENT_FILES = [
   ['project.md', '# 检索增强的长上下文推理\n\ntopic: retrieval\n'],
@@ -122,136 +147,351 @@ const STUDENT_FILES = [
 ]
 
 /* ════════════════════════════════════════════════════════════════════════
- * [5] 回传指导结果：按原相对路径上传 workspace/review/ 下的文件
+ * [5] 回传"我这一份工作区"：选工作区 → 文件清单 → 勾选 → 增量上传
  *
- * 服务器契约（docs/API.md §13.1）：关系方**只能**写 `review/**`，其他路径
- * `403 FILE_PATH_RESERVED` —— 结构上禁止导师改写研究事实。
+ * 用户要的语义（2026-09）：导师是**在学生的 workspace/ 里继续推进研究**的，
+ * 回传的是整份工作区（含 `review/`），效果上替换学生原来那一份；学生下载后接着做。
+ *
+ * ⚠️ 服务器侧前提：放开"协作者只能写 `review/**`"这条限制（插件按契约实现，
+ * 未放开时如实报错，不偷偷只传 `review/`）。见
+ * `dev-notes/v0.5.4-mentor-workspace-upload.md`。
  * ════════════════════════════════════════════════════════════════════════ */
-section('[5] 回传指导结果（review/ 前缀）')
+section('[5] 回传我这一份工作区（选工作区 → 清单 → 增量上传）')
 {
-  // 造一个"导师下载下来的工作区"，指导意见写在 workspace/review/ 下（含子目录）
   const ws = join(work, 'mentor-ws')
-  mkdirSync(join(ws, 'workspace', 'review', 'figures'), { recursive: true })
-  mkdirSync(join(ws, 'workspace', 'plans'), { recursive: true })
-  writeFileSync(join(ws, 'workspace', 'project.md'), '# 学生项目\n')
-  writeFileSync(join(ws, 'workspace', 'review', '01-总体意见.md'), '# 总体意见\n')
-  writeFileSync(join(ws, 'workspace', 'review', 'figures', 'trend.png'), 'fakepng')
-  writeFileSync(join(ws, 'workspace', 'review', '.hidden'), '不该被发现\n')
+  const root = join(ws, 'workspace')
+  mkdirSync(join(root, 'review', 'figures'), { recursive: true })
+  mkdirSync(join(root, 'papers', 'paper-main'), { recursive: true })
+  mkdirSync(join(root, 'research', 'literature', 'fulltext'), { recursive: true })
+  mkdirSync(join(root, 'harness'), { recursive: true })
+  mkdirSync(join(root, 'node_modules', 'pkg'), { recursive: true })
+  const PROJECT_MD = '# 学生项目（导师改过）\n'
+  writeFileSync(join(root, 'project.md'), PROJECT_MD)
+  writeFileSync(join(root, 'papers', 'paper-main', 'paper.pdf'), 'x'.repeat(2048))
+  writeFileSync(join(root, 'review', '01-总体意见.md'), '# 总体意见\n')
+  writeFileSync(join(root, 'review', 'figures', 'trend.png'), 'fakepng')
+  writeFileSync(join(root, 'research', 'literature', 'fulltext', '001_ref.pdf'), 'ref')
+  writeFileSync(join(root, 'harness', 'session.log'), 'runtime')
+  writeFileSync(join(root, 'node_modules', 'pkg', 'index.js'), 'dep')
+  // 再放 21 个小组件：把清单撑过 20（服务器每批上限），用来验证"分批 + 进度是真的"
+  for (let i = 0; i < 21; i += 1) {
+    writeFileSync(join(root, 'review', `chunk-${String(i).padStart(2, '0')}.md`), `# ${i}\n`)
+  }
 
-  const upload = makeHost({
-    handler: async (call) => {
-      assert(call.url.endsWith(`/api/v1/projects/${PROJECT_ID}/files`), '上传走 /files')
-      assertEq(call.method, 'POST', '上传用 POST')
-      return {
-        status: 201,
-        body: [{ id: 'f1', relative_path: 'review/01-总体意见.md', size: 12, sha256: 'sha256:x' }],
-      }
-    },
+  // 旧布局（研究定义直接在工作区根）与"没有研究"的工作区各一个
+  const oldWs = join(work, 'old-ws')
+  mkdirSync(oldWs, { recursive: true })
+  writeFileSync(join(oldWs, 'project.md'), '# 旧布局\n')
+  const plainWs = join(work, 'plain-ws')
+  mkdirSync(plainWs, { recursive: true })
+  writeFileSync(join(plainWs, 'notes.md'), '与本研究无关\n')
+
+  const registry = async () => ({
+    available: true,
+    items: [
+      { id: 'ws-mentor', title: '导师手上的学生快照', path: ws, updatedAt: '' },
+      { id: 'ws-old', title: '旧布局工作区', path: oldWs, updatedAt: '' },
+      { id: 'ws-plain', title: '无关工作区', path: plainWs, updatedAt: '' },
+    ],
   })
 
-  // 选目录里的文件要能被列出来（保留目录层次；隐藏文件不算）
-  const scanHost = makeHost({ handler: async () => ({ status: 200, body: {} }) })
-  const scan = await scanHost.handler('mentor/scanReview', { dir: ws })
-  assert(scan.ok, 'mentor/scanReview 成功')
-  const listed = (scan.value?.files ?? []).map((f) => f.relPath)
+  /* ── ① 工作区下拉：只列**含研究定义**的 ─────────────────────────────── */
+  const listHost = makeHost({
+    handler: async () => ({ status: 200, body: {} }),
+    listLocalWorkspaces: registry,
+  })
+  const listed = await listHost.handler('mentor/uploadState', {})
+  assertEq(listed.ok, true, 'mentor/uploadState 可用')
   assertEq(
-    listed,
-    ['review/01-总体意见.md', 'review/figures/trend.png'],
-    `扫描出 review/ 下的文件（含子目录、跳过隐藏文件）：${listed.join(', ')}`,
+    listed.value?.items?.map((w) => w.id),
+    ['ws-mentor', 'ws-old'],
+    '只列含研究定义的工作区（无关工作区不出现）',
   )
-  assertEq(scan.value?.researchRoot, join(ws, 'workspace'), '研究根按 researchWorkspaceOf 判定')
+  assertEq(
+    listed.value?.items?.[0]?.root,
+    join(realpathSync(ws), 'workspace'),
+    '新布局：研究根是 <ws>/workspace（真身路径）',
+  )
+  assertEq(listed.value?.items?.[1]?.root, realpathSync(oldWs), '旧布局兼容：研究根就是工作区本身')
+
+  /* ── ② 文件清单：mentor 口径（review/ 与论文 PDF 都推荐，机器产物排除）── */
+  const planHost = makeHost({
+    handler: async () => ({ status: 200, body: {} }),
+    listLocalWorkspaces: registry,
+  })
+  const planned = await planHost.handler('mentor/uploadPlan', { workspaceId: 'ws-mentor' })
+  assertEq(planned.ok, true, 'mentor/uploadPlan 可用')
+  const plan = planned.value?.plan
+  const catOf = (rel) => plan.categories.find((c) => c.files.some((f) => f.relPath === rel))
+  assertEq(catOf('review/01-总体意见.md')?.id, 'review', 'review/ 归"评阅记录"')
+  assertEq(catOf('review/01-总体意见.md')?.decision, 'recommended', '导师侧 review/ 是**推荐**（要带回去）')
+  assertEq(catOf('papers/paper-main/paper.pdf')?.id, 'papers', '论文 PDF 归"论文与图表"')
+  assertEq(catOf('papers/paper-main/paper.pdf')?.decision, 'recommended', '论文 PDF 推荐')
+  assertEq(catOf('harness/session.log'), undefined, 'harness/ 是机器产物：整枝排除，不进可选分类')
+  assertEq(catOf('node_modules/pkg/index.js'), undefined, 'node_modules 整枝排除')
+  assertEq(catOf('research/literature/fulltext/001_ref.pdf')?.decision, 'optional', '文献原文默认不传')
+  assertEq(plan.defaultSelection.includes('review/01-总体意见.md'), true, '默认勾选含评阅记录')
+  assertEq(plan.defaultSelection.includes('papers/paper-main/paper.pdf'), true, '默认勾选含论文 PDF')
+  assertEq(
+    plan.defaultSelection.includes('research/literature/fulltext/001_ref.pdf'),
+    false,
+    '默认不勾文献原文（是学生原件的回声）',
+  )
+  assert(plan.totals.excludedFiles > 0, '机器产物有计数（界面用它说"已跳过 N 个"）')
 
   /*
-   * ⚠️ 刻意的不对称（有断言才不会被"顺手统一"改掉）：
-   *   - **学生发布/更新**（`work/publish` → `classify`）：`review/` 判为 `excluded`，不传；
-   *   - **导师回传**（本端点的 `scanReviewFiles`）：照列 `review/` 下的文件并上传。
-   * 理由：这一层里的导师指导本来就来自服务器（传回去是回声），而学生的自查不是要发布的
-   * 研究事实；反过来，导师的【上传】正是靠这条通道把指导结果送回服务器。
+   * ⚠️ 两种用途的**刻意不对称**（有断言才不会被"顺手统一"改掉）：
+   *   · 学生发布（`publish`）：`review/` 排除；≥10 MB 的论文 PDF 降级为可选；
+   *   · 导师回传（`mentor`）：`review/` 推荐；论文 PDF 不因体积降级 ——
+   *     用户原话"要去除机器生成文件，但是要有自己撰写的论文 PDF"。
    */
   {
     const UP = await import(lib('research/upload-selection.js'))
     assertEq(UP.classify('review/x.md', 100).decision, 'excluded', '发布侧把 review/ 排除')
-    assertEq(UP.isSelectable('excluded'), false, 'excluded 在对话框里不可勾选')
-    assert(
-      (scan.value?.files ?? []).length > 0,
-      '导师回传侧仍然照传 review/（两条通道的取舍不同）',
+    assertEq(UP.classify('review/x.md', 100, 'mentor').decision, 'recommended', '导师侧 review/ 推荐')
+    assertEq(
+      UP.classify('papers/p/paper.pdf', 12 * 1024 * 1024).decision,
+      'optional',
+      '发布侧：≥10 MB 的论文 PDF 降级为可选',
     )
+    assertEq(
+      UP.classify('papers/p/paper.pdf', 12 * 1024 * 1024, 'mentor').decision,
+      'recommended',
+      '导师侧：论文 PDF 不因体积降级',
+    )
+    assertEq(
+      UP.classify('harness/session.log', 10, 'mentor').decision,
+      'excluded',
+      '导师侧照样排除机器产物（用户要求"去除机器生成文件"）',
+    )
+    assertEq(UP.isSelectable('excluded'), false, 'excluded 在对话框里不可勾选')
     /*
      * npm 缓存目录必须被排除（2026-09）：某真实工作区的
      * `papers/paper-main/presentation/.npmcache/_cacache/…` 有 158 个 blob、18.9 MiB，
-     * 占那份工作区快照的 **55%** —— 只因为"落在 papers/** 下"就被判成 recommended，
-     * 于是随发布上传、再被导师原样下载回来。这正是那次"下载 13.6 MB 太慢"的一半。
+     * 占那份工作区快照的 **55%**。两种用途都不能把它带上。
      */
     const cacache =
       'papers/paper-main/presentation/.npmcache/_cacache/content-v2/sha512/40/cc/ebe1c1a8'
     assertEq(UP.classify(cacache, 3496008).decision, 'excluded', 'npm 缓存目录（.npmcache）不发布')
+    assertEq(UP.classify(cacache, 3496008, 'mentor').decision, 'excluded', 'npm 缓存目录也不回传')
     assertEq(
-      UP.classify('papers/paper-main/presentation/talk-deck.html', 661774).decision,
+      UP.classify('papers/paper-main/presentation/talk-deck.html', 661774, 'mentor').decision,
       'recommended',
       '同一目录下的研究资产（讲稿）照常推荐 —— 排除的是缓存，不是整个目录',
     )
   }
 
-  // 按原相对路径上传（不是拍平成文件名）
-  const res = await upload.handler('mentor/upload', {
-    projectId: PROJECT_ID,
-    dir: ws,
-    paths: ['review/01-总体意见.md', 'review/figures/trend.png'],
-  })
-  assert(res.ok, `mentor/upload 成功${res.ok ? '' : `（${res.error?.code}: ${res.error?.message}）`}`)
-  assertEq(res.value?.uploaded?.[0]?.relativePath, 'review/01-总体意见.md', 'relative_path 带 review/ 前缀')
-  const form = upload.calls[0]?.body
-  assert(form instanceof FormData, '用 multipart 表单（不自己设 content-type）')
-  assertEq(form.getAll('relative_paths'), ['review/01-总体意见.md', 'review/figures/trend.png'], '目录层次原样保留')
+  // 不含研究定义的工作区：明确说"没有研究工作"，不是给一个空清单
+  const noResearch = await planHost.handler('mentor/uploadPlan', { workspaceId: 'ws-plain' })
+  assertEq(noResearch.ok, false, '没有研究定义的工作区不能回传')
+  assertEq(noResearch.error?.code, 'no-research', '原因码是 no-research')
 
-  // 界面递进来的路径必须限定在**扫描结果**内（不能读任意盘上文件）
+  // 注册表里没有这个 id（工作区被删了）：不是"没东西可传"，是"找不到"
+  const gone = await planHost.handler('mentor/uploadPlan', { workspaceId: 'ws-gone' })
+  assertEq(gone.error?.code, 'not-found', '工作区不存在 → not-found（提示刷新重试）')
+
+  /* ── ③ 上传：增量（sha256 一致就跳过）+ 分批 + 真实进度 ──────────────── */
+  const digestOf = (text) => `sha256:${createHash('sha256').update(Buffer.from(text)).digest('hex')}`
+  const serverItems = [
+    // 与本地**完全一致** → 不该重传（服务器不去重：同路径再传 = 新行 + 新字节，配额照涨）
+    { id: 'f1', relative_path: 'project.md', size: Buffer.byteLength(PROJECT_MD), sha256: digestOf(PROJECT_MD) },
+    // 同一路径的历史多行：**最后一版**才算数（服务器按 created_at asc 返回）
+    { id: 'f2', relative_path: 'review/01-总体意见.md', size: 9, sha256: 'sha256:old' },
+  ]
+  let postCount = 0
+  let midUpload = null
+  let uploadHost = null
+  const upload = makeHost({
+    listLocalWorkspaces: registry,
+    handler: async (call) => {
+      if (call.method === 'GET') {
+        // 导师回传前比的是**自己那一侧**（v20：同名两侧并存，学生那份与这份无关）
+        assertReadSide(call.url, 'mentor', '增量比对读导师那一侧')
+        return { status: 200, body: { items: serverItems, total_bytes: 100 } }
+      }
+      postCount += 1
+      if (postCount === 2) {
+        // 第二批开始的那一刻问进度：第一批的 20 个文件应该已经报上去了
+        // （宿主回的是**副本**，所以这里拿到的就是那一刻的数字）
+        midUpload = await uploadHost.handler('mentor/uploadProgress', { projectId: PROJECT_ID })
+      }
+      const paths = call.body.getAll('relative_paths')
+      return {
+        status: 201,
+        body: paths.map((p, i) => ({
+          id: `u${postCount}-${i}`,
+          relative_path: p,
+          size: 1,
+          sha256: 'sha256:new',
+        })),
+      }
+    },
+  })
+  uploadHost = upload
+  const picked = plan.defaultSelection
+  const uploaded = await upload.handler('mentor/upload', {
+    projectId: PROJECT_ID,
+    workspaceId: 'ws-mentor',
+    paths: picked,
+    source: 'mentor',
+  })
+  assert(
+    uploaded.ok,
+    `mentor/upload 成功${uploaded.ok ? '' : `（${uploaded.error?.code}: ${uploaded.error?.message}）`}`,
+  )
+  assertEq(uploaded.value?.skippedExisting, 1, '内容与服务器一致的 project.md 被跳过（增量，不白占配额）')
+  assertEq(uploaded.value?.uploaded, picked.length - 1, '其余全部上传')
+  assertEq(postCount, 2, '超过 20 个文件 → 分 2 批（服务器每批上限）')
+  assertEq(midUpload?.value?.totalFiles, picked.length - 1, '进度总数 = 待传文件数')
+  assertEq(midUpload?.value?.doneFiles, 20, '第二批开始时已报 20 个（进度是真的，不是装饰）')
+  assertEq(midUpload?.value?.running, true, '上传期间 running = true')
+  const form = upload.calls.find((c) => c.method === 'POST')?.body
+  assert(form instanceof FormData, '用 multipart 表单（不自己设 content-type）')
+  // 路径按字典序切批，所以某个文件可能落在**第二批** —— 看全部批次的并集
+  const sentPaths = upload.calls
+    .filter((c) => c.method === 'POST')
+    .flatMap((c) => (c.body instanceof FormData ? c.body.getAll('relative_paths') : []))
+  assert(
+    sentPaths.includes('review/figures/trend.png') && sentPaths.includes('papers/paper-main/paper.pdf'),
+    '相对路径保留目录层次（服务器的还原依据）',
+  )
+  assertEq(sentPaths.length, picked.length - 1, '传的正好是"变化的那些"（不含跳过的）')
+  const after = await upload.handler('mentor/uploadProgress', { projectId: PROJECT_ID })
+  assertEq(after.value?.running, false, '上传结束后 running = false')
+  assertEq(after.value?.doneFiles, uploaded.value?.uploaded, '结束后已传数 = 本次上传数')
+
+  /*
+   * 省略 `source` = `owner`（服务器默认，也是 v19 界面的行为）：
+   * 学生自己【上传】走的就是这一侧 —— 不能把导师那份当成"我已经有的"。
+   */
+  {
+    let seen = null
+    const studentSide = makeHost({
+      listLocalWorkspaces: registry,
+      handler: async (call) => {
+        if (call.method === 'GET') {
+          seen = call.url
+          return { status: 200, body: { items: serverItems, total_bytes: 100 } }
+        }
+        const paths = call.body.getAll('relative_paths')
+        return { status: 201, body: paths.map((p, i) => ({ id: `s${i}`, relative_path: p, size: 1, sha256: '' })) }
+      },
+    })
+    const res = await studentSide.handler('mentor/upload', {
+      projectId: PROJECT_ID,
+      workspaceId: 'ws-mentor',
+      paths: ['project.md'],
+    })
+    assertEq(res.value?.skippedExisting, 1, '不传 source：按 owner 侧比对（默认口径）')
+    assert(!String(seen).includes('source='), '不传 source → 不带查询参数（= 服务器的 owner 默认）')
+  }
+
+  // 旧服务器**不给 sha256** → 比对必然不等 → 保守全传（宁可多传，不可漏传）
+  {
+    let legacyPosts = 0
+    const legacy = makeHost({
+      listLocalWorkspaces: registry,
+      handler: async (call) => {
+        if (call.method === 'GET') {
+          // 显式带 `?source=mentor`：旧服务器忽略它（那时只有一侧，读到的正是导师那份），
+          // 新服务器则精确读到导师那一侧 —— 两种服务器上这个 URL 都是对的
+          assertReadSide(call.url, 'mentor', '增量比对读导师那一侧')
+          return { status: 200, body: { items: [{ id: 'f1', relative_path: 'project.md', size: 5 }], total_bytes: 5 } }
+        }
+        legacyPosts += 1
+        const paths = call.body.getAll('relative_paths')
+        return { status: 201, body: paths.map((p, i) => ({ id: `l${i}`, relative_path: p, size: 1, sha256: '' })) }
+      },
+    })
+    const res = await legacy.handler('mentor/upload', {
+      projectId: PROJECT_ID,
+      workspaceId: 'ws-mentor',
+      paths: ['project.md'],
+      source: 'mentor',
+    })
+    assertEq(res.value?.skippedExisting, 0, '旧服务器没有摘要可比 → 不跳过（保守）')
+    assertEq(res.value?.uploaded, 1, '旧服务器上照传')
+    assertEq(legacyPosts, 1, '一批搞定')
+  }
+
+  // 界面递进来的路径必须落在**扫描结果**内：机器产物、工作区外的一律拒绝
+  const machine = await upload.handler('mentor/upload', {
+    projectId: PROJECT_ID,
+    workspaceId: 'ws-mentor',
+    paths: ['harness/session.log'],
+  })
+  assertEq(machine.ok, false, '机器产物不在白名单：拒')
+  assertEq(machine.error?.code, 'bad-request', '拒的原因可读（bad-request）')
   const outside = await upload.handler('mentor/upload', {
     projectId: PROJECT_ID,
-    dir: ws,
-    paths: ['workspace/project.md', '../outside.md'],
+    workspaceId: 'ws-mentor',
+    paths: ['../outside.md'],
   })
-  assertEq(outside.ok, false, '非 review/ 的路径被拒（哪怕它在工作区里）')
-  assertEq(outside.error?.code, 'bad-request', '拒的原因是可读的 bad-request')
+  assertEq(outside.ok, false, '工作区外的路径被拒（不能读任意盘上文件）')
 
-  // 服务器越界 → 403 FILE_PATH_RESERVED → 说清"只能写 review/"，不是"没权限"
+  // 服务器还没放开权限 → 403 FILE_PATH_RESERVED → 说清"服务器需放开"，不是"没权限"
   const reserved = makeHost({
-    handler: async () => ({
-      status: 403,
-      body: { error: { code: 'FILE_PATH_RESERVED', message: 'reserved', details: {} } },
-    }),
+    listLocalWorkspaces: registry,
+    handler: async (call) => {
+      if (call.method === 'GET') {
+        assertReadSide(call.url, 'mentor', '增量比对读导师那一侧')
+        return { status: 200, body: { items: [], total_bytes: 0 } }
+      }
+      return { status: 403, body: { error: { code: 'FILE_PATH_RESERVED', message: 'reserved', details: {} } } }
+    },
   })
   const reservedRes = await reserved.handler('mentor/upload', {
     projectId: PROJECT_ID,
-    dir: ws,
+    workspaceId: 'ws-mentor',
     paths: ['review/01-总体意见.md'],
+    source: 'mentor',
   })
   assertEq(reservedRes.ok, false, '越界上传失败')
   assertEq(reservedRes.error?.code, 'path-reserved', '403 FILE_PATH_RESERVED → path-reserved')
   assert(
     String(reservedRes.error?.message ?? '').includes('review/'),
-    '文案点明只能写 review/（不是笼统的没权限）',
+    '文案点明"服务器只放开 review/"（不是笼统的没权限）',
   )
 
-  // 本地先拦一道：客户端自己也不允许拼出 review/ 之外的路径
+  // 客户端也先拦一道：绝对路径 / `..` 在发请求前就拒（省一次往返）
   let clientBlocked = false
   try {
-    await SC.uploadReviewFiles(
+    await SC.uploadWorkspaceFiles(
       'http://localhost:8000',
       KEY,
       PROJECT_ID,
-      [{ relPath: 'project.md', bytes: Buffer.from('x') }],
-      { fetchImpl: async () => ({ ok: true, status: 201, json: async () => [], arrayBuffer: async () => new ArrayBuffer(0) }) },
+      [{ relPath: '../evil.md', bytes: Buffer.from('x') }],
+      {
+        fetchImpl: async () => ({
+          ok: true,
+          status: 201,
+          json: async () => [],
+          arrayBuffer: async () => new ArrayBuffer(0),
+        }),
+      },
     )
   } catch (e) {
     clientBlocked = e instanceof SC.ServerError && e.code === 'bad-request'
   }
-  assert(clientBlocked, '客户端在发请求前就拦住非 review/ 路径（省一次往返）')
+  assert(clientBlocked, '客户端在发请求前就拦住非法相对路径')
 
-  // 没有 review/ 目录时是"还没有指导结果"，不是错误
-  const empty = makeHost({ handler: async () => ({ status: 200, body: {} }) })
-  const emptyScan = await empty.handler('mentor/scanReview', { dir: join(work, 'empty-ws') })
-  assertEq(emptyScan.ok, true, '没有 review/ 目录 → 成功（空列表，不是错误）')
-  assertEq(emptyScan.value?.files, [], '空列表')
+  // 读盘只允许在研究根内（`readResearchFile` 是唯一入口，safeJoin 兜底）
+  let escaped = false
+  try {
+    SYNC.readResearchFile(root, '../outside.md')
+  } catch {
+    escaped = true
+  }
+  assert(escaped, 'readResearchFile 拒绝逃出研究根的相对路径')
+  assertEq(SYNC.readResearchFile(root, 'review/01-总体意见.md').length, Buffer.byteLength('# 总体意见\n'), '正常路径读得到')
+
+  /* ── ④ 超时按体积估（慢 ≠ 死，不能用一个与体积无关的常数）────────────── */
+  assertEq(RPC.uploadTimeoutForBytes(0), SC.SERVER_TIMEOUT_MS, '空批量就是基础超时')
+  assert(
+    RPC.uploadTimeoutForBytes(50 * 1024 * 1024) > 15 * 60 * 1000,
+    '50 MB 的一批给到 15 分钟以上（细链路上 8 秒必然假失败）',
+  )
+  assertEq(RPC.uploadTimeoutForBytes(10 ** 12), RPC.UPLOAD_TIMEOUT_MAX_MS, '再大也有 30 分钟硬上限')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -338,7 +578,12 @@ section('[6] mentor/list 带出指导进展（reviewFiles）')
   const legacyHost = makeHost({
     handler: async (call) => {
       if (call.url.endsWith('/mentorship-proposals')) return { status: 200, body: [ACCEPTED] }
-      assert(call.url.endsWith(`/projects/${PROJECT_ID}/files`), '旧服务器：为 ACCEPTED 补读项目文件列表')
+      // 补读的是**导师那一侧**（v20 起两侧并存；旧服务器忽略这个参数，而那时
+      // 导师的交付本来就在唯一的那一侧里 —— 两种服务器上都数得对）
+      assert(
+        call.url.endsWith(`/projects/${PROJECT_ID}/files?source=mentor`),
+        `旧服务器：为 ACCEPTED 补读导师那一侧的文件列表（实际 ${call.url}）`,
+      )
       return {
         status: 200,
         body: {
@@ -449,11 +694,26 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
   }
   /** 服务器那把 ZIP 命名成 `<owner>-<title>.zip`，用 Content-Disposition 回给我们。 */
   const DISPOSITION = "attachment; filename*=UTF-8''%E5%AD%A6%E7%94%9F%E7%94%B2-%E9%95%BF%E4%B8%8A%E4%B8%8B%E6%96%87%E6%8E%A8%E7%90%86.zip"
-  const hostFor = (dirs, { filename = true, archive = archiveReply() } = {}) =>
-    makeHost({
+  /**
+   * 导师那一侧的归档文件名带 `-mentor` 后缀（服务器 `archive_download_name`）——
+   * 学生要能一眼看出"这份是导师的工作区"，而不是自己那份。
+   */
+  const DISPOSITION_MENTOR = DISPOSITION.replace('.zip', '-mentor.zip')
+  /**
+   * @param side 这次要读哪一侧：`owner`（默认，导师下学生的工作区）或 `mentor`
+   *   （学生取导师的交付）—— 预检与归档**必须是同一侧**，测试替服务器把这件事断言住。
+   */
+  const hostFor = (dirs, { filename = true, archive = archiveReply(), side = 'owner' } = {}) => {
+    const want = side === 'mentor' ? '?source=mentor' : ''
+    return makeHost({
       handler: async (call) => {
-        if (call.url.endsWith('/files')) return { status: 200, body: { items: FILES, total_bytes: 15 } }
-        assert(call.url.endsWith(`/projects/${PROJECT_ID}/files/archive`), '下载取的是归档端点（ZIP）')
+        if (call.url.endsWith(`/files${want}`)) {
+          return { status: 200, body: { items: FILES, total_bytes: 15 } }
+        }
+        assert(
+          call.url.endsWith(`/projects/${PROJECT_ID}/files/archive${want}`),
+          `下载取的是归档端点（ZIP），读 ${side} 侧（实际 ${call.url}）`,
+        )
         return filename ? archive : { ...archive, headers: undefined }
       },
       listLocalWorkspaces: async () => ({
@@ -461,6 +721,7 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
         items: dirs.map((d, i) => ({ id: `ws-${i}`, title: `工作区 ${i}`, path: d, updatedAt: '' })),
       }),
     })
+  }
 
   // ① 对话框要的三样：可选工作区（**全部可选**）、预检、预计文件名
   const empty = makeWorkspace('dl-empty')
@@ -680,6 +941,73 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
       prefix: 'after-fail',
     })
     assertEq(ok.ok, true, '失败之后仍然能正常下载')
+  }
+
+  /*
+   * ⑭ **分侧读**（v20）：一个项目里同一路径可以同时存在两侧 —— 学生自己那份（`owner`）
+   * 与导师回传那份（`mentor`），互不覆盖。
+   *
+   *   · 导师【下载】学生的工作区 → `owner`（默认，行为与 v19 完全一致，见上面 ①-⑬）；
+   *   · 学生【下载】导师的交付 → `mentor`（服务器给的文件名带 `-mentor` 后缀）。
+   *
+   * 预检与下载**必须是同一侧**，否则会出现"预检说有 3 个文件、点下去 404"。
+   */
+  {
+    const dir = makeWorkspace('dl-mentor-side')
+    const studentHost = hostFor([dir], {
+      side: 'mentor',
+      archive: archiveReply({ headers: true }),
+    })
+    // 预检：读 mentor 侧，且预计文件名带 -mentor
+    const st = await studentHost.handler('mentor/downloadState', {
+      projectId: PROJECT_ID,
+      prefix: '学生甲-长上下文推理',
+      source: 'mentor',
+    })
+    assertEq(st.ok, true, '学生侧预检可用')
+    assertEq(st.value?.files, 3, '预检读的是导师那一侧的文件数')
+    assertEq(st.value?.expectedName, '学生甲-长上下文推理-mentor.zip', '预计文件名带 -mentor 后缀（与学生自己那份区分）')
+
+    // 下载：同一侧；落盘文件名以服务器的 Content-Disposition 为准（同样带后缀）
+    const archive = archiveReply({ headers: false })
+    const withName = makeHost({
+      listLocalWorkspaces: async () => ({
+        available: true,
+        items: [{ id: 'ws-0', title: 'w', path: dir, updatedAt: '' }],
+      }),
+      handler: async (call) => {
+        if (call.url.includes('/files?') || call.url.endsWith('/files')) {
+          return { status: 200, body: { items: FILES, total_bytes: 15 } }
+        }
+        assert(
+          call.url.endsWith(`/projects/${PROJECT_ID}/files/archive?source=mentor`),
+          `学生下载取导师那一侧的归档（实际 ${call.url}）`,
+        )
+        return {
+          ...archive,
+          headers: {
+            get: (k) => {
+              const key = k.toLowerCase()
+              if (key === 'content-disposition') return DISPOSITION_MENTOR
+              if (key === 'x-file-count') return '3'
+              return null
+            },
+          },
+        }
+      },
+    })
+    const r = await withName.handler('mentor/download', {
+      projectId: PROJECT_ID,
+      workspaceId: 'ws-0',
+      prefix: '学生甲-长上下文推理',
+      source: 'mentor',
+    })
+    assertEq(r.ok, true, `学生取导师那一份成功${r.ok ? '' : `（${r.error?.code}: ${r.error?.message}）`}`)
+    assertEq(
+      leftovers(dir),
+      ['学生甲-长上下文推理-mentor.zip'],
+      '落盘文件名用服务器给的（带 -mentor），学生一眼能分出两份',
+    )
   }
 }
 

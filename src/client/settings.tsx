@@ -1569,6 +1569,48 @@ interface HostUploadPlan {
   } | null
 }
 
+/**
+ * 【上传】对话框的数据（宿主 `mentor/uploadPlan` 的镜像）。
+ *
+ * 与发布用的 {@link HostUploadPlan} **同一个分类引擎**（`upload-selection`），
+ * 只是口径是 `mentor`：`review/` 与论文 PDF 都算推荐，机器产物照样排除。
+ */
+interface HostMentorUploadPlan {
+  workspaceId: string
+  title: string
+  path: string
+  root: string
+  plan: HostUploadPlan['plan']
+}
+
+/**
+ * 【上传】对话框的工作区下拉项（宿主 `mentor/uploadState` 的镜像）。
+ *
+ * 只有**含研究定义**的工作区会出现在这里；`root` 是宿主解析出的研究根
+ * （`<ws>/workspace/`，旧布局则是 `<ws>`）—— 显示出来，导师才能确认"传的是这一个"。
+ */
+interface HostUploadWorkspace {
+  id: string
+  title: string
+  path: string
+  root: string
+}
+
+/**
+ * 项目文件空间的**两侧**（宿主 `FileSource` 的镜像）：`owner` = 学生自己那份，
+ * `mentor` = 导师回传的那份。同一路径两侧并存、互不覆盖。
+ */
+type HostFileSide = 'owner' | 'mentor'
+
+/** 回传进度（宿主 `mentor/uploadProgress` 的镜像）。 */
+interface HostUploadProgress {
+  doneFiles: number
+  totalFiles: number
+  sentBytes: number
+  totalBytes: number
+  running: boolean
+}
+
 /** 简报（宿主 `WorkBrief` 的镜像）：第二层，非 owner 花 1 Token。 */
 interface HostWorkBrief extends HostWork {
   motivation: string | null
@@ -1929,6 +1971,100 @@ function formatBytes(bytes: number): string {
  * - 体积/项数/成本/余量/批次数全部实算并显示；
  * - 超过服务器单文件上限（100 MB）的文件**标出来说明传不上去**。
  */
+/**
+ * **分类清单**（发布对话框与导师回传对话框共用）。
+ *
+ * 两个对话框问的是同一件事 —— "这次传哪些文件" —— 区别只在数据来源与口径
+ * （`publish` / `mentor`），渲染抄两遍是迟早写歪的写法（同 RefreshIconButton 的理由）。
+ *
+ * ⚠️ 只显示**可选**的分类（`recommended` / `optional`）：`excluded`（机器产物）
+ * 一概不出现（2026-09 用户拍板），它留在数据里只为对账。
+ */
+function UploadCategoryList({
+  t,
+  categories,
+  maxFileBytes,
+  selection,
+  expanded,
+  onToggleCategory,
+  onToggleFile,
+  onToggleExpand,
+}: {
+  t: Translate
+  categories: HostUploadPlan['plan']['categories']
+  maxFileBytes: number
+  selection: ReadonlySet<string>
+  expanded: ReadonlySet<string>
+  onToggleCategory: (categoryId: string, files: string[], next: boolean) => void
+  onToggleFile: (relPath: string, next: boolean) => void
+  onToggleExpand: (categoryId: string) => void
+}): JSX.Element {
+  const visible = categories.filter((c) => c.decision !== 'excluded' && c.files.length > 0)
+  return (
+    <div style={S.list}>
+      {visible.map((cat, i) => {
+        const files = cat.files
+        const all = files.every((f) => selection.has(f.relPath))
+        const some = !all && files.some((f) => selection.has(f.relPath))
+        const isOpen = expanded.has(cat.id)
+        return (
+          <div
+            key={cat.id}
+            style={i === 0 ? undefined : { borderTop: '1px solid var(--dsw-alias-border-l1)' }}
+          >
+            <div style={{ ...S.listRow, alignItems: 'flex-start' }}>
+              <input
+                type="checkbox"
+                checked={all}
+                ref={(el) => {
+                  if (el) el.indeterminate = some
+                }}
+                onChange={(e) => onToggleCategory(cat.id, files.map((f) => f.relPath), e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <div style={{ minWidth: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <div style={S.listTitle}>
+                  {t(`upload.category.${cat.id}`)}
+                  <span style={{ ...S.hint, marginLeft: 8 }}>
+                    {formatBytes(cat.bytes)} · {files.length}
+                  </span>
+                </div>
+                <div style={S.hint}>{t(`upload.reason.${cat.id}`)}</div>
+              </div>
+              <button type="button" style={S.linkBtn} onClick={() => onToggleExpand(cat.id)}>
+                {isOpen ? t('community.publish.collapse') : t('community.publish.expand')}
+              </button>
+            </div>
+            {isOpen ? (
+              <div style={{ maxHeight: 200, overflow: 'auto', padding: '4px 12px 10px 34px' }}>
+                {files.map((f) => (
+                  <label
+                    key={f.relPath}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selection.has(f.relPath)}
+                      onChange={(e) => onToggleFile(f.relPath, e.target.checked)}
+                    />
+                    <span style={{ ...S.mono, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {f.relPath}
+                    </span>
+                    <span style={{ ...S.hint, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+                      {formatBytes(f.size)}
+                      {f.size > maxFileBytes ? ` ⚠ ${t('community.publish.tooLarge')}` : ''}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function PublishDialog({
   t,
   data,
@@ -1956,20 +2092,22 @@ function PublishDialog({
   onCancel: () => void
   onConfirm: () => void
 }): JSX.Element {
-  // 只显示**可选的**分类（recommended / optional）；excluded 完全不出现
-  const visible = data.plan.categories.filter((c) => c.decision !== 'excluded' && c.files.length > 0)
-  const selectedFiles = visible
-    .flatMap((c) => c.files.map((f) => f.relPath))
-    .filter((r) => selection.has(r))
-  const selectedBytes = visible
+  /*
+   * 清单本体交给 {@link UploadCategoryList}（与导师回传对话框共用）；这里只算汇总。
+   * `excluded`（机器产物）在组件里就被滤掉了，所以汇总与清单天然一致。
+   */
+  const selectable = data.plan.categories
+    .filter((c) => c.decision !== 'excluded')
     .flatMap((c) => c.files)
+  const selectedFiles = selectable.map((f) => f.relPath).filter((r) => selection.has(r))
+  const selectedBytes = selectable
     .filter((f) => selection.has(f.relPath))
     .reduce((n, f) => n + f.size, 0)
   const batches = Math.max(1, Math.ceil(selectedFiles.length / data.plan.limits.maxFilesPerRequest))
   const storage = data.usage?.storage
-  const oversizeSelected = visible
-    .flatMap((c) => c.files)
-    .filter((f) => selection.has(f.relPath) && f.size > data.plan.limits.maxFileBytes)
+  const oversizeSelected = selectable.filter(
+    (f) => selection.has(f.relPath) && f.size > data.plan.limits.maxFileBytes,
+  )
 
   return (
     <div
@@ -2011,67 +2149,16 @@ function PublishDialog({
                 : ''}
           </div>
 
-          <div style={S.list}>
-            {visible.map((cat, i) => {
-              const files = cat.files
-              const all = files.every((f) => selection.has(f.relPath))
-              const some = !all && files.some((f) => selection.has(f.relPath))
-              const isOpen = expanded.has(cat.id)
-              return (
-                <div
-                  key={cat.id}
-                  style={i === 0 ? undefined : { borderTop: '1px solid var(--dsw-alias-border-l1)' }}
-                >
-                  <div style={{ ...S.listRow, alignItems: 'flex-start' }}>
-                    <input
-                      type="checkbox"
-                      checked={all}
-                      ref={(el) => {
-                        if (el) el.indeterminate = some
-                      }}
-                      onChange={(e) => onToggleCategory(cat.id, files.map((f) => f.relPath), e.target.checked)}
-                      style={{ marginTop: 3 }}
-                    />
-                    <div style={{ minWidth: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      <div style={S.listTitle}>
-                        {t(`upload.category.${cat.id}`)}
-                        <span style={{ ...S.hint, marginLeft: 8 }}>
-                          {formatBytes(cat.bytes)} · {files.length}
-                        </span>
-                      </div>
-                      <div style={S.hint}>{t(`upload.reason.${cat.id}`)}</div>
-                    </div>
-                    <button type="button" style={S.linkBtn} onClick={() => onToggleExpand(cat.id)}>
-                      {isOpen ? t('community.publish.collapse') : t('community.publish.expand')}
-                    </button>
-                  </div>
-                  {isOpen ? (
-                    <div style={{ maxHeight: 200, overflow: 'auto', padding: '4px 12px 10px 34px' }}>
-                      {files.map((f) => (
-                        <label
-                          key={f.relPath}
-                          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selection.has(f.relPath)}
-                            onChange={(e) => onToggleFile(f.relPath, e.target.checked)}
-                          />
-                          <span style={{ ...S.mono, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {f.relPath}
-                          </span>
-                          <span style={{ ...S.hint, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
-                            {formatBytes(f.size)}
-                            {f.size > data.plan.limits.maxFileBytes ? ` ⚠ ${t('community.publish.tooLarge')}` : ''}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              )
-            })}
-          </div>
+          <UploadCategoryList
+            t={t}
+            categories={data.plan.categories}
+            maxFileBytes={data.plan.limits.maxFileBytes}
+            selection={selection}
+            expanded={expanded}
+            onToggleCategory={onToggleCategory}
+            onToggleFile={onToggleFile}
+            onToggleExpand={onToggleExpand}
+          />
 
           {oversizeSelected.length > 0 ? (
             <div style={{ fontSize: 11.5, color: 'var(--dsw-alias-state-warn-primary)', lineHeight: 1.6 }}>
@@ -2808,6 +2895,8 @@ function DownloadDialog({
           {/* 只存 ZIP、其余交给用户：说清楚，免得以为会自动解压 */}
           <div style={S.hint}>{t('community.exchange.zipOnly')}</div>
 
+          {/* 对方还没上传：0 个文件不是错误，但要说清（否则只剩一个灰按钮） */}
+          {files === 0 ? <div style={S.hint}>{t('community.exchange.noSourceFiles')}</div> : null}
           {!workspacesAvailable ? (
             <div style={S.hint}>{workspacesReason ?? t('community.exchange.noWorkspaces')}</div>
           ) : workspaces === null ? (
@@ -2911,107 +3000,203 @@ function DownloadDialog({
 }
 
 /**
- * 【上传】：把本地 `workspace/review/` 下的指导结果**按原相对路径**回传。
+ * 【上传】：把**这一份工作区**回传给项目 —— 导师是在学生的 workspace/ 里继续推进研究的，
+ * 所以传回去的不是只有 `review/`，而是"我这份工作区"（学生下载后接着做）。
  *
- * 为什么是"选目录 + 扫描"而不是"选文件"：
- *   - 服务器要求 `relative_paths` 保留目录层次（`review/figures/x.png`），
- *     浏览器文件选择器拿不到相对路径；
- *   - 走宿主读盘还能绕开 RPC 的请求体上限（原来是 base64 传字节，4MB 就打住了）。
+ * ## 为什么是"下拉选工作区 + 勾选文件"而不是"选目录 + 扫描"
  *
- * 服务器只允许关系方写 `review/**`：越界会得到 `403 FILE_PATH_RESERVED`
- * → 界面说"导师只能写 review/"，**不是**"没权限"。
+ * 1. 工作区是**注册表里的实体**：宿主按 id 解析路径，客户端递不进任意路径，
+ *    导师也不必自己记住"我把快照解压到哪了"；
+ * 2. 清单由宿主扫描研究根给出（`mentor/uploadPlan`），**保留目录层次** ——
+ *    浏览器文件选择器拿不到相对路径，而服务器要的就是它；
+ * 3. 走宿主读盘顺带绕开了 RPC 的请求体上限（否则只能 base64 传字节，4 MB 就打住）。
+ *
+ * ## 口径（与发布不同，别混）
+ *
+ * 清单是 `mentor` 口径：`review/**` 与论文 PDF 都是**推荐**（发布时前者排除、后者按大小降级），
+ * 机器产物（`harness/` 缓存、依赖、权重…）照样排除。
+ *
+ * ## 服务器侧的前提
+ *
+ * 回传要写学生的项目文件空间（`review/` 之外），服务器须放开"协作者只能写 `review/**`"。
+ * 未放开时 403 `FILE_PATH_RESERVED` → 界面说"服务器需放开这条限制"，**不**说"没权限"、
+ * 也**不**偷偷退回只传 `review/`（那会让人以为整包已经上去了）。
  */
 function UploadDialog({
   t,
   proposal,
-  dir,
-  pickerSupported,
-  files,
-  selected,
+  workspaces,
+  workspacesAvailable,
+  workspacesReason,
+  workspaceId,
+  plan,
+  planLoading,
+  selection,
+  expanded,
   busy,
+  progress,
   notice,
-  onDirChange,
-  onChooseDir,
-  onScan,
-  onToggle,
+  onSelectWorkspace,
+  onToggleCategory,
+  onToggleFile,
+  onToggleExpand,
   onUpload,
   onClose,
 }: {
   t: Translate
   proposal: HostProposal
-  dir: string
-  pickerSupported: boolean
-  files: Array<{ relPath: string; size: number }> | null
-  selected: Set<string>
+  workspaces: HostUploadWorkspace[] | null
+  workspacesAvailable: boolean
+  workspacesReason: string | null
+  workspaceId: string
+  plan: HostMentorUploadPlan | null
+  planLoading: boolean
+  selection: ReadonlySet<string>
+  expanded: ReadonlySet<string>
   busy: boolean
+  progress: HostUploadProgress | null
   notice: { tone: 'success' | 'error'; text: string } | null
-  onDirChange: (next: string) => void
-  onChooseDir: () => void
-  onScan: () => void
-  onToggle: (relPath: string) => void
+  onSelectWorkspace: (id: string) => void
+  onToggleCategory: (categoryId: string, files: string[], next: boolean) => void
+  onToggleFile: (relPath: string, next: boolean) => void
+  onToggleExpand: (categoryId: string) => void
   onUpload: () => void
   onClose: () => void
 }): JSX.Element {
+  const chosen = workspaces?.find((w) => w.id === workspaceId) ?? null
+  /*
+   * 汇总**所选文件的体积**（用户要求：界面上要显示）。
+   * 只算可选分类里的文件 —— `excluded` 不可勾选，出现即数据不一致。
+   */
+  const selectable = (plan?.plan.categories ?? [])
+    .filter((c) => c.decision !== 'excluded')
+    .flatMap((c) => c.files.filter((f) => !f.relPath.endsWith('/')))
+  const selected = selectable.filter((f) => selection.has(f.relPath))
+  const selectedBytes = selected.reduce((n, f) => n + f.size, 0)
+  const limits = plan?.plan.limits ?? null
+  const batches = limits ? Math.max(1, Math.ceil(selected.length / limits.maxFilesPerRequest)) : 1
+  const oversize = limits ? selected.filter((f) => f.size > limits.maxFileBytes) : []
+  const ready = Boolean(workspaceId) && selected.length > 0 && !busy && !planLoading
+  const pct =
+    busy && progress && progress.totalBytes > 0
+      ? Math.min(100, Math.round((progress.sentBytes / progress.totalBytes) * 100))
+      : null
   return (
     <div style={S.overlay} role="dialog" aria-modal="true">
-      <div style={{ ...S.card, width: 'min(500px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
+      <div
+        style={{
+          ...S.card,
+          width: 'min(760px, 96vw)',
+          maxHeight: '88vh',
+          overflow: 'auto',
+          background: 'var(--dsw-alias-bg-layer-1)',
+        }}
+      >
         <div style={S.cardHead}>
           {t('community.exchange.uploadTitle')}
           <span style={{ flex: '1 1 auto' }} />
           <Badge tone="neutral">{t('community.mentor.status.ACCEPTED')}</Badge>
         </div>
-        <div style={{ ...S.cardBody, gap: 9 }}>
+        <div style={{ ...S.cardBody, gap: 11 }}>
           <div style={S.listTitle}>
             {proposal.projectTitle ?? t('community.mentor.untitledProject')}
           </div>
-          <div style={S.inlineRow}>
-            <span style={S.label}>{t('community.exchange.dirLabel')}</span>
-            <input
-              style={S.compactInput}
-              value={dir}
-              placeholder={t('community.exchange.dirPlaceholder')}
-              onChange={(e) => onDirChange(e.target.value)}
-            />
-            {pickerSupported ? (
-              <button type="button" style={S.ghostBtn} onClick={onChooseDir}>
-                {t('community.action.chooseDir')}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              style={S.ghostBtn}
-              disabled={!dir.trim() || busy}
-              onClick={onScan}
-            >
-              {t('community.action.scan')}
-            </button>
-          </div>
-          {/* 没有系统选择器就明说，别让用户以为是自己没点到 */}
-          {pickerSupported ? null : <div style={S.hint}>{t('community.exchange.noPicker')}</div>}
-          <div style={S.hint}>{t('community.exchange.uploadNote')}</div>
 
-          {files === null ? (
-            <div style={S.hint}>{t('community.exchange.notScanned')}</div>
-          ) : files.length === 0 ? (
-            <div style={S.hint}>{t('community.exchange.noReviewFiles')}</div>
+          {/* ① 选工作区：只有 **含研究定义** 的工作区会出现（宿主侧判定） */}
+          {!workspacesAvailable ? (
+            <div style={S.hint}>{workspacesReason ?? t('community.exchange.noWorkspaces')}</div>
+          ) : workspaces === null ? (
+            <div style={S.hint}>{t('community.action.loading')}</div>
+          ) : workspaces.length === 0 ? (
+            <div style={S.hint}>{t('community.exchange.noUploadWorkspaces')}</div>
           ) : (
-            <div style={{ ...S.list, maxHeight: 220, overflowY: 'auto' }}>
-              {files.map((f) => (
-                <label
-                  key={f.relPath}
-                  style={{ ...S.listRow, cursor: 'pointer', alignItems: 'center' }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.has(f.relPath)}
-                    onChange={() => onToggle(f.relPath)}
-                  />
-                  <span style={{ ...S.hint, flex: '1 1 auto', minWidth: 0 }}>{f.relPath}</span>
-                  <span style={S.hint}>{formatBytes(f.size)}</span>
-                </label>
-              ))}
+            <div style={S.inlineRow}>
+              <span style={S.label}>{t('community.exchange.workspaceLabel')}</span>
+              <select
+                style={{ ...S.compactInput, flex: '1 1 auto' }}
+                value={workspaceId}
+                onChange={(e) => onSelectWorkspace(e.target.value)}
+              >
+                <option value="">{t('community.exchange.workspacePlaceholder')}</option>
+                {workspaces.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.title}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
+          {/* 传的是哪一个目录要看得见：导师手上可能有几份快照 */}
+          {chosen ? (
+            <div style={{ ...S.hint, wordBreak: 'break-all' }}>
+              {t('community.exchange.fromHint', { root: chosen.root })}
+            </div>
+          ) : null}
+
+          {/* ② 文件清单（选中工作区之后才有） */}
+          {planLoading ? (
+            <div style={S.hint}>{t('community.action.loading')}</div>
+          ) : plan === null ? (
+            <div style={S.hint}>{t('community.exchange.selectWorkspaceFirst')}</div>
+          ) : selectable.length === 0 ? (
+            <div style={S.hint}>{t('community.exchange.noUploadFiles')}</div>
+          ) : (
+            <UploadCategoryList
+              t={t}
+              categories={plan.plan.categories}
+              maxFileBytes={plan.plan.limits.maxFileBytes}
+              selection={selection}
+              expanded={expanded}
+              onToggleCategory={onToggleCategory}
+              onToggleFile={onToggleFile}
+              onToggleExpand={onToggleExpand}
+            />
+          )}
+          {/* 机器产物被剔掉了 —— 说一句，免得导师找不到 node_modules 里的东西以为漏了 */}
+          {plan && plan.plan.totals.excludedFiles > 0 ? (
+            <div style={S.hint}>
+              {t('community.exchange.skippedMachine', { count: plan.plan.totals.excludedFiles })}
+            </div>
+          ) : null}
+
+          {oversize.length > 0 ? (
+            <div style={{ fontSize: 11.5, color: 'var(--dsw-alias-state-warn-primary)', lineHeight: 1.6 }}>
+              {t('community.exchange.oversizeWarning', { count: oversize.length })}
+            </div>
+          ) : null}
+
+          {/* 上传中：真实进度（宿主按批上报；慢链路下界面必须动） */}
+          {busy ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <div style={S.hint}>
+                {progress && progress.totalFiles > 0
+                  ? t('community.exchange.uploading', {
+                      done: progress.doneFiles,
+                      files: progress.totalFiles,
+                      sent: formatBytes(progress.sentBytes),
+                      total: formatBytes(progress.totalBytes),
+                    })
+                  : t('community.action.loading')}
+              </div>
+              <div
+                style={{
+                  height: 4,
+                  borderRadius: 2,
+                  background: 'var(--dsw-alias-border-l1)',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${pct ?? 0}%`,
+                    background: 'var(--dsw-alias-brand-primary, #4a43ea)',
+                    transition: 'width 400ms linear',
+                  }}
+                />
+              </div>
+            </div>
+          ) : null}
 
           {notice ? (
             <div
@@ -3026,15 +3211,25 @@ function UploadDialog({
               {notice.text}
             </div>
           ) : null}
+
           <div style={S.footer}>
-            <span style={{ flex: '1 1 auto' }} />
+            {/* 还没选工作区时不显示"0 个文件 · 0 B"（那只是噪声） */}
+            <span style={{ ...S.hint, marginRight: 'auto' }}>
+              {plan
+                ? t('community.exchange.uploadSummary', {
+                    files: selected.length,
+                    size: formatBytes(selectedBytes),
+                    batches,
+                  })
+                : ''}
+            </span>
             <button type="button" style={S.ghostBtn} onClick={onClose}>
               {t('community.action.close')}
             </button>
             <button
               type="button"
-              style={{ ...S.primaryBtn, opacity: selected.size && !busy ? 1 : 0.55 }}
-              disabled={selected.size === 0 || busy}
+              style={{ ...S.primaryBtn, opacity: ready ? 1 : 0.55 }}
+              disabled={!ready}
               onClick={onUpload}
             >
               {busy ? t('community.action.loading') : t('community.action.upload')}
@@ -3364,6 +3559,11 @@ export function CommunityTab({
   /** 【下载】对话框：目标工作区列表 + 选择 + 预检结果。 */
   const [download, setDownload] = React.useState<{
     proposal: HostProposal
+    /**
+     * 读**哪一侧**的快照（服务器 `?source=`）：预检与真正的下载必须同一侧，
+     * 所以在这里记下来（侧由 {@link mySide} / {@link otherSide} 按角色定）。
+     */
+    source: HostFileSide
     workspaces: Array<{ id: string; title: string; path: string }> | null
     available: boolean
     reason: string | null
@@ -3382,16 +3582,29 @@ export function CommunityTab({
    * `null` = 还没开始收到数据（与 0 不同：0 是"开始了但一个字节还没到"）。
    */
   const [downloadReceived, setDownloadReceived] = React.useState<number | null>(null)
-  /** 上传对话框里的工作区目录（导师解压快照后写指导意见的地方）。 */
-  const [uploadDir, setUploadDir] = React.useState('')
-  /** 当前环境有没有可用的**系统**目录选择器（没有就只给手填输入框）。 */
-  const [pickerSupported, setPickerSupported] = React.useState(false)
+  /**
+   * 【上传】对话框：本机可回传的工作区（宿主 `mentor/uploadState`；`null` = 还没读）。
+   *
+   * `null` 与 `[]` 必须分开：拿不到（注册表不可用）和"本机真的没有研究工作区"
+   * 是两件事 —— 后者导师该去建，前者该去查（同【我的】那条纪律）。
+   */
+  const [uploadWorkspaces, setUploadWorkspaces] = React.useState<HostUploadWorkspace[] | null>(null)
+  const [uploadRegistry, setUploadRegistry] = React.useState<{ available: boolean; reason: string | null } | null>(
+    null,
+  )
+  /** 选中的工作区 id（空 = 还没选）。 */
+  const [uploadWorkspaceId, setUploadWorkspaceId] = React.useState('')
+  /** 选中工作区的文件清单（宿主 `mentor/uploadPlan`；`null` = 还没算）。 */
+  const [uploadPlan, setUploadPlan] = React.useState<HostMentorUploadPlan | null>(null)
+  const [uploadPlanLoading, setUploadPlanLoading] = React.useState(false)
+  /** 勾选要回传的文件（**研究根相对路径**）。 */
+  const [uploadSelected, setUploadSelected] = React.useState<Set<string>>(new Set())
+  /** 展开的分类（清单可能很长，默认收起）。 */
+  const [uploadExpanded, setUploadExpanded] = React.useState<Set<string>>(new Set())
   const [exchangeBusy, setExchangeBusy] = React.useState(false)
   const [exchangeNotice, setExchangeNotice] = React.useState<{ tone: 'success' | 'error'; text: string } | null>(null)
-  /** 扫描到的 `review/` 文件（null = 还没扫描过，与"扫到 0 个"不同）。 */
-  const [reviewFiles, setReviewFiles] = React.useState<Array<{ relPath: string; size: number }> | null>(null)
-  /** 勾选要上传的 review 文件（按相对路径）。 */
-  const [reviewSelected, setReviewSelected] = React.useState<Set<string>>(new Set())
+  /** 回传进度（宿主 `mentor/uploadProgress`；`null` = 未在跑）。 */
+  const [uploadProgress, setUploadProgress] = React.useState<HostUploadProgress | null>(null)
   /** 正在查看导师信息的提案（非空 = 导师信息对话框开着）。 */
   const [profileTarget, setProfileTarget] = React.useState<HostProposal | null>(null)
   /** 正在对它发起指导的那项研究工作（非空 = 提案对话框开着）。 */
@@ -3672,16 +3885,172 @@ export function CommunityTab({
     await loadProposals()
   }
 
-  /* ── 指导闭环：下载工作区快照 / 上传指导结果 ───────────────────────── */
+  /* ── 指导闭环：下载工作区快照 / 回传我这一份工作区 ─────────────────── */
 
+  /**
+   * 我在这条指导关系里是**哪一侧**（服务器 `?source=`）：
+   * 我是导师 → `mentor`（我回传的落在这一侧）；我是学生 → `owner`（我自己上传的那侧）。
+   *
+   * 规矩一句话：**比对自己那一侧，下载对方那一侧**。
+   * 身份缺失（旧宿主 / 异常数据）时一律按 `owner` —— 与服务器默认一致，最保守。
+   */
+  const mySide = (p: HostProposal): HostFileSide => (p.mentor?.id === myAccountId ? 'mentor' : 'owner')
+  const otherSide = (p: HostProposal): HostFileSide => (mySide(p) === 'mentor' ? 'owner' : 'mentor')
+
+  /**
+   * 打开【上传】对话框：先问宿主"本机有哪些工作区**可以回传**"。
+   *
+   * ⚠️ 这里**不自动拉清单**：清单是一次读盘扫描，用户还没看就扫一个几百 MB 的工作区
+   * 是白费力气（下拉选中哪个，才扫哪个）。
+   */
   const openExchange = async (p: HostProposal): Promise<void> => {
     setExchangeNotice(null)
-    setReviewFiles(null)
-    setReviewSelected(new Set())
+    setUploadWorkspaces(null)
+    setUploadRegistry(null)
+    setUploadWorkspaceId('')
+    setUploadPlan(null)
+    setUploadSelected(new Set())
+    setUploadExpanded(new Set())
     setExchange({ proposal: p, mode: 'upload' })
-    // 先只问能力（不开窗）：决定要不要显示【选择目录…】
-    const res = await post('mentor/pickDirectory', { probe: true })
-    setPickerSupported(res.ok && Boolean((res.value as { supported?: boolean } | undefined)?.supported))
+    const res = await post('mentor/uploadState', {})
+    if (!res.ok) {
+      // 读不到 ≠ 没有：如实说原因（旧宿主没有这个端点 → unknown-endpoint → 提示重启）
+      setUploadWorkspaces([])
+      setUploadRegistry({
+        available: false,
+        reason:
+          res.error?.code === 'unknown-endpoint'
+            ? t('community.error.hostRestart')
+            : (res.error?.message ?? t('community.error.unknown')),
+      })
+      return
+    }
+    const v = res.value as { available?: boolean; reason?: string | null; items?: HostUploadWorkspace[] }
+    const items = v.items ?? []
+    setUploadWorkspaces(items)
+    setUploadRegistry({ available: v.available ?? false, reason: v.reason ?? null })
+  }
+
+  /**
+   * 选工作区 → 拉文件清单（宿主扫描研究根，`mentor` 口径）。
+   *
+   * 默认勾选**推荐级**（研究状态 / 计划 / 论文 / 实验 / 评阅记录…）：导师回传的通常
+   * 就是整份研究进展；文献原文之类的大件留给用户自己勾。
+   */
+  const selectUploadWorkspace = async (id: string): Promise<void> => {
+    setUploadWorkspaceId(id)
+    setUploadPlan(null)
+    setUploadSelected(new Set())
+    setUploadExpanded(new Set())
+    setExchangeNotice(null)
+    if (!id) return
+    setUploadPlanLoading(true)
+    const res = await post('mentor/uploadPlan', { workspaceId: id })
+    setUploadPlanLoading(false)
+    if (!res.ok) {
+      setExchangeNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
+      return
+    }
+    const v = res.value as HostMentorUploadPlan
+    setUploadPlan(v)
+    setUploadSelected(new Set(v.plan.defaultSelection))
+  }
+
+  /** 分类级勾选（与发布对话框同一套语义）。 */
+  const toggleUploadCategory = (_categoryId: string, files: string[], next: boolean): void => {
+    setUploadSelected((prev) => {
+      const out = new Set(prev)
+      for (const rel of files) {
+        if (next) out.add(rel)
+        else out.delete(rel)
+      }
+      return out
+    })
+  }
+
+  const toggleUploadFile = (relPath: string, next: boolean): void => {
+    setUploadSelected((prev) => {
+      const out = new Set(prev)
+      if (next) out.add(relPath)
+      else out.delete(relPath)
+      return out
+    })
+  }
+
+  const toggleUploadExpand = (categoryId: string): void => {
+    setUploadExpanded((prev) => {
+      const out = new Set(prev)
+      if (out.has(categoryId)) out.delete(categoryId)
+      else out.add(categoryId)
+      return out
+    })
+  }
+
+  /**
+   * 回传：把勾选的文件交给宿主（算摘要 → 与服务器比对 → **只传变化的** → 分批上传）。
+   *
+   * 上传期间**按秒问宿主进度**（同【下载】那次的道理）：一次 `post` 要等**所有批次**
+   * 做完，几十 MB 在一分钟以上 —— 没有进度就只有一句「上传中…」，慢与死分不出来。
+   * 轮询失败不打断上传（那只是好看，不能把主流程弄挂）。
+   */
+  const runUpload = async (): Promise<void> => {
+    const target = exchange?.proposal
+    if (!target || !uploadWorkspaceId) return
+    setExchangeBusy(true)
+    setExchangeNotice(null)
+    setUploadProgress(null)
+    let timer: ReturnType<typeof setInterval> | undefined
+    const stopPoll = (): void => {
+      if (timer !== undefined) clearInterval(timer)
+      timer = undefined
+    }
+    timer = setInterval(() => {
+      void post('mentor/uploadProgress', { projectId: target.projectId }).then((p) => {
+        if (!p.ok) return
+        const v = p.value as HostUploadProgress | undefined
+        if (v && typeof v.doneFiles === 'number') setUploadProgress(v)
+      })
+    }, 1000)
+    let res: Awaited<ReturnType<typeof post>>
+    try {
+      res = await post('mentor/upload', {
+        projectId: target.projectId,
+        workspaceId: uploadWorkspaceId,
+        paths: Array.from(uploadSelected),
+        // 增量比对**自己那一侧**（服务器按"谁写的"分两侧，同名互不覆盖）
+        source: mySide(target),
+      })
+    } finally {
+      stopPoll()
+      setExchangeBusy(false)
+      setUploadProgress(null)
+    }
+    if (!res.ok) {
+      // 不关窗：失败原因（尤其"服务器还没放开 review/ 限制"）要留在眼前；文件也没丢
+      setExchangeNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
+      return
+    }
+    const v = res.value as {
+      selected?: number
+      uploaded?: number
+      uploadedBytes?: number
+      skippedExisting?: number
+      oversize?: unknown[]
+    }
+    const skippedOversize = (v.oversize ?? []).length
+    // 成功就关窗（同下载）：文件已经上去了，对话框没有可做的事，回执放到列表页顶部
+    setExchange(null)
+    setMentorNotice({
+      tone: 'success',
+      text:
+        (v.uploaded ?? 0) === 0 && (v.skippedExisting ?? 0) > 0
+          ? t('community.exchange.uploadNoChange', { count: v.selected ?? 0 })
+          : skippedOversize > 0
+            ? t('community.exchange.uploadPartial', { uploaded: v.uploaded ?? 0, skipped: skippedOversize })
+            : t('community.exchange.uploadDone', { count: v.uploaded ?? 0 }),
+    })
+    // 刷新提案：["导师已指导"] 那行进展由服务器的 review 计数决定，传完要重读
+    await loadProposals()
   }
 
   /**
@@ -3693,7 +4062,9 @@ export function CommunityTab({
    */
   const requestDownload = async (p: HostProposal): Promise<void> => {
     const prefix = downloadPrefix(p)
-    const res = await post('mentor/downloadState', { projectId: p.projectId, prefix })
+    // 导师下学生的工作区（owner 侧）；学生取导师回传的那份（mentor 侧）
+    const source = otherSide(p)
+    const res = await post('mentor/downloadState', { projectId: p.projectId, prefix, source })
     if (!res.ok) {
       setMentorNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
       return
@@ -3712,6 +4083,7 @@ export function CommunityTab({
     )
     setDownload({
       proposal: p,
+      source,
       workspaces: v.items,
       available: v.available,
       reason: v.reason,
@@ -3758,6 +4130,8 @@ export function CommunityTab({
         projectId,
         workspaceId: target.selection,
         prefix: downloadPrefix(target.proposal),
+        // 与预检**同一侧**：否则会出现"预检说有 3 个文件、点下去 404"
+        source: target.source,
       })
     } finally {
       stopPoll()
@@ -3781,72 +4155,6 @@ export function CommunityTab({
     setMentorNotice({
       tone: 'success',
       text: t('community.exchange.downloadDone', { dir: v.dir, name: v.name }),
-    })
-  }
-
-  /** 对话框里的【选择目录…】（只有非 native 环境才会走到这里）。 */
-  const chooseDir = async (): Promise<void> => {
-    const res = await post('mentor/pickDirectory', {})
-    if (!res.ok) {
-      setExchangeNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
-      return
-    }
-    const v = res.value as { supported?: boolean; path?: string | null }
-    if (!v.supported) {
-      setPickerSupported(false)
-      return
-    }
-    // path 为 null = 用户取消（**不是错误**）：什么都不做，别弹提示
-    if (v.path) setUploadDir(v.path)
-  }
-
-  /** 扫描所选工作区里的 `review/`（上传源）。 */
-  const scanReview = async (): Promise<void> => {
-    setExchangeNotice(null)
-    setReviewFiles(null)
-    setReviewSelected(new Set())
-    const res = await post('mentor/scanReview', { dir: uploadDir.trim() })
-    if (!res.ok) {
-      setExchangeNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
-      return
-    }
-    const v = res.value as { files?: Array<{ relPath: string; size: number }> }
-    const files = v.files ?? []
-    setReviewFiles(files)
-    // 默认全选：导师刚写完的指导意见，通常就是要全传上去
-    setReviewSelected(new Set(files.map((f) => f.relPath)))
-  }
-
-  const toggleReview = (relPath: string): void => {
-    setReviewSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(relPath)) next.delete(relPath)
-      else next.add(relPath)
-      return next
-    })
-  }
-
-  const runUpload = async (): Promise<void> => {
-    const target = exchange?.proposal
-    if (!target) return
-    setExchangeBusy(true)
-    setExchangeNotice(null)
-    const res = await post('mentor/upload', {
-      projectId: target.projectId,
-      dir: uploadDir.trim(),
-      paths: Array.from(reviewSelected),
-    })
-    setExchangeBusy(false)
-    if (!res.ok) {
-      setExchangeNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
-      return
-    }
-    const v = res.value as { uploaded?: unknown[] }
-    setReviewFiles(null)
-    setReviewSelected(new Set())
-    setExchangeNotice({
-      tone: 'success',
-      text: t('community.exchange.uploadDone', { count: v.uploaded?.length ?? 0 }),
     })
   }
 
@@ -4846,21 +5154,26 @@ export function CommunityTab({
         />
       ) : null}
 
-      {/* ══ 文件交换：【上传】指导结果 ══════════════════════════════════════ */}
+      {/* ══ 文件交换：【上传】我这一份工作区 ════════════════════════════════ */}
       {exchange?.mode === 'upload' ? (
         <UploadDialog
           t={t}
           proposal={exchange.proposal}
-          dir={uploadDir}
-          pickerSupported={pickerSupported}
-          files={reviewFiles}
-          selected={reviewSelected}
+          workspaces={uploadWorkspaces}
+          workspacesAvailable={uploadRegistry?.available ?? false}
+          workspacesReason={uploadRegistry?.reason ?? null}
+          workspaceId={uploadWorkspaceId}
+          plan={uploadPlan}
+          planLoading={uploadPlanLoading}
+          selection={uploadSelected}
+          expanded={uploadExpanded}
           busy={exchangeBusy}
+          progress={uploadProgress}
           notice={exchangeNotice}
-          onDirChange={setUploadDir}
-          onChooseDir={() => void chooseDir()}
-          onScan={() => void scanReview()}
-          onToggle={toggleReview}
+          onSelectWorkspace={(id) => void selectUploadWorkspace(id)}
+          onToggleCategory={toggleUploadCategory}
+          onToggleFile={toggleUploadFile}
+          onToggleExpand={toggleUploadExpand}
           onUpload={() => void runUpload()}
           onClose={() => setExchange(null)}
         />

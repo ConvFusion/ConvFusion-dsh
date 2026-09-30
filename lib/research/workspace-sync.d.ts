@@ -1,11 +1,3 @@
-import { REVIEW_DIR } from './workspace-layout.js';
-export { REVIEW_DIR };
-/** `review/` 下的一个待上传文件。 */
-export interface ReviewFile {
-    /** 研究根相对路径，已带 `review/` 前缀（直接作为服务器的 `relative_paths`）。 */
-    relPath: string;
-    size: number;
-}
 /**
  * 把一个不可信的相对路径解析成根目录下的**安全**绝对路径。
  *
@@ -16,21 +8,14 @@ export interface ReviewFile {
  */
 export declare function safeJoin(root: string, relativePath: string): string | null;
 /**
- * 列出某个工作区里 `review/` 下的全部文件。
+ * 读研究根下的一个文件（上传用）。
  *
- * 为什么以**目录**为输入而不是单个文件：导师的交付物可能带子目录
- * （`review/figures/x.png`），服务器要求 `relative_paths` 保留目录层次，
- * 所以必须能枚举出整棵树。
+ * 调用方必须先拿 `buildUploadPlan(root, 'mentor')` 的扫描结果当**白名单**：
+ * 这个函数只保证"不会读到根目录之外"，不判断"该不该上传"。
  *
- * @param dir 用户选的工作区目录（会话工作区**或**研究根都行，按 `researchWorkspaceOf` 判）。
+ * @param relPath 研究根相对路径（POSIX 风格，如 `papers/paper-main/paper.pdf`）
  */
-export declare function scanReviewFiles(dir: string): {
-    researchRoot: string;
-    reviewDir: string;
-    files: ReviewFile[];
-};
-/** 读一个 `review/` 文件的字节（上传用；路径必须已在 `review/` 下）。 */
-export declare function readReviewFile(researchRoot: string, relPath: string): Uint8Array;
+export declare function readResearchFile(researchRoot: string, relPath: string): Uint8Array;
 /** 一次落盘的结果。 */
 export interface WrittenFile {
     /** 实际写出的绝对路径（重名时名字与请求的不同）。 */

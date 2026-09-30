@@ -318,7 +318,7 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   }
   // ⚠️ 切片从 `PublishDialog` 开始：对话框组件定义在 CommunityTab **之前**，
   // 只切 CommunityTab 会让"对话框不显示排除项"这类断言看不到实现（第一版就漏了）。
-  const community = src.slice(src.indexOf('function PublishDialog('), src.indexOf('function SystemTab('))
+  const community = src.slice(src.indexOf('function UploadCategoryList('), src.indexOf('function SystemTab('))
   /** Tab 本体（不含对话框）：版式类断言只看它。 */
   const tabBody = src.slice(src.indexOf('function CommunityTab('), src.indexOf('function SystemTab('))
   // 登录的两条入口（次要入口折叠）
@@ -1926,23 +1926,39 @@ console.log('\n[13] 指导闭环：下载 / 上传')
   assert(!/a\.download\s*=/.test(src) && !/document\.createElement\('a'\)/.test(src), '不再用 <a> 触发浏览器下载')
   assert(!/mentor\/archive\?projectId/.test(src), '不再走同源 GET 代理')
   assert(src.includes("t('community.exchange.uploadTitle')"), '上传对话框标题走 i18n')
-  assert(src.includes("t('community.exchange.noPicker')"), '上传选目录要说明没有选择器时的退路')
+  assert(
+    /post\('mentor\/uploadState'/.test(src) && /post\('mentor\/uploadPlan'/.test(src),
+    '上传对话框：先取可回传的工作区，再取所选工作区的文件清单',
+  )
 
-  // ③ 上传：选目录 → 扫描 review/ → 勾选 → 按**原相对路径**上传
+  // ③ 上传：**选工作区 → 勾文件（研究根全量清单）→ 按原相对路径回传**（2026-09 v19）
   //
-  // 为什么不是"选文件"：服务器要求 relative_paths 保留目录层次
-  // （review/figures/x.png），浏览器文件选择器拿不到相对路径；走宿主读盘还顺带
-  // 绕开了 RPC 的请求体上限（原来 base64 传字节，4MB 就打住）。
-  assert(/post\('mentor\/scanReview'/.test(src), '先扫描工作区的 review/')
-  assert(/setReviewSelected\(new Set\(files\.map/.test(src), '扫描后默认全选（刚写完就是要传）')
-  assert(/post\('mentor\/upload',[\s\S]{0,200}?paths: Array\.from\(reviewSelected\)/.test(src), '上传按相对路径列表')
-  assert(!/readAsDataURL/.test(src), '不再走 base64（目录扫描取代了它）')
+  // 为什么不是"选文件"：服务器要求 relative_paths 保留目录层次（papers/x.pdf），
+  // 浏览器文件选择器拿不到相对路径；走宿主读盘还顺带绕开了 RPC 的请求体上限。
+  assert(
+    /post\('mentor\/upload',\s*\{[\s\S]{0,240}?workspaceId: uploadWorkspaceId[\s\S]{0,160}?paths: Array\.from\(uploadSelected\)/.test(
+      src,
+    ),
+    '回传按「工作区 id + 原相对路径列表」提交',
+  )
+  assert(
+    /setUploadSelected\(new Set\(v\.plan\.defaultSelection\)\)/.test(src),
+    '清单默认勾选推荐级（导师要回传的通常就是整份进展）',
+  )
+  assert(
+    /selectedBytes/.test(src) && /community\.exchange\.uploadSummary/.test(src),
+    '显示所选文件的合计体积与批次数（用户要求）',
+  )
+  assert(/mentor\/uploadProgress/.test(src), '上传期间按秒问进度（慢 ≠ 死）')
+  assert(!/readAsDataURL/.test(src), '不再走 base64（宿主读盘取代了它）')
   // 只查**代码**：注释里还会提到 base64（解释为什么不用它），那不算违规
   assert(!/base64\s*:/.test(src) && !/atob\(/.test(src), '界面里没有 base64 编解码代码')
-  // 没有 review/ 文件时是"还没有指导结果"，不是错误
-  assert(src.includes("t('community.exchange.noReviewFiles')"), '空 review/ 有专门说法')
+  // 研究根里没有可回传文件时是"没东西可传"，不是错误
+  assert(src.includes("t('community.exchange.noUploadFiles')"), '空清单有专门说法')
+  // 被剔掉的机器产物要说一句，否则导师以为"漏了"
+  assert(src.includes("t('community.exchange.skippedMachine'"), '跳过机器产物时如实说明')
 
-  // ④ 宿主侧（host）：下载是**代理**，上传是**扫描 + 原路径回传**
+  // ④ 宿主侧（host）：下载只存 ZIP；上传是**扫描研究根 + 与服务器比对后增量回传**
   const rpc = readFileSync(join(PKG, 'src', 'settings-rpc.ts'), 'utf8')
   assert(/case 'mentor\/download':/.test(rpc), '有按工作区写入的下载端点')
   assert(/case 'mentor\/downloadState':/.test(rpc), '有对话框要的 downloadState（预检 + 工作区列表）')
@@ -1959,12 +1975,39 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     '下载把 sink 交给 fetchProjectArchive（边收边写，不整包驻留内存）',
   )
   assert(!/extractZip|unzip|adm-zip/i.test(rpc), '宿主不解压（只存 ZIP，其余交给用户）')
-  assert(/uploadReviewFiles\(base, apiKey, projectId, payload/.test(rpc), '回传走 uploadReviewFiles（review/ 前缀）')
-  assert(/scanReviewFiles\(dir\)/.test(rpc), '上传源来自扫描（不接受任意路径）')
+  // 上传（v19）：清单来自扫描、与服务器 sha256 比对、分批 + 按体积估超时
+  assert(/uploadWorkspaceFiles\(base, apiKey, projectId, payload/.test(rpc), '回传走 uploadWorkspaceFiles')
+  assert(/buildUploadPlan\(root, 'mentor'\)/.test(rpc), '清单来自扫描（mentor 口径）')
   assert(/allowed\.has\(rel\)/.test(rpc), '只上传扫描得到的文件（界面不能递任意路径读盘）')
+  assert(/case 'mentor\/uploadProgress':/.test(rpc), '有上传进度端点（界面按秒问，宿主本地读）')
+  assert(
+    /fetchProjectFiles\(base, apiKey, projectId, \{ source, \.\.\.netOptions\(\) \}\)/.test(rpc) &&
+      /onServer\.get\(rel\) === digest/.test(rpc),
+    '回传前与**自己那一侧**的 sha256 比对，只传变化的（服务器不去重，重复传会白占配额）',
+  )
+  // v20 分侧读：比对自己那一侧、下载对方那一侧
+  assert(/const source = asSource\(p\.source\)/.test(rpc), '上传/下载按 `source` 选侧（缺省 owner）')
+  assert(/source: 'mentor'/.test(rpc), 'mentor/list 的旧服务器回退读导师那一侧')
+  assert(
+    /source === 'mentor' \? '-mentor' : ''/.test(rpc),
+    '预检的预计文件名在导师侧带 -mentor 后缀（与学生自己那份区分）',
+  )
+  assert(
+    /const mySide = \(p: HostProposal\)/.test(src) && /source: mySide\(target\)/.test(src),
+    '界面按**自己的角色**选上传侧（比对自己那一侧）',
+  )
+  assert(
+    /const source = otherSide\(p\)/.test(src) && /source: target\.source/.test(src),
+    '下载读**对方那一侧**，且预检与下载同一侧（否则"预检有 3 个、点下去 404"）',
+  )
+  assert(/uploadTimeoutForBytes\(/.test(rpc), '按批次体积估超时（慢 ≠ 死）')
+  assert(
+    !/case 'mentor\/scanReview'/.test(rpc) && !/scanReviewFiles\(/.test(rpc),
+    'review/ 专用扫描端点已删除（清单统一走 upload-selection）',
+  )
   // ⚠️ RPC 层不做文件写入（既有分层纪律）：断言在 [7] 里，这里确认写入确实在别处
   const sync = readFileSync(join(PKG, 'src', 'research', 'workspace-sync.ts'), 'utf8')
-  assert(/export function scanReviewFiles/.test(sync), 'workspace-sync 保留 review/ 扫描（上传要用）')
+  assert(/export function readResearchFile/.test(sync), 'workspace-sync 保留"安全读研究根文件"')
   assert(/export function safeJoin/.test(sync), '保留路径安全校验')
   assert(!existsSync(join(PKG, 'src', 'research', 'zip.ts')), 'ZIP 解包器已删除（A 方案下不再需要）')
 
@@ -1972,7 +2015,6 @@ console.log('\n[13] 指导闭环：下载 / 上传')
   for (const k of [
     'community.action.download',
     'community.action.upload',
-    'community.action.chooseDir',
     'community.exchange.downloadTitle',
     'community.exchange.downloadDone',
     'community.exchange.noWorkspaces',
@@ -1982,7 +2024,17 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     'community.exchange.downloadingBtn',
     'community.exchange.uploadTitle',
     'community.exchange.uploadDone',
-    'community.exchange.noPicker',
+    // v19 起：上传 = 回传"我这一份工作区"
+    'community.exchange.workspaceLabel',
+    'community.exchange.noUploadWorkspaces',
+    'community.exchange.fromHint',
+    'community.exchange.selectWorkspaceFirst',
+    'community.exchange.noUploadFiles',
+    'community.exchange.skippedMachine',
+    'community.exchange.oversizeWarning',
+    'community.exchange.uploadSummary',
+    'community.exchange.uploading',
+    'community.exchange.uploadNoChange',
   ]) {
     assert(zhDict.includes(`'${k}'`), `中文字典含 ${k}`)
   }

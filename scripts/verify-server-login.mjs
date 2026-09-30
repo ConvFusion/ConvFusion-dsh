@@ -1880,6 +1880,21 @@ section('[6f] 上传计划（哪些文件值得传）')
   mk('research/literature/extract.txt', 6000)
   mk('experiments/dataset.bin', 2000) // 权重/数据集扩展名 → 排除
   mk('experiments/huge-dump.log', 12 * 1024 * 1024) // 普通扩展名但超大 → 可选
+  /*
+   * **备份 / 临时文件**（2026-09 用户要求）：真实工作区实测
+   * `papers/paper-main/latex/main_bak_20260921021516..tex` × 64 个、3.6 MB ——
+   * 一篇论文的 LaTeX 目录里大多数文件是这种东西，落在 `papers/**` 下就会被判成
+   * "论文与图表"（推荐）而随上传走。
+   */
+  mk('papers/paper-001/latex/main_bak_20260921021516..tex', 64000)
+  mk('papers/paper-001/latex/main.tex.bak', 100)
+  mk('papers/paper-001/latex/main_bak.tex', 100)
+  mk('papers/paper-001/latex/main.tex~', 100)
+  mk('papers/paper-001/latex/.main.tex.swp', 100)
+  mk('papers/paper-001/latex/#main.tex#', 100)
+  // 反向用例：名字里**含** `bak` 但不是一个独立片段（正常词），不能被误伤
+  mk('papers/paper-001/latex/bakeoff.md', 500)
+  mk('papers/paper-001/latex/rebake.py', 500)
   // 机器产物（不可选）
   mk('.tectonic-cache/formats/big.fmt', 30 * 1024 * 1024)
   mk('harness/.tectonic-cache/bundles/x.tex', 1000)
@@ -1923,6 +1938,33 @@ section('[6f] 上传计划（哪些文件值得传）')
   assertEq(has('large-files', 'experiments/huge-dump.log'), true, '普通扩展名但 ≥10MB → 降级为可选')
 
   assertEq(has('models-data', 'experiments/dataset.bin'), true, '权重/数据集扩展名 → 排除')
+  /*
+   * 备份 / 临时文件 → 机器产物（不可选）。判据只看**文件名**，所以落在 `papers/**`
+   * 这种"推荐目录"里也照样排掉 —— 那正是这批文件混进来的原因。
+   */
+  for (const rel of [
+    'papers/paper-001/latex/main_bak_20260921021516..tex',
+    'papers/paper-001/latex/main.tex.bak',
+    'papers/paper-001/latex/main_bak.tex',
+    'papers/paper-001/latex/main.tex~',
+    'papers/paper-001/latex/.main.tex.swp',
+    'papers/paper-001/latex/#main.tex#',
+  ]) {
+    assertEq(UP.classify(rel, 64000).decision, 'excluded', `备份/临时文件排除：${rel}`)
+    assertEq(UP.classify(rel, 64000, 'mentor').decision, 'excluded', `导师口径同样排除：${rel}`)
+    assertEq(has('build-artifacts', rel), true, `归入"构建产物"分类（对账用）：${rel}`)
+  }
+  // ⚠️ 反向：`bak` 不做片段识别就会误伤这些正常文件（有断言才不会被"顺手放宽"改坏）
+  assertEq(
+    UP.classify('papers/paper-001/latex/bakeoff.md', 500).decision,
+    'recommended',
+    '名字里含 bak 的正常词（bakeoff）不受影响',
+  )
+  assertEq(
+    UP.classify('papers/paper-001/latex/rebake.py', 500, 'mentor').decision,
+    'recommended',
+    'rebake.py 同理（导师口径）',
+  )
   // ⚠️ 机器产物目录是**整枝排除**的：只列一条目录占位（附实测体积/项数），
   // 不把里面几百个缓存文件逐条列出来（那是噪声，且不可选）。
   assertEq(has('build-artifacts', '.tectonic-cache/'), true, '构建缓存整枝 → 排除（列目录占位 + 体积）')
@@ -1943,6 +1985,57 @@ section('[6f] 上传计划（哪些文件值得传）')
   assertEq(plan.defaultSelection.includes('.tectonic-cache/formats/big.fmt'), false, '默认**不**勾构建缓存')
   assertEq(UP.isSelectable('excluded'), false, '排除项不可勾选')
   assertEq(UP.isSelectable('optional'), true, '可选项目可勾选（用户能调整）')
+
+  /*
+   * 导师整包回传（`mentor` 口径，v19）：**同一份目录，口径故意不同** ——
+   *   · `review/**`：导师的指导结果就是要带回去的东西 → 推荐（发布侧相反）；
+   *   · `papers/**`：用户明确要求"要去除机器生成文件，但是要有自己撰写的论文 PDF"
+   *     → 不因 ≥10 MB 降级；
+   *   · 机器产物：照样排除（用户要求"去除机器生成文件"）。
+   * 默认参数必须仍是 `publish`（否则会静默改掉发布行为）。
+   */
+  {
+    const mPlan = UP.buildUploadPlan(root, 'mentor')
+    const mCat = (id) => mPlan.categories.find((c) => c.id === id)
+    assertEq(mCat('review')?.decision, 'recommended', '导师口径：review/ 是推荐')
+    assertEq(
+      mPlan.defaultSelection.includes('review/research-quality-review-2026-09-19.md'),
+      true,
+      '导师口径：默认勾选含评阅记录',
+    )
+    assertEq(
+      UP.classify('papers/paper-001/paper.pdf', 12 * 1024 * 1024, 'mentor').decision,
+      'recommended',
+      '导师口径：≥10 MB 的论文 PDF 不降级',
+    )
+    assertEq(
+      UP.classify('papers/paper-001/paper.pdf', 12 * 1024 * 1024).decision,
+      'optional',
+      '（对照）发布口径：≥10 MB 降级为可选',
+    )
+    assertEq(mCat('build-artifacts')?.decision, 'excluded', '导师口径：机器产物照样排除')
+    assertEq(
+      UP.classify('papers/paper-001/latex/main_bak_20260928023921..tex', 64000, 'mentor').decision,
+      'excluded',
+      '导师口径：latex/ 里的 _bak 中间文件不上传（用户要求）',
+    )
+    assertEq(
+      mPlan.defaultSelection.some((r) => r.includes('_bak')),
+      false,
+      '默认勾选里没有 _bak 文件',
+    )
+    assertEq(mCat('runtime-artifacts')?.decision, 'excluded', '导师口径：harness/ 照样排除')
+    assertEq(
+      mPlan.totals.recommendedBytes + mPlan.totals.optionalBytes + mPlan.totals.excludedBytes,
+      mPlan.totals.allBytes,
+      '导师口径：三级体积之和 = 全部',
+    )
+    assertEq(
+      UP.buildUploadPlan(root).totals.recommendedBytes,
+      plan.totals.recommendedBytes,
+      '不传 purpose 时仍是发布口径（mentor 必须显式选）',
+    )
+  }
 
   // 对账：全部 = 推荐 + 可选 + 排除；分类之和一致
   const sumCats = plan.categories.reduce((n, c) => n + c.bytes, 0)

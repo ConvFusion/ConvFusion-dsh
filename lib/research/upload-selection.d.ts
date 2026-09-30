@@ -1,5 +1,11 @@
 /**
- * ConvFusion 2.0 — 发布时**该上传哪些文件**（规则引擎 + 体积核算）
+ * ConvFusion 2.0 — 上传时**该上传哪些文件**（规则引擎 + 体积核算）
+ *
+ * 两种用途共用这一份规则（口径差异见 {@link UploadPurpose}）：
+ *
+ *   - `publish`（默认）：学生把自己的研究发布到网络（`work/uploadPlan`）；
+ *   - `mentor`：导师把自己这一份工作区**整包回传**（`mentor/uploadPlan`）——
+ *     `review/**` 与论文 PDF 都算推荐，机器产物照样排除。
  *
  * ## 为什么必须先算清楚再上传
  *
@@ -51,6 +57,17 @@ export declare const UPLOAD_LIMITS: {
  */
 export declare const LARGE_FILE_BYTES: number;
 export type UploadDecision = 'recommended' | 'optional' | 'excluded';
+/**
+ * 这份计划是给谁的 —— 同一个工作区，两种口径**必须分开**：
+ *
+ * | 用途 | 谁在传 | `review/**` | `papers/**` 的 PDF |
+ * |---|---|---|---|
+ * | `publish` | 学生把自己的研究发布到网络（`work/uploadPlan`） | `excluded`（回声 + 不是要发布的研究事实） | 小文件推荐，≥10 MB 降级为可选 |
+ * | `mentor` | 导师把**自己这一份工作区**整包回传（`mentor/uploadPlan`） | `recommended`（指导结果就是要带回去的东西） | `recommended`，不论大小（用户明确要求） |
+ *
+ * 其余规则（机器产物一律排除）两种口径相同。
+ */
+export type UploadPurpose = 'publish' | 'mentor';
 /** 一个分类（对话框里的一行）。 */
 export interface UploadCategory {
     id: string;
@@ -97,8 +114,11 @@ export interface UploadPlan {
  * 顺序很重要：**先排除**（机器产物/权重），**再看是否原始素材**（optional），
  * 最后按研究资产目录判 recommended。反过来的话 `research/literature/fulltext/*.pdf`
  * 会因为落在 `research/**` 下而被误判为推荐。
+ *
+ * ⚠️ `mentor` 用途把"研究资产"提到"≥10 MB"**之前**，见 {@link UploadPurpose}：
+ * 导师自己写的论文 PDF 常常就是这份工作区里最大的研究资产，不能因为大而降级成"默认不传"。
  */
-export declare function classify(relPath: string, size: number): {
+export declare function classify(relPath: string, size: number, purpose?: UploadPurpose): {
     categoryId: string;
     decision: UploadDecision;
 };
@@ -114,8 +134,11 @@ export declare const SCAN_MAX_FILES = 20000;
  * - 不跟随符号链接（避免环 / 指到工作区外）；
  * - 只有**被排除**的分类会被跳过目录（省时间），其余照常统计；
  * - 单个目录读不动（权限等）→ 跳过，不让整份计划失败。
+ *
+ * @param purpose `publish` = 学生发布（默认，口径与历史一致）；
+ *   `mentor` = 导师整包回传（`review/**` 与论文 PDF 都算推荐，见 {@link UploadPurpose}）
  */
-export declare function buildUploadPlan(root: string): UploadPlan;
+export declare function buildUploadPlan(root: string, purpose?: UploadPurpose): UploadPlan;
 /**
  * 把用户的选择整理成**上传批次**（服务器：≤20 个文件 / ≤200 MB 每次）。
  *

@@ -336,6 +336,36 @@ export interface ServerRequestOptions {
 }
 
 /**
+ * 项目文件空间的**两侧**（服务器 `?source=`）：一个项目里同一路径可以同时存在两份 ——
+ * 学生自己那份（`owner`）与**导师回传的那份**（`mentor`），互不覆盖。
+ *
+ * 谁读哪一侧是有规矩的（v0.5.4 / 协议 v20）：
+ *
+ * | 动作 | 读哪一侧 | 为什么 |
+ * |---|---|---|
+ * | 导师**回传**前的增量比对 | `mentor` | 比的是"我这一侧已经有什么"（与学生那份无关） |
+ * | 学生**回传**前的增量比对 | `owner` | 学生写的是自己那一侧 |
+ * | 导师【下载】学生的工作区 | `owner`（默认） | 他要看的是学生推进到哪了 |
+ * | 学生【下载】导师的交付 | `mentor` | 导师回传的是"他推进到的最新版"，解压即可接着做 |
+ *
+ * ⚠️ 省略 `source` = 服务器默认读 `owner`（"同步我的 workspace"口径）——
+ * 这正是旧客户端（v0.5.3）在新服务器上不会出错、但也**看不到**导师那份的原因。
+ */
+export type FileSource = 'owner' | 'mentor'
+
+/**
+ * `?source=` 查询串：**只在读导师那一侧时显式加**（`owner` 是服务器默认，省略即可）。
+ *
+ * 为什么不写 `?source=owner`：旧服务器（v0.5.3 时代）还没有这个参数。多带一个它不认识的
+ * 查询参数会被忽略 —— 而**导师那一侧**在旧服务器上恰好就是"唯一的那个文件空间"，
+ * 所以显式 `?source=mentor` 被忽略后读到的正是导师上传的文件，增量比对照旧正确。
+ * 反过来，`?source=owner` 被忽略也对，只是多余。
+ */
+function sourceQuery(source?: FileSource): string {
+  return source === 'mentor' ? '?source=mentor' : ''
+}
+
+/**
  * 正文"卡死"判据：连续这么久**一个字节都没有**才算断，而不是给整段设总时长。
  *
  * 为什么不是总时长上限：这条链路的实测速率 ~118 KB/s，一个十几 MB 的工作区快照
@@ -435,12 +465,12 @@ function mapHttpError(status: number, body: unknown): ServerError {
         withCode,
       )
     }
-    // 导师越界写（非 review/ 路径）：**不是**"没权限"，而是"只能写 review/"。
+    // 导师越界写（非 review/ 路径）：**不是**"没权限"，而是"服务器只放开了 review/"。
     // ⚠️ 必须排在 account-inactive 兜底之前 —— 否则会被误报成"账号被停用"。
     if (serverCode === 'FILE_PATH_RESERVED') {
       return new ServerError(
         'path-reserved',
-        `导师只能把文件写到 ${MENTOR_REVIEW_PREFIX}/ 目录下，其他路径不能改（研究事实由学生自己维护）。`,
+        `当前服务器只允许导师写 ${MENTOR_REVIEW_PREFIX}/ 目录下的文件；回传整份工作区需要服务器放开这条限制（其余路径由学生本人维护）。`,
         { ...withCode, serverCode },
       )
     }
@@ -1010,27 +1040,34 @@ export async function uploadProjectFiles(
 }
 
 /**
- * 导师可写的**保留前缀**（服务器强制，`docs/API.md` §13.1）。
+ * 导师的**保留前缀**（历史上的约定，服务器已不再强制）。
  *
  * | 谁 | 可写路径 |
  * |---|---|
- * | 项目 owner | 任意路径 |
- * | 有效研究关系的另一方（导师） | **仅 `review/**`**，其他 → `403 FILE_PATH_RESERVED` |
+ * | 项目 owner | 任意路径（写进 `owner` 侧） |
+ * | 有效研究关系的另一方（导师） | 任意路径（写进 `mentor` 侧，见 {@link FileSource}） |
  *
- * 结构上禁止导师改写研究事实（`project.md` / `research-state.md` 写不进去），
- * 学生侧 `/files`、`/files/tree`、`/files/archive` 都能看到 `review/`，无需新接口。
+ * ⚠️ 保留这个常量的唯一用途是**读旧服务器的报错**：v0.5.3 时代的服务器只允许导师写
+ * `review/**`，越界给 `403 FILE_PATH_RESERVED`。那时整包回传会失败，界面必须**如实说**
+ * "服务器需要放开这条限制"（不假装成功、也不偷偷只传 `review/`）。
+ * 新服务器起该错误码不再产生。
  */
 export const MENTOR_REVIEW_PREFIX = 'review'
 
 /**
- * 回传指导结果：把本地 `workspace/review/` 下的文件**按原相对路径**上传。
+ * 导师回传"我这一份工作区"：把选中的文件按**原相对路径**传到项目文件空间。
  *
- * 服务器只允许关系方写 `review/**`；越界会得到 `403 FILE_PATH_RESERVED`
- * （映射成 `path-reserved`，界面据此说"导师只能写 review/"，**不是**没权限）。
+ * 与 {@link uploadProjectFiles}（owner 发布）走同一个端点与同一套 multipart 形状；
+ * 分开命名是因为**两边落地不同**：服务器按"谁写的"把文件分到 `owner` / `mentor` 两侧
+ * （{@link FileSource}）—— 导师回传的 `project.md` 与学生自己那份**同名而互不覆盖**。
+ * 旧服务器上会拿到 403 `path-reserved`（"还不允许导师写 `review/` 之外的路径"）。
  *
- * @param relPaths 与 `files` 一一对应的 `review/...` 相对路径（保留目录层次）。
+ * 同一侧内按 `relative_path` 取最新一版；导师本地**删掉**的文件不会因此消失
+ * （无删除语义，见 `dev-notes/v0.5.4-mentor-workspace-upload.md`）。
+ *
+ * @param files 相对**研究根**的路径（`project.md` / `papers/...` / `review/...`）
  */
-export async function uploadReviewFiles(
+export async function uploadWorkspaceFiles(
   base: string,
   apiKey: string,
   projectId: string,
@@ -1038,15 +1075,13 @@ export async function uploadReviewFiles(
   options: ServerRequestOptions = {},
 ): Promise<UploadedFile[]> {
   for (const f of files) {
-    // 早于服务器一步拦住：既省一次往返，也让"导师只能写 review/"在客户端就成立
-    if (!f.relPath.startsWith(`${MENTOR_REVIEW_PREFIX}/`)) {
-      throw new ServerError(
-        'bad-request',
-        `导师只能上传 ${MENTOR_REVIEW_PREFIX}/ 目录下的文件（收到 ${f.relPath}）。`,
-      )
+    // 早于服务器一步拦住：路径不能是绝对路径 / 带 `..`（服务器也会再净化一次）
+    const rel = (f.relPath ?? '').trim()
+    if (!rel || rel.startsWith('/') || rel.split('/').includes('..')) {
+      throw new ServerError('bad-request', `回传路径不合法：${f.relPath}`)
     }
   }
-  return await postProjectFiles(base, apiKey, projectId, files, options, '上传指导结果')
+  return await postProjectFiles(base, apiKey, projectId, files, options, '回传研究进展')
 }
 
 /** 项目文件空间里的一个文件（`GET /projects/{id}/files` 的条目）。 */
@@ -1054,6 +1089,14 @@ export interface RemoteProjectFile {
   id: string
   relativePath: string
   size: number
+  /**
+   * 服务器存的**内容摘要**（`FileResponse.sha256`）。
+   *
+   * 导师整包回传靠它做**增量**：本地算同一个摘要，和服务器最新的这一版一致就跳过 ——
+   * 服务器不去重（同路径再传 = 新行 + 新字节，配额照涨），而导师回传的多数文件
+   * 本来就没动过。旧服务器不给这个字段时为空串（调用方据此**保守地全传**）。
+   */
+  sha256: string
 }
 
 /**
@@ -1061,19 +1104,23 @@ export interface RemoteProjectFile {
  *
  * 读权限 = owner 或**活跃研究关系方**（服务器 `FileService._readable_project`），
  * 所以导师不需要额外授权就能同步学生的工作区。
+ *
+ * ⚠️ 同一路径会有**多行历史**（文件不可变、不覆盖）。导师回传做增量时要用
+ * "每路径最后一版"，所以这里保留数组原样（服务器按 `created_at asc` 返回，
+ * 后者覆盖前者）—— 需要最新视图的调用方自己折叠。
  */
 export async function fetchProjectFiles(
   base: string,
   apiKey: string,
   projectId: string,
-  options: ServerRequestOptions = {},
+  options: ServerRequestOptions & { source?: FileSource } = {},
 ): Promise<RemoteProjectFile[]> {
   const key = requireKey(apiKey)
   const id = (projectId ?? '').trim()
   if (!id) throw new ServerError('bad-request', '缺少 projectId。')
   const body = await requestJson(
     base,
-    `/projects/${encodeURIComponent(id)}/files`,
+    `/projects/${encodeURIComponent(id)}/files${sourceQuery(options.source)}`,
     { method: 'GET', apiKey: key },
     options,
     '项目文件列表',
@@ -1089,7 +1136,7 @@ export async function fetchProjectFiles(
     if (!fileId || !relativePath) {
       throw new ServerError('bad-response', '项目文件条目缺少 id / relative_path。')
     }
-    return { id: fileId, relativePath, size: asNumber(b.size) }
+    return { id: fileId, relativePath, size: asNumber(b.size), sha256: asString(b.sha256) }
   })
 }
 
@@ -1288,7 +1335,10 @@ function filenameFromDisposition(value: string | null): string | null {
  * **边收边写进 `sink`**（不驻留内存、界面能看见进度）。
  *
  * ⚠️ 只把 ZIP 取回来落盘，**不解压**（2026-09 用户拍板）。文件名用服务器给的
- * （`<owner>-<title>.zip`）—— 服务器才是命名的权威，插件不自造。
+ * （`<owner>-<title>[-mentor].zip`）—— 服务器才是命名的权威，插件不自造。
+ *
+ * `options.source` 选**哪一侧**的快照（见 {@link FileSource}）：导师下学生的工作区走默认
+ * `owner`；学生取导师回传的那份走 `mentor`（服务器给的文件名带 `-mentor` 后缀）。
  *
  * 为什么要 `sink` 而不是返回 `Uint8Array`：这个快照实测 13.6 MB / 475 个文件，
  * 在 ~118 KB/s 的链路上要**两分钟**。收完再写等于这两分钟里磁盘上什么都没有
@@ -1302,14 +1352,14 @@ export async function fetchProjectArchive(
   apiKey: string,
   projectId: string,
   sink: { write(chunk: Uint8Array): void },
-  options: BinaryStreamOptions = {},
+  options: BinaryStreamOptions & { source?: FileSource } = {},
 ): Promise<{ received: number; filename: string | null; fileCount: number | null }> {
   const key = requireKey(apiKey)
   const id = (projectId ?? '').trim()
   if (!id) throw new ServerError('bad-request', '缺少 projectId。')
   const { contentDisposition, fileCount, received } = await fetchBinary(
     base,
-    `/projects/${encodeURIComponent(id)}/files/archive`,
+    `/projects/${encodeURIComponent(id)}/files/archive${sourceQuery(options.source)}`,
     key,
     { ...options, onChunk: (chunk) => sink.write(chunk) },
     '下载工作区快照',
