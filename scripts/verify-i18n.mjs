@@ -40,7 +40,20 @@ assert(
   `全部插值参数一致${placeholderMismatches.length ? `：${placeholderMismatches.join(', ')}` : ''}`,
 )
 assert(enKeys.filter((k) => k.startsWith('taxonomy.category.')).length === 10, '10 个能力类别均有翻译（含 C00 全局能力与 C09 工作评阅）')
-assert(enKeys.filter((k) => k.startsWith('taxonomy.skill.')).length === 55, '55 个能力均有翻译')
+// 技能条数从**分类树**取，不写死：写死的数字一旦随着"新增技能"被顺手 +1，
+// 这个断言此后就不再证明任何东西（它只证明有人改过数字）。
+const { SYSTEM_CATEGORIES } = await import(join(ROOT, 'src/research/taxonomy.ts'))
+const skillLeaves = SYSTEM_CATEGORIES.filter((c) => c.id.includes('/')).map((c) => c.id.split('/').pop())
+const translated = new Set(enKeys.filter((k) => k.startsWith('taxonomy.skill.')).map((k) => k.slice('taxonomy.skill.'.length)))
+const missingTranslations = skillLeaves.filter((id) => !translated.has(id))
+assert(
+  missingTranslations.length === 0,
+  `${skillLeaves.length} 个能力均有翻译${missingTranslations.length ? `：缺 ${missingTranslations.join(', ')}` : ''}`,
+)
+assert(
+  [...translated].filter((id) => !skillLeaves.includes(id)).length === 0,
+  '没有多余的技能翻译（分类树里已删的技能不该留下词条）',
+)
 assert(enKeys.filter((k) => k.startsWith('section.')).length === 7, '7 个可定制章节均有翻译（含 Prerequisites）')
 for (const dimension of ['Problem', 'Knowledge', 'Innovation', 'Method', 'Experiment', 'Evidence']) {
   assert(`maturity.dimension.${dimension}` in en, `成熟度维度 ${dimension} 有翻译`)

@@ -487,6 +487,7 @@ export declare const en: {
     readonly 'taxonomy.skill.evaluation-protocol': "Evaluation Protocol & Metric Design";
     readonly 'taxonomy.skill.ablation-design': "Ablation & Contribution Isolation";
     readonly 'taxonomy.skill.reproducible-implementation-spec': "Reproducible Implementation Specification";
+    readonly 'taxonomy.skill.method-implementation-spec': "Method Implementation Specification";
     readonly 'taxonomy.skill.simulation-baseline': "Simulation-First Results & Baseline Reference";
     readonly 'taxonomy.skill.result-analysis': "Result Analysis & Finding Extraction";
     readonly 'taxonomy.skill.comparative-analysis': "Comparative Analysis & Significance";
@@ -505,6 +506,7 @@ export declare const en: {
     readonly 'taxonomy.skill.section-drafting': "Section Drafting from Evidence";
     readonly 'taxonomy.skill.equation-formalization': "Equation Formalization";
     readonly 'taxonomy.skill.visual-evidence-selection': "Visual Evidence Selection";
+    readonly 'taxonomy.skill.paper-diagrams': "Paper Diagrams";
     readonly 'taxonomy.skill.manuscript-revision': "Manuscript Revision and Style";
     readonly 'taxonomy.skill.submission-compile-and-format': "Submission Formatting and Compile Repair";
     readonly 'taxonomy.skill.technical-report-writing': "Technical Report Writing";

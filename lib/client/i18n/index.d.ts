@@ -492,6 +492,7 @@ export declare const dictionaries: {
         'taxonomy.skill.evaluation-protocol': string;
         'taxonomy.skill.ablation-design': string;
         'taxonomy.skill.reproducible-implementation-spec': string;
+        'taxonomy.skill.method-implementation-spec': string;
         'taxonomy.skill.simulation-baseline': string;
         'taxonomy.skill.result-analysis': string;
         'taxonomy.skill.comparative-analysis': string;
@@ -510,6 +511,7 @@ export declare const dictionaries: {
         'taxonomy.skill.section-drafting': string;
         'taxonomy.skill.equation-formalization': string;
         'taxonomy.skill.visual-evidence-selection': string;
+        'taxonomy.skill.paper-diagrams': string;
         'taxonomy.skill.manuscript-revision': string;
         'taxonomy.skill.submission-compile-and-format': string;
         'taxonomy.skill.technical-report-writing': string;
@@ -1014,6 +1016,7 @@ export declare const dictionaries: {
         readonly 'taxonomy.skill.evaluation-protocol': "Evaluation Protocol & Metric Design";
         readonly 'taxonomy.skill.ablation-design': "Ablation & Contribution Isolation";
         readonly 'taxonomy.skill.reproducible-implementation-spec': "Reproducible Implementation Specification";
+        readonly 'taxonomy.skill.method-implementation-spec': "Method Implementation Specification";
         readonly 'taxonomy.skill.simulation-baseline': "Simulation-First Results & Baseline Reference";
         readonly 'taxonomy.skill.result-analysis': "Result Analysis & Finding Extraction";
         readonly 'taxonomy.skill.comparative-analysis': "Comparative Analysis & Significance";
@@ -1032,6 +1035,7 @@ export declare const dictionaries: {
         readonly 'taxonomy.skill.section-drafting': "Section Drafting from Evidence";
         readonly 'taxonomy.skill.equation-formalization': "Equation Formalization";
         readonly 'taxonomy.skill.visual-evidence-selection': "Visual Evidence Selection";
+        readonly 'taxonomy.skill.paper-diagrams': "Paper Diagrams";
         readonly 'taxonomy.skill.manuscript-revision': "Manuscript Revision and Style";
         readonly 'taxonomy.skill.submission-compile-and-format': "Submission Formatting and Compile Repair";
         readonly 'taxonomy.skill.technical-report-writing': "Technical Report Writing";

@@ -79,6 +79,9 @@ console.log('\n[A] 系统 Skill Library（包内资产）')
     'paper-claim-review',
     // C09P05 投稿前评阅：编辑视角的投稿审计（依据出版社的两份评阅参考），同样 v2 新增
     'pre-submission-review',
+    // C08P07 论文配图：v2 原生的**确定性绘图链路**（Diagram IR → Validator → Renderer）。
+    // 旧实现里没有任何"画论文结构图"的提示词可以迁移 —— 正文按 v0.5.5 的设计说明新写。
+    'paper-diagrams',
   ])
   const withSources = docs.filter((d) => d.sections.some((x) => x.title.startsWith('Source Prompts')))
   const migrated = docs.filter((d) => !V2_NATIVE.has(d.id))

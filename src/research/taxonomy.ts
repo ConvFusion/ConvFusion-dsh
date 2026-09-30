@@ -148,6 +148,7 @@ const SYSTEM_TAXONOMY: ReadonlyArray<{ group: string; name: string; leaves: Read
       ['section-drafting', 'Section Drafting'],
       ['equation-formalization', 'Equation Formalization'],
       ['visual-evidence-selection', 'Visual Evidence Selection'],
+      ['paper-diagrams', 'Paper Diagrams'],
       ['manuscript-revision', 'Manuscript Revision'],
       ['submission-compile-and-format', 'Submission Compile and Format'],
       ['technical-report-writing', 'Technical Report Writing'],

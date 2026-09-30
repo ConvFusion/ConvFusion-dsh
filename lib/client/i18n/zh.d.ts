@@ -487,6 +487,7 @@ export declare const zh: {
     'taxonomy.skill.evaluation-protocol': string;
     'taxonomy.skill.ablation-design': string;
     'taxonomy.skill.reproducible-implementation-spec': string;
+    'taxonomy.skill.method-implementation-spec': string;
     'taxonomy.skill.simulation-baseline': string;
     'taxonomy.skill.result-analysis': string;
     'taxonomy.skill.comparative-analysis': string;
@@ -505,6 +506,7 @@ export declare const zh: {
     'taxonomy.skill.section-drafting': string;
     'taxonomy.skill.equation-formalization': string;
     'taxonomy.skill.visual-evidence-selection': string;
+    'taxonomy.skill.paper-diagrams': string;
     'taxonomy.skill.manuscript-revision': string;
     'taxonomy.skill.submission-compile-and-format': string;
     'taxonomy.skill.technical-report-writing': string;

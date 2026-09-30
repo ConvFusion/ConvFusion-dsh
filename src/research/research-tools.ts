@@ -132,6 +132,28 @@ import {
   traceOutputProvenance,
 } from './output.js'
 import { getOutputProfile, listOutputProfiles } from './output-profiles.js'
+import {
+  COLUMN_WIDTH_PT,
+  DIAGRAM_TYPES,
+  EDGE_TYPES,
+  FIGURES_SUBDIR,
+  LAYOUT_ALGORITHMS,
+  LAYOUT_DIRECTIONS,
+  NODE_TYPES,
+  STYLE_TOKENS,
+  buildDiagram,
+  diagramPaths,
+  exportDiagramPdf,
+  formatDiagnostics,
+  inspectDiagram,
+  listDiagramArtifacts,
+  readDiagramIr,
+  sanitizeDiagramName,
+  saveLastGood,
+  toCanonicalIr,
+  writeDiagramIr,
+  writeDiagramSvg,
+} from './diagram/index.js'
 import { listTopicChanges, loadProjectFile, updateProjectTopic } from './project.js'
 
 /** 工具名（`research_` 命名空间，与 Skill/Plan 资产一致）。 */
@@ -147,6 +169,7 @@ export const LITERATURE_TOOL = 'research_literature_search'
 export const PAPER_DOWNLOAD_TOOL = 'research_paper_download'
 export const PAPER_LATEX_TOOL = 'research_paper_latex'
 export const ACTION_CONSTRUCTION_TOOL = 'research_action_construction'
+export const DIAGRAM_TOOL = 'research_diagram'
 
 /** 把错误对象转成工具返回值（不抛异常，让模型看到原因并纠正）。 */
 function fail(error: string, extra: Record<string, unknown> = {}): Record<string, JsonValue> {
@@ -1797,6 +1820,290 @@ export function defineResearchTools(
     },
   })
 
+  /* ── Diagram（C08P07 `paper-diagrams` 的执行通道）────────────────────── */
+  /**
+   * 论文配图：Agent 写 **Diagram IR**，Renderer 确定性地画。
+   *
+   * 为什么必须有这个工具，而不是让 Agent 用 `write` 直接产 SVG：
+   *
+   * 1. **出不了坏图**：校验不过就不写 SVG。这条路径在系统里**不存在**，不是"记得别写"。
+   * 2. **可复现**：同一个 IR 渲染 N 次逐字节相同 —— 图因此可以进 git、可以 review。
+   * 3. **可演化**：改图是改 IR（`read` → 改 → `render`），不是重新画一张。
+   * 4. **风格统一**：样式只能引用内置 token，一篇论文里的图不会各写各的配色与字体。
+   *
+   * `create` 只写 IR（起草阶段拿诊断），`render` 写 IR 并出 SVG（校验通过才写）。
+   * 校验失败时**不覆盖**已有 SVG，并把上一次成功的那份留在 `figures/.last-good/`。
+   */
+  const diagramTool = defineTool({
+    name: DIAGRAM_TOOL,
+    description:
+      'Create publication figures from a structured **Diagram IR** (paper C08P07 `paper-diagrams`).\n' +
+      'You decide *what* to draw; the IR records the nodes/groups/edges; the renderer draws it ' +
+      'deterministically. **Never hand-write SVG** — write an IR and render it.\n' +
+      'Actions:\n' +
+      '- `create`: validate the IR and write it to `papers/<paperId>/figures/<name>.json` (no SVG). ' +
+      'Use this while drafting, to get diagnostics early.\n' +
+      '- `render`: validate and render; writes both the IR and `<name>.svg`. If validation fails, ' +
+      'the previous good SVG is kept and no new one is written.\n' +
+      '- `export`: convert the rendered SVG into a **vector PDF** for LaTeX `\\includegraphics`. ' +
+      'Needs a Python interpreter with PyMuPDF (set `CONVFUSION_PYTHON` if it is not on PATH). ' +
+      'It reports the figure\'s on-page text size — pass `column_width_pt` (252 = IEEE single column, ' +
+      '516 = full width) and read `legible`: a wide diagram shrunk into one column becomes unreadable.\n' +
+      '- `validate`: run validation only (no writes) on `ir`, or on the stored IR when `ir` is omitted.\n' +
+      '- `read`: return the stored IR for an incremental edit (modify it, then `render` again).\n' +
+      '- `list`: list the diagram artifacts already in the paper\'s `figures/` directory.\n' +
+      'IR shape: {version, type, title?, canvas?, layout?:{direction,algorithm}, nodes[], groups[], edges[], labels?}.\n' +
+      `- type: ${DIAGRAM_TYPES.join(' | ')}\n` +
+      `- node.type: ${NODE_TYPES.join(' | ')} (role in the figure, never a method-specific name)\n` +
+      `- edge.type: ${EDGE_TYPES.join(' | ')}\n` +
+      `- layout.direction: ${LAYOUT_DIRECTIONS.join(' | ')} (LR default) · layout.algorithm: ${LAYOUT_ALGORITHMS.join(' | ')}\n` +
+      '- layout.layer_gap (optional, 12-120, default 64): gap between layers. Lower it to pack a long, ' +
+      'content-heavy diagram so its text is still legible after the figure is scaled into a column; ' +
+      'leave it out for short figures, where the default reads better.\n' +
+      `- style tokens (nodes/groups/edges only reference these): ${STYLE_TOKENS.join(' | ')}\n` +
+      'No x/y coordinates: layout is the renderer\'s job. An edge may target a group id, which ' +
+      'draws the arrow to the group border. Within-layer order follows declaration order, so ' +
+      'reordering the `nodes` array is how you move a box.',
+    parameters: {
+      action: {
+        type: 'string',
+        description: 'One of: create | render | export | validate | read | list.',
+        enum: ['create', 'render', 'export', 'validate', 'read', 'list'],
+      },
+      name: {
+        type: 'string',
+        description: 'Figure name / file stem, e.g. `fig1_method`. Written to `papers/<paperId>/figures/<name>.{json,svg}`.',
+      },
+      paperId: { type: 'string', description: 'Paper id (default: the active paper).' },
+      ir: {
+        type: 'object',
+        description: 'The Diagram IR. Required for `create` and `render`; optional for `validate` (falls back to the stored IR).',
+        additionalProperties: true,
+      },
+      show_descriptions: {
+        type: 'boolean',
+        description: 'Render each node as label + description (default false — figures should carry as little text as possible).',
+      },
+      column_width_pt: {
+        type: 'number',
+        description: 'For `export`: the width the figure will be drawn at in the paper, in pt (252 = IEEE single column, 516 = full width). Default 252.',
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => {
+        const v = value as {
+          ok?: boolean
+          error?: string
+          action?: string
+          valid?: boolean
+          errorCount?: number
+          warningCount?: number
+          irPath?: string
+          svgPath?: string
+          svgWritten?: boolean
+          keptPrevious?: string
+          summary?: string
+          nodes?: number
+          edges?: number
+          groups?: number
+          width?: number
+          height?: number
+          entries?: Array<{ name: string; complete: boolean; type?: string | null }>
+          ir?: unknown
+          pdfPath?: string
+          pdfBytes?: number
+          effectiveNodePt?: number
+          legible?: boolean
+          maxCanvasUnitsFor7pt?: number
+          columnWidthPt?: number
+          allFontsEmbedded?: boolean
+          pymupdf?: string
+        }
+        if (v.ok === false) return [{ type: 'text' as const, text: `Diagram action failed: ${v.error ?? ''}` }]
+        if (v.action === 'list') {
+          const rows = (v.entries ?? []).map((e) => `- ${e.name}${e.type ? ` (${e.type})` : ''}${e.complete ? '' : ' — IR or SVG missing'}`)
+          return [{ type: 'text' as const, text: rows.length > 0 ? `Diagrams:\n${rows.join('\n')}` : 'No diagrams yet.' }]
+        }
+        if (v.action === 'read') {
+          return [{ type: 'text' as const, text: `IR at ${v.irPath ?? ''}:\n${JSON.stringify(v.ir ?? null, null, 2)}` }]
+        }
+        if (v.action === 'export') {
+          const lines = [
+            `✅ ${v.pdfPath ?? ''} (${Math.round((v.pdfBytes ?? 0) / 1024)} KB, vector, fonts ${v.allFontsEmbedded ? 'embedded' : 'NOT embedded'})`,
+            `node text ≈ ${v.effectiveNodePt ?? '?'} pt when drawn ${v.columnWidthPt ?? '?'} pt wide — ${v.legible ? 'legible' : 'TOO SMALL ❌'}`,
+          ]
+          if (v.legible === false) {
+            lines.push(
+              `→ this figure is too wide for that column: keep the canvas under ${v.maxCanvasUnitsFor7pt} units ` +
+                '(fewer layers, or split it into a method figure + a module figure), or draw it full width.',
+            )
+          }
+          return [{ type: 'text' as const, text: lines.join('\n') }]
+        }
+        const head = v.valid
+          ? v.svgWritten
+            ? `✅ ${v.svgPath ?? ''}`
+            : `✅ IR valid (${v.irPath ?? ''})`
+          : `❌ IR invalid — ${v.errorCount ?? 0} error(s), ${v.warningCount ?? 0} warning(s)`
+        const lines = [head]
+        if (v.valid && v.width !== undefined) {
+          lines.push(`${v.nodes ?? 0} node(s), ${v.groups ?? 0} group(s), ${v.edges ?? 0} edge(s) · ${v.width}×${v.height}`)
+        }
+        if (v.keptPrevious) lines.push(`kept previous figure: ${v.keptPrevious}`)
+        if (v.summary) lines.push(v.summary)
+        return [{ type: 'text' as const, text: lines.join('\n') }]
+      },
+    },
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const ws = resolveWorkspace(exec?.agent)
+      const a = args as Record<string, unknown>
+      const action = String(a.action ?? 'list')
+      const paperId = resolvePaperParameter(ws, typeof a.paperId === 'string' ? a.paperId : undefined)
+      const DIAGRAM_ACTIONS = ['create', 'render', 'export', 'validate', 'read', 'list']
+      if (!DIAGRAM_ACTIONS.includes(action)) {
+        return fail(`Unknown action "${action}".`, { allowed: DIAGRAM_ACTIONS })
+      }
+      try {
+        if (action === 'list') {
+          const entries = listDiagramArtifacts(ws, paperId).map((e) => ({ name: e.name, complete: e.complete, type: e.type }))
+          return losslessJson({ ok: true, action, paperId, entries }) as unknown as Record<string, JsonValue>
+        }
+
+        const nameResult = sanitizeDiagramName(a.name)
+        if (!nameResult.ok) return fail(nameResult.error)
+        const name = nameResult.name
+        const paths = diagramPaths(ws, paperId, name)
+
+        if (action === 'read') {
+          const read = readDiagramIr(paths)
+          if (!read.ok) return fail(read.error)
+          return losslessJson({ ok: true, action, irPath: paths.relIr, ir: read.raw as JsonValue }) as unknown as Record<string, JsonValue>
+        }
+
+        /**
+         * `export` 在**读 IR 之前**处理：它转的是**已经渲染好的 SVG**，不需要 IR，
+         * 也不重新布局。放在 IR 解析之后会导致"没传 ir 就不给导出"这种无理由的限制。
+         */
+        if (action === 'export') {
+          if (!existsSync(paths.svgPath)) {
+            return fail(`No rendered figure at ${paths.relSvg} — run \`render\` first (and fix any validation errors).`)
+          }
+          const columnWidthPt = typeof a.column_width_pt === 'number' && a.column_width_pt > 0 ? a.column_width_pt : COLUMN_WIDTH_PT
+          const pdfPath = paths.svgPath.replace(/\.svg$/i, '.pdf')
+          const result = exportDiagramPdf({ svgPath: paths.svgPath, pdfPath, targetWidthPt: columnWidthPt })
+          if (!result.ok) return fail(result.error ?? 'export failed')
+          return losslessJson({
+            ok: true,
+            action,
+            name,
+            paperId,
+            svgPath: paths.relSvg,
+            pdfPath: `papers/${paperId}/${FIGURES_SUBDIR}/${name}.pdf`,
+            pdfBytes: result.bytes ?? 0,
+            widthPt: result.widthPt,
+            heightPt: result.heightPt,
+            allFontsEmbedded: result.allFontsEmbedded,
+            effectiveNodePt: result.effectiveNodePt,
+            legible: result.legible,
+            maxCanvasUnitsFor7pt: result.maxCanvasUnitsFor7pt,
+            columnWidthPt,
+            pymupdf: result.pymupdf,
+            python: result.python,
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        let raw: unknown = a.ir
+        if (raw === undefined || raw === null) {
+          /**
+           * 省略 `ir` 时回落到**已落盘**的 IR：这样"Agent 用原生 `write` 手改了
+           * `<name>.json`，再 `render` 一次"这条最自然的编辑路径也能走通。
+           * `create` 例外 —— 没有 IR 就没有要创建的东西。
+           */
+          if (action === 'validate' || action === 'render') {
+            const read = readDiagramIr(paths)
+            if (!read.ok) return fail(`${read.error} Pass \`ir\` explicitly for an unsaved diagram.`)
+            raw = read.raw
+          } else {
+            return fail(`\`ir\` is required for action "${action}".`)
+          }
+        }
+        if (typeof raw === 'string') {
+          try {
+            raw = JSON.parse(raw) as unknown
+          } catch (e) {
+            return fail(`\`ir\` is not valid JSON: ${e instanceof Error ? e.message : String(e)}`)
+          }
+        }
+
+        const options = { showDescriptions: a.show_descriptions === true }
+
+        if (action === 'validate') {
+          const inspection = inspectDiagram(raw, options)
+          return losslessJson({
+            ok: true,
+            action,
+            valid: inspection.report.valid,
+            errorCount: inspection.report.errors.length,
+            warningCount: inspection.report.warnings.length,
+            errors: inspection.report.errors as unknown as JsonValue,
+            warnings: inspection.report.warnings as unknown as JsonValue,
+            summary: formatDiagnostics(inspection.report),
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        /* create / render：先校验，再落盘 */
+        const build = buildDiagram(raw, options)
+        const report = build.report
+        const canonical = build.diagram !== null ? toCanonicalIr(build.diagram) : raw
+        writeDiagramIr(paths, canonical)
+
+        let svgWritten = false
+        let keptPrevious: string | undefined
+        // `create` 只固化 IR：起草阶段拿诊断，不产图（图由 `render` 出）。
+        if (action !== 'create' && build.svg !== null && build.diagram !== null && build.layout !== null) {
+          writeDiagramSvg(paths, build.svg)
+          saveLastGood(paths, canonical, build.svg)
+          svgWritten = true
+        } else if (existsSync(paths.svgPath)) {
+          const st = statSync(paths.svgPath)
+          keptPrevious = `${paths.relSvg} (from ${st.mtime.toISOString()})`
+        }
+
+        return losslessJson({
+          ok: true,
+          action,
+          valid: report.valid,
+          errorCount: report.errors.length,
+          warningCount: report.warnings.length,
+          errors: report.errors as unknown as JsonValue,
+          warnings: report.warnings as unknown as JsonValue,
+          irPath: paths.relIr,
+          ...(svgWritten ? { svgPath: paths.relSvg } : {}),
+          svgWritten,
+          ...(keptPrevious !== undefined ? { keptPrevious } : {}),
+          ...(build.layout !== null
+            ? {
+                nodes: build.layout.nodes.length,
+                groups: build.layout.groups.length,
+                edges: build.layout.edges.length,
+                width: build.layout.width,
+                height: build.layout.height,
+              }
+            : {}),
+          summary: formatDiagnostics(report),
+        }) as unknown as Record<string, JsonValue>
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e))
+      }
+    },
+    presentCall: (args) => {
+      const a = args as { action?: string; name?: string }
+      return { card: 'generic', title: `Diagram · ${a.action ?? ''} ${a.name ?? ''}`.trim(), kind: 'execute' }
+    },
+  })
+
   /* ── Action Construction（Paper 4 的度量，纯计算）────────────────────── */
   /**
    * 论文 d4 的度量：一个决策买到的信息量取决于**动作是怎么写下来的**。
@@ -2302,6 +2609,7 @@ export function defineResearchTools(
     paperDownloadTool as ToolDefinition,
     paperLatexTool as ToolDefinition,
     actionConstructionTool as ToolDefinition,
+    diagramTool as ToolDefinition,
   ]
 }
 

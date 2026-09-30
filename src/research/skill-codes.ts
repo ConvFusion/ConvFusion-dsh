@@ -156,11 +156,12 @@ export const SKILL_CODES: Readonly<Record<string, SkillCodeEntry>> = {
   'section-drafting': { code: 'C08P04', label: '章节起草' },
   'equation-formalization': { code: 'C08P05', label: '公式形式化' },
   'visual-evidence-selection': { code: 'C08P06', label: '图表证据选择' },
-  'manuscript-revision': { code: 'C08P07', label: '手稿修订' },
-  'submission-compile-and-format': { code: 'C08P08', label: '投稿编译与格式化' },
-  'technical-report-writing': { code: 'C08P09', label: '技术报告写作' },
-  'patent-drafting': { code: 'C08P10', label: '专利撰写' },
-  'presentation-design': { code: 'C08P11', label: '演讲设计' },
+  'paper-diagrams': { code: 'C08P07', label: '论文配图' },
+  'manuscript-revision': { code: 'C08P08', label: '手稿修订' },
+  'submission-compile-and-format': { code: 'C08P09', label: '投稿编译与格式化' },
+  'technical-report-writing': { code: 'C08P10', label: '技术报告写作' },
+  'patent-drafting': { code: 'C08P11', label: '专利撰写' },
+  'presentation-design': { code: 'C08P12', label: '演讲设计' },
 
   // ── C09 工作评阅 ──
   // 顺序 = **评阅场合从早到晚**，不是按重要性：

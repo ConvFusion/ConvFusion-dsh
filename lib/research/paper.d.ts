@@ -126,8 +126,25 @@ export declare function diffManuscript(workspace: string, paperId: string, other
  * "这句话对应哪个 Claim"（§8 的意图）。
  */
 export declare function readClaimMap(workspace: string, paperId?: string): PaperClaimEntry[];
+/**
+ * 由**已记录的 Claim id** 推导"正文里什么样的 token 才算 Claim 引用"。
+ *
+ * ## 为什么不能只写 `\bC\d{1,4}\b`
+ *
+ * 那个正则会把**决策类型的编号**当成 Claim。实测（paper-main）：论文的 taxonomy 用
+ * `C1 next action` / `C4 stopping condition` 表示"C. Planning and next action"类下的
+ * 决策类型，于是 Gap 检测报出四条
+ * "Claim C1/C2/C3/C4 appears in the manuscript with no supporting evidence"
+ * 和四条 "The manuscript cites claim C1, but no such claim is recorded"——
+ * **八条全是假阳性**，而真正的 Claim 是 `C001` 这种三位编号。
+ *
+ * 判据改成"形状"：记录里是 `C001`（C + 3 位），正文里只有同样形状的 token 才算引用。
+ * 没有任何记录时保守要求 ≥3 位（`C001` 认，`C1` 不认）——宁可漏报，
+ * 也不要制造让研究者白跑一轮的假阳性。
+ */
+export declare function manuscriptClaimIdMatcher(knownIds: readonly string[]): (id: string) => boolean;
 /** 从正文推导 Claim → Sections（§8 的 `Paper Sections` 部分）。 */
-export declare function deriveClaimMapFromManuscript(paper: PaperDocument): PaperClaimEntry[];
+export declare function deriveClaimMapFromManuscript(paper: PaperDocument, isClaimId?: (id: string) => boolean): PaperClaimEntry[];
 /** 写 Claim Map（由 `research/claims/*.md` 与正文引用合成，不新增事实）。 */
 export declare function writeClaimMap(workspace: string, paperId: string, entries: readonly PaperClaimEntry[]): string;
 /**

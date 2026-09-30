@@ -4,7 +4,7 @@
  *
  * 守住两件事：
  *
- *   1. **编号体系**：9 个类别 `C01`–`C09` 按研究过程排序；55 个技能各自唯一编号；
+ *   1. **编号体系**：10 个类别 `C00`–`C09` 按研究过程排序；每个技能各自唯一编号；
  *      编号表与真实技能集合**完全一致**（不多、不少、不重、格式合法）。
  *   2. **排序按编号而非字母序**：技能库列表、设置页的类别与技能列表，
  *      都必须按 `CxxPyy` 排 —— 字母序会把实验阶段的技能排到理解输入之前。
@@ -115,6 +115,24 @@ console.log('\n[2] 技能编号 CxxPyy')
     if (code && info) {
       assert(code.startsWith(info.code), `${doc.id} 的编号 ${code} 属于 ${info.code}`)
     }
+  }
+
+  // C08 的 P 号顺序 = **论文从草稿到成稿的实际顺序**（v0.5.5 插入 paper-diagrams 后顺移）。
+  // 这条断言防的是"插入一个技能却忘了顺移后面几个"——那种错误编号仍然唯一、仍然连续，
+  // 只有顺序错，前面所有检查都会放过。
+  {
+    const c08 = docs
+      .filter((d) => (d.category ?? '').startsWith('academic-writing'))
+      .map((d) => CODES.skillCode(d.id))
+    assertEq(
+      c08.join(','),
+      'C08P01,C08P02,C08P03,C08P04,C08P05,C08P06,C08P07,C08P08,C08P09,C08P10,C08P11,C08P12',
+      'C08 编号连续到 P12',
+    )
+    assertEq(CODES.skillCode('visual-evidence-selection'), 'C08P06', '选图表 = C08P06')
+    assertEq(CODES.skillCode('paper-diagrams'), 'C08P07', '配图 = C08P07（在选图表之后）')
+    assertEq(CODES.skillCode('manuscript-revision'), 'C08P08', '手稿修订 = C08P08（在配图之后）')
+    assertEq(CODES.skillCode('submission-compile-and-format'), 'C08P09', '投稿编译 = C08P09')
   }
 
   // 每个类别内的 P 号从 P01 连续开始
@@ -237,14 +255,14 @@ console.log('\n[6] 定制层：编号别名与排序')
 
   // 键可以是编号（人手写时好记）—— 读取时反查成稳定的 skillId
   const p = CUSTS.parseCustomizations(
-    JSON.stringify({ C08P08: { 'Research Method': 'x' }, C02P01: { Purpose: 'y' } }),
+    JSON.stringify({ C08P09: { 'Research Method': 'x' }, C02P01: { Purpose: 'y' } }),
   )
-  assert(p['submission-compile-and-format'] !== undefined, '编号 C08P08 解析为 skillId')
+  assert(p['submission-compile-and-format'] !== undefined, '编号 C08P09 解析为 skillId')
   assert(p['literature-search'] !== undefined, '编号 C02P01 解析为 skillId')
   assertEq(
     Object.keys(p).join(','),
     'literature-search,submission-compile-and-format',
-    '键按编号排序（C02P01 在 C08P08 前）',
+    '键按编号排序（C02P01 在 C08P09 前）',
   )
 
   // 读 → 写 → 再读 必须幂等（否则每次打开设置都会产生无谓 diff）

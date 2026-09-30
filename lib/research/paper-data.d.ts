@@ -153,7 +153,7 @@ export interface PaperEvidenceEntry {
     sections: string[];
 }
 /** Gap 类型（§14 示例 + 规则检查可发现的类型）。 */
-export type PaperGapType = 'experimental-validation' | 'missing-ablation' | 'unsupported-claim' | 'contested-claim' | 'missing-evidence' | 'evidence-without-artifact' | 'missing-section' | 'thin-section' | 'unreferenced-evidence' | 'outdated-related-work' | 'reproducibility';
+export type PaperGapType = 'experimental-validation' | 'missing-ablation' | 'unsupported-claim' | 'contested-claim' | 'missing-evidence' | 'evidence-without-artifact' | 'missing-section' | 'thin-section' | 'unreferenced-evidence' | 'no-claim-map' | 'outdated-related-work' | 'reproducibility';
 export type GapPriority = 'high' | 'medium' | 'low';
 /**
  * 一个研究缺口。
@@ -278,6 +278,40 @@ export interface PaperVersionEntry {
  * 因此只作为检查依据，不阻断任何操作。
  */
 export declare const REQUIRED_PAPER_SECTIONS: readonly string[];
+/**
+ * 每个必需章节的**别名**（小写、整词短语）。
+ *
+ * ## 为什么需要它
+ *
+ * 原来的检查是**标题全等**匹配：`REQUIRED_PAPER_SECTIONS` 里有 `Method`，
+ * 论文写的是 `Decision-Centric Research: Framework and DCRM Model` —— 于是检测器
+ * 报"本文没有 Method 章节"。实测（paper-main）四条全是这类假阳性：
+ *
+ * ```text
+ * 论文实际标题                                    被误报为缺失
+ * 2. Background and Related Work                 → Related Work
+ * 3. Decision-Centric Research: Framework …       → Method
+ * 4. Evaluation                                   → Experiments / Results
+ * ```
+ *
+ * 章节名在各 venue 之间差异极大，全等匹配在这件事上**没有任何判别力**，
+ * 只会稳定地产生假阳性；而假阳性会让研究者去补一个已经存在的章节。
+ *
+ * 匹配规则：章节标题里**包含**任一别名短语（整词边界）即视为该角色已存在。
+ * 别名只在"这是该角色的常见命名"时登记 —— 收紧到别名的代价是可能漏报，
+ * 而漏报远好于让研究者白跑一轮（见 §自检里的反向用例：真的缺 Method 仍要报）。
+ */
+export declare const REQUIRED_SECTION_ALIASES: Readonly<Record<string, readonly string[]>>;
+/**
+ * 论文的某一节标题是否充当了必需章节 `want` 的角色。
+ *
+ * 用整词短语包含匹配：`Background and Related Work` ⊃ `related work`；
+ * `Evaluation` ≈ Experiments 与 Results（一篇论文用一节同时承担设置与结果，
+ * 这在会议论文里是常态，不是缺陷）。
+ */
+export declare function sectionPlaysRole(sectionTitle: string, want: string): boolean;
+/** 节标题列表里，是否存在承担 `want` 角色的章节。 */
+export declare function hasSectionFor(titles: readonly string[], want: string): boolean;
 /** 章节名归一（去掉编号，`## 3. Method` → `Method`）。 */
 export declare function normalizeSectionName(title: string): string;
 //# sourceMappingURL=paper-data.d.ts.map

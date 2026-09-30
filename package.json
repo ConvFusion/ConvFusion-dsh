@@ -1,6 +1,6 @@
 {
   "name": "dsh-convfusion",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "ConvFusion research operating system as a DeepSeek Harness plugin: research context injection, native skill provider, and runtime observation. Harness is the agent runtime.",
   "type": "module",
   "main": "lib/index.js",
@@ -19,6 +19,7 @@
   "files": [
     "lib",
     "skills",
+    "assets",
     "cordis.patch.yml",
     "convfusion.env.example.json",
     "README.md"
@@ -32,6 +33,8 @@
     "verify:host-deps": "node scripts/verify-host-deps.mjs",
     "verify:settings": "node scripts/verify-settings-page.mjs .",
     "verify:action-construction": "node scripts/verify-action-construction.mjs",
+    "verify:paper-diagrams": "node scripts/verify-paper-diagrams.mjs",
+    "verify:paper-gaps": "node scripts/verify-paper-gaps.mjs",
     "demo:action-construction": "node scripts/demo-action-construction.mjs",
     "demo:action-construction:html": "node scripts/make-action-construction-demo-html.mjs",
     "extract:actions": "node scripts/extract-actions.mjs",
