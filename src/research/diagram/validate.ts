@@ -15,14 +15,17 @@
  * Agent 改论文内容 —— 那是 dev-note §33 禁止的越界。
  */
 
-import { layoutDiagram, type LayoutResult, type RenderOptions } from './layout.js'
+import { layoutAny } from './engine.js'
+import type { LayoutResult, RenderOptions } from './layout.js'
 import { normalizeIr, type NormalizedDiagram } from './normalize.js'
 import {
   LAYOUT,
   FONT_SIZE,
 } from './styles.js'
 import {
+  collinearOverlap,
   measureText,
+  rectsOverlap,
   polylineIntersectsRect,
   r3,
   rectBottom,
@@ -52,17 +55,17 @@ export function inspectDiagram(raw: unknown, options: RenderOptions = {}): Diagr
     return finish(null, null, diagnostics)
   }
   const diagram = normalized.diagram
-  const layout = layoutDiagram(diagram, options)
+  const layout = layoutAny(diagram, options)
   diagnostics.push(...layout.diagnostics)
   diagnostics.push(...graphChecks(diagram))
-  diagnostics.push(...visualChecks(diagram, layout))
+  diagnostics.push(...visualChecks(diagram, layout, options))
   return finish(diagram, layout, diagnostics)
 }
 
 /** 校验一份**已经规范化**的 IR（render 路径复用，避免重复解析）。 */
 export function inspectNormalized(diagram: NormalizedDiagram, options: RenderOptions = {}): DiagramInspection {
-  const layout = layoutDiagram(diagram, options)
-  const diagnostics: Diagnostic[] = [...layout.diagnostics, ...graphChecks(diagram), ...visualChecks(diagram, layout)]
+  const layout = layoutAny(diagram, options)
+  const diagnostics: Diagnostic[] = [...layout.diagnostics, ...graphChecks(diagram), ...visualChecks(diagram, layout, options)]
   return finish(diagram, layout, diagnostics)
 }
 
@@ -100,7 +103,8 @@ function graphChecks(diagram: NormalizedDiagram): Diagnostic[] {
 
   // 溯源：**整张图一个 evidence 都没有**才提示，不逐节点提示 ——
   // dev-note §28 说第一阶段不要求 evidence，逐节点报警只会变成噪声，Agent 会学会忽略它。
-  if (diagram.nodes.length > 0 && diagram.nodes.every((n) => n.evidence.length === 0)) {
+  // 绑定论文资产（`refs`）是比 `evidence` 更强的溯源：它直接指向那条 claim / evidence。
+  if (diagram.nodes.length > 0 && diagram.nodes.every((n) => n.evidence.length === 0 && (n.refs ?? []).length === 0)) {
     out.push(
       warning(
         'UNTRACED_NODE',
@@ -163,7 +167,7 @@ function vagueReason(label: string): string | null {
  * 视觉
  * ════════════════════════════════════════════════════════════════════════ */
 
-function visualChecks(diagram: NormalizedDiagram, layout: LayoutResult): Diagnostic[] {
+function visualChecks(diagram: NormalizedDiagram, layout: LayoutResult, options: RenderOptions = {}): Diagnostic[] {
   const out: Diagnostic[] = []
 
   /* ── 节点重叠（布局保证不重叠；这是"布局实现坏了"的安全网）───────── */
@@ -190,8 +194,206 @@ function visualChecks(diagram: NormalizedDiagram, layout: LayoutResult): Diagnos
         `Edge "${edge.id}" (${edge.source} → ${edge.target}) crosses node${hit !== undefined ? ` "${hit.id}"` : ''}.`,
         edge.id,
         'Repair structurally: add the intermediate node the flow actually passes through, reorder the layer (declaration order controls it), or route through a group endpoint.',
+        hit !== undefined ? `crosses node ${hit.id} at ${JSON.stringify({ x: Math.round(hit.rect.x), y: Math.round(hit.rect.y), w: Math.round(hit.rect.w), h: Math.round(hit.rect.h) })}` : undefined,
       ),
     )
+  }
+
+  /* ── 端点堆积：同一节点同一侧的多条边共用一个锚点 ─────────────────
+   * 这是"连线看起来不对"最常见的一类：3 条边从同一个点出发，画出来是一根线再分叉。
+   * 渲染器已经会确定性分散端点，这里保留一条**可复核**的判据：分散失效时必须报出来。
+   */
+  const piledAt = (pick: (e: (typeof layout.edges)[number]) => { x: number; y: number }, key: (e: (typeof layout.edges)[number]) => string): void => {
+    const byNode = new Map<string, Array<{ id: string; p: { x: number; y: number } }>>()
+    for (const e of layout.edges) {
+      const node = key(e)
+      const arr = byNode.get(node)
+      const item = { id: e.id, p: pick(e) }
+      if (arr === undefined) byNode.set(node, [item])
+      else arr.push(item)
+    }
+    for (const [node, arr] of byNode) {
+      if (arr.length < 2) continue
+      const uniq = new Map<string, string[]>()
+      for (const it of arr) {
+        const k = `${it.p.x.toFixed(1)},${it.p.y.toFixed(1)}`
+        uniq.set(k, [...(uniq.get(k) ?? []), it.id])
+      }
+      for (const [at, ids] of uniq) {
+        if (ids.length < 2) continue
+        out.push(
+          error(
+            'EDGE_ENDPOINT_PILED',
+            `${ids.length} edges share one anchor at node "${node}", so they are drawn as a single line that splits.`,
+            node,
+            'The renderer spreads shared endpoints deterministically; if this fires, the layout needs the edges separated (split the figure, or send some through a group endpoint).',
+            `${ids.join(', ')} all at (${at})`,
+          ),
+        )
+      }
+    }
+  }
+  piledAt((e) => e.points[0] as { x: number; y: number }, (e) => e.declaredSource)
+  piledAt((e) => e.points[e.points.length - 1] as { x: number; y: number }, (e) => e.declaredTarget)
+
+  /* ── 线穿过**容器框**：容器是矩形，不是节点，容易被漏掉 ───────────── */
+  const ancestorsOf = (nodeId: string): Set<string> => {
+    const out = new Set<string>()
+    let gid = layout.nodeById.get(nodeId)?.id !== undefined ? diagram.nodes.find((n) => n.id === nodeId)?.group : undefined
+    while (gid !== undefined && !out.has(gid)) {
+      out.add(gid)
+      gid = diagram.groups.find((g) => g.id === gid)?.parent
+    }
+    return out
+  }
+  for (const edge of layout.edges) {
+    const allowed = new Set<string>([...ancestorsOf(edge.source), ...ancestorsOf(edge.target)])
+    if (diagram.groups.some((g) => g.id === edge.declaredSource)) allowed.add(edge.declaredSource)
+    if (diagram.groups.some((g) => g.id === edge.declaredTarget)) allowed.add(edge.declaredTarget)
+    for (const g of layout.groups) {
+      if (allowed.has(g.id)) continue
+      if (!polylineIntersectsRect(edge.points, g.rect, 1)) continue
+      out.push(
+        error(
+          'EDGE_CROSSES_CONTAINER',
+          `Edge "${edge.id}" (${edge.declaredSource} → ${edge.declaredTarget}) runs through container "${g.id}", which neither endpoint belongs to.`,
+          edge.id,
+          'Move the container out of the way (regroup or carry the edge through a group endpoint), or accept a detour — the renderer treats foreign containers as obstacles.',
+          `container ${g.id} at ${JSON.stringify({ x: Math.round(g.rect.x), y: Math.round(g.rect.y), w: Math.round(g.rect.w), h: Math.round(g.rect.h) })}`,
+        ),
+      )
+    }
+  }
+
+  /* ── 引用必须真的存在：图上印的论点编号不能是死的 ─────────────────
+   * 图承载的"论文观点"就是这些编号。印一个不存在的 `C7`，读者按编号回正文会找不到 ——
+   * 这比不标更糟。`knownRefs` 由**调用方**提供（工具层从工作区的 claim / evidence 里读），
+   * 内核本身保持纯净：没有 `knownRefs` 就只做形状检查（normalize 的 BAD_REF_SHAPE）。
+   */
+  if (options.knownRefs !== undefined) {
+    const known = options.knownRefs
+    const sites: Array<{ owner: string; kind: string; refs: string[] }> = [
+      ...diagram.nodes.map((n) => ({ owner: `node "${n.id}"`, kind: 'node', refs: n.refs ?? [] })),
+      ...diagram.groups.map((g) => ({ owner: `group "${g.id}"`, kind: 'group', refs: g.refs ?? [] })),
+      ...diagram.edges.map((e) => ({ owner: `edge "${e.id}"`, kind: 'edge', refs: e.refs ?? [] })),
+      ...diagram.cards.map((c) => ({ owner: `card "${c.id}"`, kind: 'card', refs: c.refs ?? [] })),
+    ]
+    const sample = [...known].slice(0, 6).join(', ')
+    for (const site of sites) {
+      for (const ref of site.refs) {
+        if (known.has(ref)) continue
+        out.push(
+          error(
+            'UNKNOWN_REF',
+            `${site.owner} refers to "${ref}", which does not exist in the research record.`,
+            site.owner.split('"')[1],
+            `Use a recorded id (known: ${sample}${known.size > 6 ? ', …' : ''}), or record the claim / evidence before putting it on a figure.`,
+            `ref "${ref}" not in ${known.size} known ids`,
+          ),
+        )
+      }
+    }
+  }
+
+  /* ── 标签压线 / 压盒子：论文图最常见的低级错误 ───────────────────── */
+  {
+    const labelRects: Array<{ id: string; rect: Rect }> = []
+    for (const edge of layout.edges) {
+      if (edge.label === undefined || edge.labelPos === undefined) continue
+      const w = measureText(edge.label, FONT_SIZE.edgeLabel)
+      const x0 = edge.labelAnchor === 'middle' ? edge.labelPos.x - w / 2 : edge.labelPos.x
+      labelRects.push({
+        id: edge.id,
+        rect: {
+          x: x0 - 3,
+          y: edge.labelPos.y - FONT_SIZE.edgeLabel,
+          w: w + 6,
+          h: FONT_SIZE.edgeLabel * 1.3,
+        },
+      })
+    }
+    // 标签压节点 / 压容器
+    for (const lr of labelRects) {
+      for (const n of layout.nodes) {
+        if (n.id === lr.id) continue
+        if (rectsOverlap(lr.rect, n.rect, 1)) {
+          out.push(
+            warning(
+              'LABEL_OVERLAP',
+              `Edge label "${lr.id}" overlaps node "${n.id}".`,
+              lr.id,
+              'Shorten the label, or let the layout breathe (raise `layer_gap`) so the label lands in open space.',
+              `label rect ${JSON.stringify({ x: Math.round(lr.rect.x), y: Math.round(lr.rect.y), w: Math.round(lr.rect.w) })} ∩ node "${n.id}"`,
+            ),
+          )
+          break
+        }
+      }
+      for (const g of layout.groups) {
+        const isOwn = diagram.groups.find((x) => x.id === g.id)?.members.length === 0
+        if (isOwn) continue
+        // 容器内部允许有标签（那是它的成员的通道），只报压到容器**标签带**的情况
+        const band = { x: g.rect.x, y: g.rect.y, w: g.rect.w, h: LAYOUT.groupLabelBand }
+        if (rectsOverlap(lr.rect, band, 1)) {
+          out.push(
+            warning(
+              'LABEL_OVERLAP',
+              `Edge label "${lr.id}" sits on the label band of container "${g.id}".`,
+              lr.id,
+              'Move the container label or shorten the edge label.',
+              `label ∩ container "${g.id}" label band`,
+            ),
+          )
+        }
+      }
+    }
+    // 标签互相压
+    for (let i = 0; i < labelRects.length; i++) {
+      for (let j = i + 1; j < labelRects.length; j++) {
+        const a = labelRects[i] as { id: string; rect: Rect }
+        const b = labelRects[j] as { id: string; rect: Rect }
+        if (!rectsOverlap(a.rect, b.rect, 1)) continue
+        out.push(
+          warning(
+            'LABEL_OVERLAP',
+            `Edge labels "${a.id}" and "${b.id}" overlap each other, so neither can be read.`,
+            a.id,
+            'Shorten one label, or separate the two edges structurally.',
+            `"${a.id}" ∩ "${b.id}"`,
+          ),
+        )
+      }
+    }
+  }
+
+  /* ── 边与边共线重叠：两条线叠在一起，读者只看到一条 ─────────────── */
+  {
+    const segs: Array<{ id: string; a: { x: number; y: number }; b: { x: number; y: number } }> = []
+    for (const e of layout.edges) {
+      for (let i = 0; i + 1 < e.points.length; i++) {
+        segs.push({ id: e.id, a: e.points[i] as { x: number; y: number }, b: e.points[i + 1] as { x: number; y: number } })
+      }
+    }
+    // 短拐角（节点贴边处的几单位重合）不报：报出来只会淹没有用的信号。
+    const MIN_REPORTED_OVERLAP = 12
+    for (let i = 0; i < segs.length; i++) {
+      for (let j = i + 1; j < segs.length; j++) {
+        const p = segs[i] as (typeof segs)[number]
+        const q = segs[j] as (typeof segs)[number]
+        if (p.id === q.id) continue
+        const ov = collinearOverlap(p.a, p.b, q.a, q.b)
+        if (ov < MIN_REPORTED_OVERLAP) continue
+        out.push(
+          warning(
+            'EDGE_OVERLAP',
+            `Edges "${p.id}" and "${q.id}" run on top of each other, so they read as one line.`,
+            p.id,
+            'Give one of them a different lane: reorder the nodes so the targets are not adjacent, or route one through a group endpoint.',
+            `${ov.toFixed(1)} units shared between ${p.id} and ${q.id}`,
+          ),
+        )
+      }
+    }
   }
 
   /* ── 文字溢出 ───────────────────────────────────────────────────── */

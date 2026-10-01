@@ -58,6 +58,7 @@ import {
 import { createFileCustomizationStore } from './research/skill-customization.js'
 import { createFilePublishedStore } from './research/published-store.js'
 import { createFilePaidBriefStore } from './research/paid-briefs.js'
+import { createFileSyncWatermarkStore } from './research/sync-watermarks.js'
 import { systemLibraryStatus } from './research/skill-customization.js'
 import { ResearchContextService } from './research/context.js'
 import { mountEventBridge, type ResearchEventBridge } from './research/runtime-events.js'
@@ -245,6 +246,16 @@ export function apply(ctx: Context, liveConfig: Partial<LiveConfig> = {}): void 
    */
   const paidBriefStore = createFilePaidBriefStore(() =>
     join(dirname(resolveCustomizationPath(currentConfig())), 'paid-briefs.json'),
+  )
+  /**
+   * 上一次**归档响应**的水位（导师侧"学生更新了 → 重新下载"的判断依据）。
+   *
+   * 记录的是**这台服务器上这个项目**我下过的那一版（`X-Source-Updated-At` /
+   * `X-File-Count`），与已发布映射同一个目录（`$DSH_HOME/convfusion/`）——
+   * 它是本机运行记忆，不属于研究内容，故不进工作区。
+   */
+  const syncWatermarkStore = createFileSyncWatermarkStore(() =>
+    join(dirname(resolveCustomizationPath(currentConfig())), 'sync-watermarks.json'),
   )
   ctx.logger?.info(
     `[convfusion] user customizations: ${customizationStore.description}` +
@@ -529,6 +540,8 @@ export function apply(ctx: Context, liveConfig: Partial<LiveConfig> = {}): void 
       publishedStore,
       // 「简报已经买过」的本地记忆：决定还要不要弹扣费确认框
       paidBriefStore,
+      // 上一次归档响应的水位：mentor/list 据此提示"学生更新了，重新下载"
+      syncStore: syncWatermarkStore,
       // 注册表读取放在这里（入口持有 ctx），过滤与进度计算在 settings-rpc 里
       /**
        * 读宿主的工作区注册表并归一成纯数据（**与 dsh-additive 的 `listWorkspaces` 同款做法**：

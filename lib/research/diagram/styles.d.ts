@@ -17,6 +17,10 @@ export declare const FONT_SIZE: {
     readonly groupLabel: 12;
     readonly nodeLabel: 13;
     readonly nodeDescription: 11;
+    /** 引用角标（`[C1 · E008]`）：比说明再小一档，视觉上属于"附注"。 */
+    readonly nodeRef: 9;
+    readonly cardTitle: 12;
+    readonly cardBody: 10;
     readonly edgeLabel: 11;
     readonly freeLabel: 12;
 };
@@ -62,6 +66,22 @@ export declare const LAYOUT: {
     /** node 内边距与最大宽度（超过就换行，而不是把盒子撑长）。 */
     readonly nodePaddingX: 12;
     readonly nodePaddingY: 10;
+    /** 卡片栏：宽度 / 内边距 / 卡片间距 / 与流程的间距（见 `DiagramCard`）。 */
+    readonly cardWidth: 250;
+    readonly cardPaddingX: 12;
+    readonly cardPaddingY: 10;
+    readonly cardGap: 14;
+    readonly cardPanelGap: 28;
+    /** 自环（`source === target`）：向外折出的宽度与折回的高度。 */
+    readonly selfLoopW: 26;
+    readonly selfLoopH: 22;
+    /** 时序图：列间距 / 参与者头与生命线起点间距 / 每行消息的间距 / 生命线尾巴 / 自消息环。 */
+    readonly sequenceColumnGap: 44;
+    readonly sequenceHeaderGap: 16;
+    readonly sequenceRowGap: 34;
+    readonly sequenceLifelineTail: 18;
+    readonly sequenceSelfLoopW: 30;
+    readonly sequenceSelfLoopH: 18;
     readonly nodeMaxLabelWidth: 168;
     readonly nodeMinWidth: 84;
     readonly lineHeightRatio: 1.32;

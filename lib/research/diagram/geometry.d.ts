@@ -72,4 +72,11 @@ export declare function polylineToPath(points: readonly Point[]): string;
  * `orient="auto"` 的箭头在零长度段上行为未定义（箭头会消失或乱指）。
  */
 export declare function simplifyPolyline(points: readonly Point[]): Point[];
+/**
+ * 两条**轴对齐**线段的共线重叠长度（不共线或不相交时返回 0）。
+ *
+ * 用途：两条边在同一条通道上叠着走时，读者看到的是一根线 —— 这是"连线错误"里
+ * 最容易被当成画错的一类，必须在 diagnostics 里点名并给出**实测长度**。
+ */
+export declare function collinearOverlap(a1: Point, a2: Point, b1: Point, b2: Point): number;
 //# sourceMappingURL=geometry.d.ts.map

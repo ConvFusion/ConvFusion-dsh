@@ -531,10 +531,19 @@ export function convertMarkdownTables(text: string, tables: string[] = []): stri
       let k = i - 1
       while (k >= 0 && lines[k].trim() === '') k--
       if (k >= 0) {
-        const m = lines[k].match(/^\s*(?:\*\*)?Table\s*\d*\.?:?\s*(.+?)\s*\*{0,2}$/i)
+        const capLine = lines[k]
+        const m = capLine.match(/^\s*(?:\*\*)?Table\s*\d*\.?:?\s*(.+?)\s*\*{0,2}$/i)
         if (m) {
           caption = m[1].trim()
           lines[k] = '' // 消费题注行
+          // 实测事故：题注行位于表格**上方**，在主循环里早已被 push 进 out ——
+          // 只置空 lines[k] 不生效，正文里会残留一段 "Table: ..." 重复题注。
+          // 这里回溯 out，把最后一条非空行（必然就是该题注行）移除。
+          for (let oi = out.length - 1; oi >= 0; oi--) {
+            if (out[oi].trim() === '') continue
+            if (out[oi] === capLine) out.splice(oi, 1)
+            break
+          }
         }
       }
       const idx = tables.length
@@ -572,7 +581,12 @@ function escapeTableCell(raw: string): string {
     })
   out = out.replace(/\*\*([^*\n]+)\*\*/g, '\\textbf{$1}')
   out = out.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '\\textit{$1}')
-  out = out.replace(/&/g, '\\&').replace(/%/g, '\\%').replace(/#/g, '\\#').replace(/_/g, '\\_').replace(/\^/g, '\\^{}')
+  // 已转义的（作者手写 `\%` `\&` 等）不二次转义 —— 实测事故：题注 `95\%` 被转成
+  // `95\\%`，`\\` 是换行、`%` 把 `\caption{...}` 的收尾注释掉，整个编译以
+  // "Runaway argument" 中断。
+  out = out
+    .replace(/(?<!\\)&/g, '\\&').replace(/(?<!\\)%/g, '\\%').replace(/(?<!\\)#/g, '\\#')
+    .replace(/(?<!\\)_/g, '\\_').replace(/(?<!\\)\^/g, '\\^{}')
   out = out.replace(/\$/g, '\\$') // 落单 $ 转义（数学区已保护）
   for (let r = 0; r < regions.length; r++) out = out.split(`\u0000CELLMATH${r}\u0000`).join(regions[r])
   return out

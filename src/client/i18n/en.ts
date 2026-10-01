@@ -210,6 +210,8 @@ export const en = {
   'community.mentor.progress.studentGot': 'Mentor has given guidance',
   'community.mentor.progress.mentorWaiting': 'Guidance pending',
   'community.mentor.progress.mentorDone': 'Guidance delivered',
+  'community.mentor.studentUpdated': 'Student updated files — re-download.',
+  'community.mentor.studentDeleted': 'Student deleted files — re-download.',
   'community.mentor.status.PROPOSED': 'Awaiting response',
   'community.mentor.status.ACCEPTED': 'Accepted',
   'community.mentor.status.REJECTED': 'Declined',

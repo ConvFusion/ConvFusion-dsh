@@ -202,6 +202,8 @@ export declare const dictionaries: {
         'community.mentor.progress.studentGot': string;
         'community.mentor.progress.mentorWaiting': string;
         'community.mentor.progress.mentorDone': string;
+        'community.mentor.studentUpdated': string;
+        'community.mentor.studentDeleted': string;
         'community.mentor.status.PROPOSED': string;
         'community.mentor.status.ACCEPTED': string;
         'community.mentor.status.REJECTED': string;
@@ -726,6 +728,8 @@ export declare const dictionaries: {
         readonly 'community.mentor.progress.studentGot': "Mentor has given guidance";
         readonly 'community.mentor.progress.mentorWaiting': "Guidance pending";
         readonly 'community.mentor.progress.mentorDone': "Guidance delivered";
+        readonly 'community.mentor.studentUpdated': "Student updated files — re-download.";
+        readonly 'community.mentor.studentDeleted': "Student deleted files — re-download.";
         readonly 'community.mentor.status.PROPOSED': "Awaiting response";
         readonly 'community.mentor.status.ACCEPTED': "Accepted";
         readonly 'community.mentor.status.REJECTED': "Declined";

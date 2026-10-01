@@ -35,6 +35,7 @@
     "verify:action-construction": "node scripts/verify-action-construction.mjs",
     "verify:paper-diagrams": "node scripts/verify-paper-diagrams.mjs",
     "verify:paper-gaps": "node scripts/verify-paper-gaps.mjs",
+    "verify:research-ir": "node scripts/verify-research-ir.mjs",
     "demo:action-construction": "node scripts/demo-action-construction.mjs",
     "demo:action-construction:html": "node scripts/make-action-construction-demo-html.mjs",
     "extract:actions": "node scripts/extract-actions.mjs",

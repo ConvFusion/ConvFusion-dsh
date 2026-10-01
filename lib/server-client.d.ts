@@ -28,6 +28,7 @@
  * 401 换 Key、403 找管理员、429 等一会儿、网络错误重试。把它们一律压成
  * "登录失败"会让人无从下手，所以每个错误都带一个 `code`，由界面翻成中文动作。
  */
+import type { StudentSyncCheck } from './research/sync-watermarks.js';
 /** 服务器 API 前缀（`ConvFusion-server/app/core/config.py` 的 `API_PREFIX`）。 */
 export declare const SERVER_API_PREFIX = "/api/v1";
 /** 单次请求超时（毫秒）。服务器不可达时必须**很快**给出可显示的失败。 */
@@ -509,7 +510,8 @@ export declare function fetchProjectFiles(base: string, apiKey: string, projectI
  * （用户 2026-09 报的「一直读取中」）；而且整包驻留内存随工作区规模膨胀。
  *
  * @param sink 写盘目标（宿主侧是 {@link openDownloadPart} 的 `.part` 文件）
- * @returns `received` 实际字节数、`filename` 服务器给的文件名、`fileCount` 服务器声明的条目数
+ * @returns `received` 实际字节数、`filename` 服务器给的文件名、`fileCount` 服务器声明的条目数、
+ *   `sourceUpdatedAt` 这一版的**水位**（`X-Source-Updated-At`，老服务器为 `null`）
  */
 export declare function fetchProjectArchive(base: string, apiKey: string, projectId: string, sink: {
     write(chunk: Uint8Array): void;
@@ -519,6 +521,7 @@ export declare function fetchProjectArchive(base: string, apiKey: string, projec
     received: number;
     filename: string | null;
     fileCount: number | null;
+    sourceUpdatedAt: string | null;
 }>;
 /**
  * 下载一个文件的**原始字节**（不是 JSON，所以不能走 `requestJson`）。
@@ -664,6 +667,30 @@ export interface MentorshipProposal {
      * `DISTINCT relative_path` 计数（一次修订不是一份意见）。
      */
     reviewFiles?: number | null;
+    /**
+     * 学生那一侧**当前**的文件数（服务器 `workspace_files`，`DISTINCT relative_path`）。
+     *
+     * 三态（与 `reviewFiles` 同一套纪律）：`undefined` = 响应里没有这个字段（旧服务器）、
+     * `null` = 不可知（无读权限 / 项目软删除）、`n` = 明确知道。
+     * 它与 {@link workspaceUpdatedAt} 合起来是"学生更新了工作区吗"的两条互补判据 ——
+     * **时间戳看不到删除**（删文件不会让 `MAX(created_at)` 前进），文件数看得到。
+     */
+    workspaceFiles?: number | null;
+    /**
+     * 学生那一侧最后一次**上传文件**的时间（服务器 `workspace_updated_at`，ISO-8601）。
+     *
+     * 与 `workspaceFiles` 同三态。只覆盖**文件**：研究状态的变动不进这个时间戳
+     * （状态自己的信号是 `GET /full` 的 `version` / `content_hash`）。
+     */
+    workspaceUpdatedAt?: string | null;
+    /**
+     * **宿主算好的**判读结果：上一次下载之后学生那一侧动过吗（`null` = 无从判断）。
+     *
+     * 不是服务器字段 —— 宿主拿它与**本地存的水位**（上一次归档响应的
+     * `X-Source-Updated-At` / `X-File-Count`，见 `research/sync-watermarks.ts`）比对后填进来。
+     * 界面**只在导师侧**显示这个提示（学生自己知道自己更新过）。
+     */
+    sync?: StudentSyncCheck | null;
     expiresAt: string;
     createdAt: string;
 }

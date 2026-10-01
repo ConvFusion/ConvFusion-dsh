@@ -1918,6 +1918,22 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     /setDownload\(null\)[\s\S]{0,200}?community\.exchange\.downloadDone/.test(src),
     '下载成功后关闭对话框（回执改到列表顶部那条）',
   )
+  /*
+   * 「学生更新了工作区 → 提示重新下载」（协议 v21）：
+   * 比对在宿主（本地水位 vs 服务器 workspace_*），界面只负责**显示与刷新**。
+   */
+  assert(
+    /community\.exchange\.downloadDone[\s\S]{0,600}?await loadProposals\(\)/.test(src),
+    '下载成功后刷新提案（"学生更新了"的提示当场消失，而不是等下次刷新）',
+  )
+  assert(
+    /!incoming && p\.sync\?\.changed/.test(src),
+    '提示只在**导师侧**显示（学生自己知道他更新过）',
+  )
+  assert(
+    /p\.sync\.reason === 'deleted'/.test(src),
+    '两态文案分开：更新 / 删除（判据不同，说的也该不同）',
+  )
   assert(
     /if \(!res\.ok\)[\s\S]{0,400}?tone: 'error'[\s\S]{0,100}?return/.test(src),
     '下载失败时对话框留着并说明原因',
@@ -2035,6 +2051,9 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     'community.exchange.uploadSummary',
     'community.exchange.uploading',
     'community.exchange.uploadNoChange',
+    // 协议 v21：学生更新工作区的两态提示
+    'community.mentor.studentUpdated',
+    'community.mentor.studentDeleted',
   ]) {
     assert(zhDict.includes(`'${k}'`), `中文字典含 ${k}`)
   }

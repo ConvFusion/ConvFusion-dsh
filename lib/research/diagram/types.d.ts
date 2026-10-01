@@ -28,7 +28,7 @@
  * 刻意**不含** mindmap / timeline / 3D / 艺术插画 / 统计图表：统计图表必须由脚本
  * 直接读结果文件生成（单一事实源），不属于本能力的范围。
  */
-export declare const DIAGRAM_TYPES: readonly ["method-overview", "architecture", "module-structure", "workflow", "system-architecture", "data-flow", "component-relationship"];
+export declare const DIAGRAM_TYPES: readonly ["method-overview", "architecture", "module-structure", "workflow", "system-architecture", "data-flow", "component-relationship", "sequence", "lifecycle"];
 export type DiagramType = (typeof DIAGRAM_TYPES)[number];
 /**
  * Node 的**视觉角色**，不是论文里的具体模块。
@@ -77,6 +77,29 @@ export interface DiagramNode {
     group?: string;
     style?: StyleToken;
     evidence?: DiagramEvidence[];
+    /**
+     * 绑到**论文资产**上的编号，如 `["C1", "E008"]`（claim / evidence）。
+     *
+     * 与 `evidence` 的区别：`evidence` 是"这条信息出自手稿哪一节"的溯源，
+     * `refs` 是"这个图元**承载了哪条论点**"。论文配图的用途是带观点，
+     * 所以图元必须能指向论点本身；渲染为盒子底部的一行小字，并可在
+     * `knownRefs` 提供时校验编号**真的存在**（不存在的引用会报 `UNKNOWN_REF`）。
+     */
+    refs?: string[];
+}
+/**
+ * 卡片：挂在流程图**旁边**的一段文字（论点 / 关键数字 / 条件）。
+ *
+ * 为什么需要它：想在图里多表达一点观点，最省事的做法是**再加一条边或一个节点**，
+ * 于是图越来越密、连线越来越难读。卡片给了第二条路 —— 细节放卡片，图保持干净。
+ * 卡片不参与走线（整块放在流程之外的一栏里），所以不会制造连线问题。
+ */
+export interface DiagramCard {
+    id?: string;
+    title: string;
+    body?: string;
+    /** 同 `DiagramNode.refs`。 */
+    refs?: string[];
 }
 /** 论文里的模块 / 阶段 / 子系统；可嵌套（第一阶段最多两层）。 */
 export interface DiagramGroup {
@@ -85,6 +108,8 @@ export interface DiagramGroup {
     /** 成员 id：node id 或**子 group** id。 */
     children: string[];
     style?: StyleToken;
+    /** 这个模块承载的论文资产编号，渲染时并入容器标签。 */
+    refs?: string[];
 }
 /** 结构关系。 */
 export interface DiagramEdge {
@@ -95,6 +120,8 @@ export interface DiagramEdge {
     type?: DiagramEdgeType;
     label?: string;
     style?: StyleToken;
+    /** 这条关系**在论证里承担什么**（论文资产编号），渲染时并入关系标签。 */
+    refs?: string[];
 }
 /** 独立文字（第一阶段尽量少用；优先 Node/Edge/Group 的 label）。 */
 export interface DiagramLabel {
@@ -151,12 +178,20 @@ export interface DiagramIR {
     nodes: DiagramNode[];
     groups?: DiagramGroup[];
     edges?: DiagramEdge[];
+    /**
+     * 流程之外的**卡片栏**：承载次级论点、关键数字、成立条件。
+     *
+     * 想在图里多表达一点，最省事的做法是再加一条边或一个节点 —— 于是图越来越密、
+     * 连线越来越难读。卡片是第二条路：细节放卡片，流程保持干净。
+     * 卡片整块放在流程之外，不参与走线，所以不会制造连线问题。
+     */
+    cards?: DiagramCard[];
     labels?: DiagramLabel[];
     styles?: DiagramStyleDefaults;
 }
 export type DiagnosticSeverity = 'error' | 'warning';
 /** 诊断码。集中登记，便于 Agent 按 `code` 修复（而不是猜 message 措辞）。 */
-export declare const DIAGNOSTIC_CODES: readonly ["NOT_AN_OBJECT", "MISSING_FIELD", "BAD_FIELD_TYPE", "EMPTY_DIAGRAM", "UNKNOWN_DIAGRAM_TYPE", "UNKNOWN_NODE_TYPE", "UNKNOWN_EDGE_TYPE", "UNKNOWN_STYLE_TOKEN", "DUPLICATE_ID", "INVALID_ID", "MISSING_SOURCE", "MISSING_TARGET", "SELF_EDGE", "UNKNOWN_GROUP_MEMBER", "GROUP_MEMBERSHIP_CONFLICT", "GROUP_CYCLE", "GROUP_NESTING_TOO_DEEP", "NODE_IN_MULTIPLE_GROUPS", "UNKNOWN_LABEL_ANCHOR", "UNKNOWN_LAYOUT_ALGORITHM", "UNKNOWN_LAYOUT_DIRECTION", "UNKNOWN_VERSION", "ISOLATED_NODE", "CYCLE_DETECTED", "UNLAYERABLE_STRUCTURE", "NODE_OVERLAP", "EDGE_CROSSES_NODE", "TEXT_OVERFLOW", "GROUP_OVERLAPS_FOREIGN_NODE", "CANVAS_TOO_SMALL", "LONG_LABEL", "VAGUE_NODE_LABEL", "DUPLICATE_NODE_LABEL", "UNTRACED_NODE"];
+export declare const DIAGNOSTIC_CODES: readonly ["NOT_AN_OBJECT", "MISSING_FIELD", "BAD_FIELD_TYPE", "EMPTY_DIAGRAM", "UNKNOWN_DIAGRAM_TYPE", "UNKNOWN_NODE_TYPE", "UNKNOWN_EDGE_TYPE", "UNKNOWN_STYLE_TOKEN", "DUPLICATE_ID", "INVALID_ID", "MISSING_SOURCE", "MISSING_TARGET", "UNKNOWN_GROUP_MEMBER", "GROUP_MEMBERSHIP_CONFLICT", "GROUP_CYCLE", "GROUP_NESTING_TOO_DEEP", "NODE_IN_MULTIPLE_GROUPS", "UNKNOWN_LABEL_ANCHOR", "UNKNOWN_LAYOUT_ALGORITHM", "UNKNOWN_LAYOUT_DIRECTION", "UNKNOWN_VERSION", "ISOLATED_NODE", "CYCLE_DETECTED", "UNLAYERABLE_STRUCTURE", "NODE_OVERLAP", "EDGE_CROSSES_NODE", "EDGE_ENDPOINT_PILED", "EDGE_CROSSES_CONTAINER", "EDGE_OVERLAP", "UNKNOWN_REF", "BAD_REF_SHAPE", "CARD_EMPTY", "LABEL_OVERLAP", "UNSUPPORTED_IN_MODE", "TEXT_OVERFLOW", "GROUP_OVERLAPS_FOREIGN_NODE", "CANVAS_TOO_SMALL", "LONG_LABEL", "VAGUE_NODE_LABEL", "DUPLICATE_NODE_LABEL", "UNTRACED_NODE"];
 export type DiagnosticCode = (typeof DIAGNOSTIC_CODES)[number];
 export interface Diagnostic {
     code: DiagnosticCode;
@@ -166,6 +201,15 @@ export interface Diagnostic {
     message: string;
     /** 修复方向（可执行的一句话）。 */
     hint?: string;
+    /**
+     * **实测证据**：这条诊断依据的具体数值/位置（如 `"3 edges at (108,102)"`、
+     * `"79.7 units shared with e13"`）。
+     *
+     * 为什么单独一个字段：只说"连线有问题"，调用方只能猜；给出数值它才知道
+     * 严重到什么程度、该改哪里。取自 archify 的 `validate --json` 契约
+     * （stable rule code + exact subject + measured evidence）。
+     */
+    measured?: string;
 }
 export interface ValidationReport {
     valid: boolean;
@@ -173,7 +217,7 @@ export interface ValidationReport {
     warnings: Diagnostic[];
 }
 /** 造一条 error。 */
-export declare function error(code: DiagnosticCode, message: string, element?: string, hint?: string): Diagnostic;
+export declare function error(code: DiagnosticCode, message: string, element?: string, hint?: string, measured?: string): Diagnostic;
 /** 造一条 warning。 */
-export declare function warning(code: DiagnosticCode, message: string, element?: string, hint?: string): Diagnostic;
+export declare function warning(code: DiagnosticCode, message: string, element?: string, hint?: string, measured?: string): Diagnostic;
 //# sourceMappingURL=types.d.ts.map

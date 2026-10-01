@@ -31,6 +31,7 @@
 
 import { defaultServerUrl } from './config.js'
 import { serverAddressKey } from './server-env.js'
+import type { StudentSyncCheck } from './research/sync-watermarks.js'
 
 /** 服务器 API 前缀（`ConvFusion-server/app/core/config.py` 的 `API_PREFIX`）。 */
 export const SERVER_API_PREFIX = '/api/v1'
@@ -1159,6 +1160,8 @@ async function fetchBinary(
   bytes: Uint8Array
   contentDisposition: string | null
   fileCount: number | null
+  /** 归档水位（`X-Source-Updated-At`；不是归档的请求为 `null`）。 */
+  sourceUpdatedAt: string | null
   received: number
 }> {
   const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike | undefined)
@@ -1199,8 +1202,22 @@ async function fetchBinary(
   }
   const contentDisposition = res.headers?.get('content-disposition') ?? null
   const fileCount = asNumberOrNull(res.headers?.get('x-file-count'))
+  /*
+   * 这一版的水位（服务器 `GET /files/archive` 的 `X-Source-Updated-At`）。
+   *
+   * ⚠️ **只信归档自己报的**：下载前后列表里的 `workspace_updated_at` 可能与 ZIP 错位 ——
+   * 取早了多提示一次（能接受），取晚了**会漏文件**（学生在下载途中又传了）。
+   * 老服务器没这个头 → `null` → 调用方不存水位（宁可保持"未知"，不写个错的）。
+   */
+  const sourceUpdatedAt = res.headers?.get('x-source-updated-at') ?? null
   const received = await readBody(res, options, label, controller)
-  return { bytes: received.bytes, contentDisposition, fileCount, received: received.total }
+  return {
+    bytes: received.bytes,
+    contentDisposition,
+    fileCount,
+    sourceUpdatedAt,
+    received: received.total,
+  }
 }
 
 /** `X-File-Count` 这类头：非数字/缺失都当"没给"，不是 0。 */
@@ -1345,7 +1362,8 @@ function filenameFromDisposition(value: string | null): string | null {
  * （用户 2026-09 报的「一直读取中」）；而且整包驻留内存随工作区规模膨胀。
  *
  * @param sink 写盘目标（宿主侧是 {@link openDownloadPart} 的 `.part` 文件）
- * @returns `received` 实际字节数、`filename` 服务器给的文件名、`fileCount` 服务器声明的条目数
+ * @returns `received` 实际字节数、`filename` 服务器给的文件名、`fileCount` 服务器声明的条目数、
+ *   `sourceUpdatedAt` 这一版的**水位**（`X-Source-Updated-At`，老服务器为 `null`）
  */
 export async function fetchProjectArchive(
   base: string,
@@ -1353,18 +1371,23 @@ export async function fetchProjectArchive(
   projectId: string,
   sink: { write(chunk: Uint8Array): void },
   options: BinaryStreamOptions & { source?: FileSource } = {},
-): Promise<{ received: number; filename: string | null; fileCount: number | null }> {
+): Promise<{
+  received: number
+  filename: string | null
+  fileCount: number | null
+  sourceUpdatedAt: string | null
+}> {
   const key = requireKey(apiKey)
   const id = (projectId ?? '').trim()
   if (!id) throw new ServerError('bad-request', '缺少 projectId。')
-  const { contentDisposition, fileCount, received } = await fetchBinary(
+  const { contentDisposition, fileCount, sourceUpdatedAt, received } = await fetchBinary(
     base,
     `/projects/${encodeURIComponent(id)}/files/archive${sourceQuery(options.source)}`,
     key,
     { ...options, onChunk: (chunk) => sink.write(chunk) },
     '下载工作区快照',
   )
-  return { received, filename: filenameFromDisposition(contentDisposition), fileCount }
+  return { received, filename: filenameFromDisposition(contentDisposition), fileCount, sourceUpdatedAt }
 }
 
 /**
@@ -1805,6 +1828,30 @@ export interface MentorshipProposal {
    * `DISTINCT relative_path` 计数（一次修订不是一份意见）。
    */
   reviewFiles?: number | null
+  /**
+   * 学生那一侧**当前**的文件数（服务器 `workspace_files`，`DISTINCT relative_path`）。
+   *
+   * 三态（与 `reviewFiles` 同一套纪律）：`undefined` = 响应里没有这个字段（旧服务器）、
+   * `null` = 不可知（无读权限 / 项目软删除）、`n` = 明确知道。
+   * 它与 {@link workspaceUpdatedAt} 合起来是"学生更新了工作区吗"的两条互补判据 ——
+   * **时间戳看不到删除**（删文件不会让 `MAX(created_at)` 前进），文件数看得到。
+   */
+  workspaceFiles?: number | null
+  /**
+   * 学生那一侧最后一次**上传文件**的时间（服务器 `workspace_updated_at`，ISO-8601）。
+   *
+   * 与 `workspaceFiles` 同三态。只覆盖**文件**：研究状态的变动不进这个时间戳
+   * （状态自己的信号是 `GET /full` 的 `version` / `content_hash`）。
+   */
+  workspaceUpdatedAt?: string | null
+  /**
+   * **宿主算好的**判读结果：上一次下载之后学生那一侧动过吗（`null` = 无从判断）。
+   *
+   * 不是服务器字段 —— 宿主拿它与**本地存的水位**（上一次归档响应的
+   * `X-Source-Updated-At` / `X-File-Count`，见 `research/sync-watermarks.ts`）比对后填进来。
+   * 界面**只在导师侧**显示这个提示（学生自己知道自己更新过）。
+   */
+  sync?: StudentSyncCheck | null
   expiresAt: string
   createdAt: string
 }
@@ -1897,15 +1944,26 @@ function parseSuccessCondition(raw: unknown): { type: string; description: strin
 }
 
 /**
- * `review_files` 的**三态**解析 —— 不许把"没有这个字段"读成"有 0 份"。
+ * **计数类三态**解析（`review_files` / `workspace_files` 共用）——
+ * 不许把"没有这个字段"读成"有 0 个"。
  *
  * `asNumber` 那一类容错读取在这里是**有害**的：它会把缺失与 0 合成同一个值，
  * 而这两件事在界面上是两个结论（"服务器说没有" vs "服务器这一版不会说"）。
  * 所以这里只认可显式给出的整数或显式 `null`，其余一律退成 `undefined`（未知）。
+ *
+ * 三态的**处分**也不同：`null` = 服务器说不知道（不必再去问）；
+ * `undefined` = 服务器这一版还不会说（宿主退回旧路径，或当作"无从判断"）。
  */
-function parseReviewFiles(raw: unknown): number | null | undefined {
+function parseTriCount(raw: unknown): number | null | undefined {
   if (raw === null) return null
   if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return Math.trunc(raw)
+  return undefined
+}
+
+/** **时间戳类三态**解析（`workspace_updated_at`）：显式 null → 未知；ISO 字符串 → 原样。 */
+function parseTriIso(raw: unknown): string | null | undefined {
+  if (raw === null) return null
+  if (typeof raw === 'string' && raw.trim()) return raw.trim()
   return undefined
 }
 
@@ -1928,7 +1986,9 @@ function parseProposal(raw: unknown): MentorshipProposal {
     successPaymentAmount: asNumber(b.success_payment_amount),
     successCondition: parseSuccessCondition(b.success_condition),
     status: (asString(b.status) || 'PROPOSED') as ProposalStatus,
-    reviewFiles: parseReviewFiles(b.review_files),
+    reviewFiles: parseTriCount(b.review_files),
+    workspaceFiles: parseTriCount(b.workspace_files),
+    workspaceUpdatedAt: parseTriIso(b.workspace_updated_at),
     expiresAt: asString(b.expires_at),
     createdAt: asString(b.created_at),
   }

@@ -21,6 +21,7 @@
  * | `research_state_read` | 读取当前研究状态 | 只读 |
  * | `research_state_propose` | **提出**状态更新 | **只提案，绝不自动应用**（§20 / §21） |
  * | `research_project` | 查询/更新研究主题 | 主题**必须**带理由与依据；初始输入永久保留，只动 frontmatter |
+ * | `research_ir` | Typed Research IR：提案/校验/增量变更/状态推进 | 三层验证不过不落盘；**不写** `research-state.md`；历史不删除 |
  *
  * ## 不允许出现的工具（重要的"没有"）
  *
@@ -155,6 +156,29 @@ import {
   writeDiagramSvg,
 } from './diagram/index.js'
 import { listTopicChanges, loadProjectFile, updateProjectTopic } from './project.js'
+import {
+  DECISION_TYPES,
+  EVIDENCE_REQUIREMENT_TYPES,
+  IR_SCHEMA_VERSION,
+  applyDelta,
+  applyTransition,
+  evidenceCoverage,
+  formatReport,
+  isIRWriteError,
+  listIRRevisions,
+  listIRs,
+  listStates,
+  normalizeIR,
+  parseIR,
+  readIR,
+  readIRRevision,
+  readTrace,
+  saveIR,
+  summarizeDelta,
+  validateTransition,
+  type IRDelta,
+  type TransitionInput,
+} from './ir/index.js'
 
 /** 工具名（`research_` 命名空间，与 Skill/Plan 资产一致）。 */
 export const PROJECT_TOOL = 'research_project'
@@ -170,6 +194,7 @@ export const PAPER_DOWNLOAD_TOOL = 'research_paper_download'
 export const PAPER_LATEX_TOOL = 'research_paper_latex'
 export const ACTION_CONSTRUCTION_TOOL = 'research_action_construction'
 export const DIAGRAM_TOOL = 'research_diagram'
+export const IR_TOOL = 'research_ir'
 
 /** 把错误对象转成工具返回值（不抛异常，让模型看到原因并纠正）。 */
 function fail(error: string, extra: Record<string, unknown> = {}): Record<string, JsonValue> {
@@ -1852,7 +1877,7 @@ export function defineResearchTools(
       '- `validate`: run validation only (no writes) on `ir`, or on the stored IR when `ir` is omitted.\n' +
       '- `read`: return the stored IR for an incremental edit (modify it, then `render` again).\n' +
       '- `list`: list the diagram artifacts already in the paper\'s `figures/` directory.\n' +
-      'IR shape: {version, type, title?, canvas?, layout?:{direction,algorithm}, nodes[], groups[], edges[], labels?}.\n' +
+      'IR shape: {version, type, title?, canvas?, layout?:{direction,algorithm}, nodes[], groups[], edges[], cards?, labels?}.\n' +
       `- type: ${DIAGRAM_TYPES.join(' | ')}\n` +
       `- node.type: ${NODE_TYPES.join(' | ')} (role in the figure, never a method-specific name)\n` +
       `- edge.type: ${EDGE_TYPES.join(' | ')}\n` +
@@ -1861,6 +1886,19 @@ export function defineResearchTools(
       'content-heavy diagram so its text is still legible after the figure is scaled into a column; ' +
       'leave it out for short figures, where the default reads better.\n' +
       `- style tokens (nodes/groups/edges only reference these): ${STYLE_TOKENS.join(' | ')}\n` +
+      '- sequence mode: `nodes[]` are PARTICIPANTS (declaration order = left-to-right columns) and `edges[]`\n' +
+      '  are MESSAGES (declaration order = time, top to bottom). A self-message draws as a return loop.\n' +
+      '  Groups have no meaning here; declaring them warns (`UNSUPPORTED_IN_MODE`) and ignores them.\n' +
+      '- lifecycle mode: states + transitions. Self-transitions are supported (drawn as a loop), an `input`\n' +
+      '  node gets an initial-state marker, an `output` node a final-state ring, and cycles are expected\n' +
+      '  (no `CYCLE_DETECTED` noise).\n' +
+      '- refs (optional, on a node/group/edge/card): the paper assets this element CARRIES, e.g. `["C1","E008"]`.\n' +
+      '  A figure exists to carry the paper\'s argument, so a box should say which claim it supports; refs render\n' +
+      '  as a small line at the bottom of the box. Ids are checked against the workspace — a ref that is not a\n' +
+      '  recorded claim/evidence is an error (`UNKNOWN_REF`), because a dead citation on a figure is worse than none.\n' +
+      '- cards (optional, top level): [{"title","body?","refs?"}] rendered in a panel OUTSIDE the flow.\n' +
+      '  Use a card for a secondary point, a key number or a condition, instead of adding another edge: a denser\n' +
+      '  graph is harder to read, and every extra edge is another chance for a bad route.\n' +
       'No x/y coordinates: layout is the renderer\'s job. An edge may target a group id, which ' +
       'draws the arrow to the group border. Within-layer order follows declaration order, so ' +
       'reordering the `nodes` array is how you move a box.',
@@ -2037,7 +2075,18 @@ export function defineResearchTools(
           }
         }
 
-        const options = { showDescriptions: a.show_descriptions === true }
+        /**
+         * `knownRefs`：把工作区里**真实存在**的 claim / evidence 编号交给校验器，
+         * 这样图上印的 `[C3]` 如果是个不存在的编号，会直接报 `UNKNOWN_REF`。
+         *
+         * 为什么在这里读、而不是内核里去读：内核是纯函数（同输入同输出、可测），
+         * "编号存不存在"属于研究记录的事实，只有工具层知道去哪儿读。
+         */
+        const knownRefs = new Set<string>([
+          ...listClaims(ws).map((c) => c.id),
+          ...listEvidence(ws).map((e) => e.id),
+        ])
+        const options = { showDescriptions: a.show_descriptions === true, knownRefs }
 
         if (action === 'validate') {
           const inspection = inspectDiagram(raw, options)
@@ -2596,6 +2645,319 @@ export function defineResearchTools(
     },
   })
 
+  /* ── Research IR Kernel（v0.5.6，dev-notes/v0.5.6-ResearchIR.md）────── */
+  const irTool = defineTool({
+    name: IR_TOOL,
+    description:
+      'Work with the Research IR — the typed, machine-facing representation that sits between ' +
+      'research decisions and execution (IR Kernel). Markdown stays the user interface; the IR is ' +
+      'what the kernel validates and constrains.\n' +
+      'An IR holds: research identity, question, hypotheses, a *typed* decision (closed set: ' +
+      DECISION_TYPES.join(' | ') +
+      '), the plan (execution projection) and evidence requirements, plus provenance.\n' +
+      'Actions:\n' +
+      '- `propose`: submit an IR proposal. It passes three validation layers (structural R0xx, ' +
+      'scientific-structure R1xx, transition R2xx) and is saved as `IR###` only when valid. ' +
+      'Invalid proposals return structured errors, each with a `repair` hint — fix and re-propose.\n' +
+      '- `validate`: validate without saving (the repair loop).\n' +
+      '- `delta`: apply an incremental change to an existing IR ({change, target, operations[], ' +
+      'reason?}); a new revision is recorded and the old one archived — never overwritten.\n' +
+      '- `transition`: execution → evidence → state: record which evidence satisfies which ' +
+      'requirements (`satisfies`), which plan steps completed (`completed`), claim adjudications ' +
+      '(`claims`). Illegal transitions are refused (claim supported without evidence, requirement ' +
+      'satisfied by unknown evidence, completed step without artifact, stale revision).\n' +
+      '- `coverage`: required evidence vs produced evidence (computable, not vibes).\n' +
+      '- `trace`: the decision trace — state chain S### with parent links, IR revisions, evidence.\n' +
+      '- `show` / `list`: read one IR (optionally an archived revision) / list IRs.\n' +
+      'What this tool deliberately does NOT do: it never edits `research-state.md` (the ' +
+      'user-controlled state keeps its propose/accept gate) and it never deletes history.',
+    parameters: {
+      action: {
+        type: 'string',
+        description: 'One of: propose | validate | delta | transition | coverage | trace | show | list.',
+        enum: ['propose', 'validate', 'delta', 'transition', 'coverage', 'trace', 'show', 'list'],
+      },
+      ir: {
+        type: 'object',
+        additionalProperties: true,
+        description:
+          'For `propose`/`validate`: the IR proposal — {research:{key,title}, question:{statement}, ' +
+          'hypotheses:[{id,statement,observableOutcome?}], decision:{type,objective,alternatives,' +
+          'selected,rationale,baseline?,metric?,...}, plan:{steps:[{id,action,artifact?}]}, ' +
+          'evidenceRequirements:[{id,type,description,step?}]}. Types: ' +
+          EVIDENCE_REQUIREMENT_TYPES.join(' | ') +
+          '. ids are assigned automatically when omitted.',
+      },
+      id: { type: 'string', description: 'IR id (`IR001`) for `delta` / `transition` / `coverage` / `show`.' },
+      delta: {
+        type: 'object',
+        additionalProperties: true,
+        description:
+          'For `delta`: {change: string, target: string, operations: [{add|update|remove, items?}], ' +
+          'reason?}. Targets: research · question · decision · plan · hypotheses · ' +
+          'evidence_requirements · plan.steps, or an element like `hypotheses.H01`. Object targets: ' +
+          'add=new fields, update=existing fields, remove=fields. Array targets use `items` to ' +
+          'append/merge elements and `remove` for ids.',
+      },
+      revision: {
+        type: 'number',
+        description:
+          'For `transition`: the IR revision you are working from (mismatch → refused, so a stale ' +
+          'update cannot overwrite newer work). For `show`: which archived revision to read.',
+      },
+      decision_id: {
+        type: 'string',
+        description: 'For `propose`/`transition`: the decision id (`D001`) this belongs to (provenance).',
+      },
+      satisfies: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true },
+        description: 'For `transition`: [{requirement: "ER01", evidence: "E001"}] — evidence satisfying IR requirements.',
+      },
+      completed: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true },
+        description: 'For `transition`: [{step: "step-1", artifact: "experiments/x/results/main.json"}] — completed plan steps.',
+      },
+      claims: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true },
+        description: 'For `transition`: [{claim: "C001", status: "supported"}] — claim adjudications (needs backing evidence).',
+      },
+      skill: { type: 'string', description: 'For `propose`: provenance — the skill that produced this IR.' },
+      state_id: { type: 'string', description: 'For `propose`: provenance — the state it was decided under (`S001`).' },
+      agent: { type: 'string', description: 'For `transition`: who executed it (recorded in provenance).' },
+      note: { type: 'string', description: 'Free-form note kept in provenance / trace.' },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => {
+        const v = value as {
+          ok?: boolean
+          error?: string
+          action?: string
+          note?: string
+          ir?: { id?: string; revision?: number; decision?: { type?: string } }
+          validation?: { status?: string; errors?: Array<{ code: string; field: string; message: string; repair: string }>; warnings?: unknown[] }
+          errors?: Array<{ code: string; field: string; message: string; repair: string }>
+          applied?: string[]
+          coverage?: number
+          required?: number
+          satisfied?: number
+          count?: number
+          state?: { stateId?: string }
+          trace?: { stateId?: string; summary?: string }
+        }
+        if (v.ok === false) {
+          const errs = v.errors ?? v.validation?.errors ?? []
+          const lines = errs.map((e) => `[${e.code}] ${e.field}: ${e.message} → repair: ${e.repair}`)
+          return [
+            {
+              type: 'text' as const,
+              text: `${v.action ?? 'research_ir'} failed${v.error ? `: ${v.error}` : ''}\n${lines.join('\n')}${v.note ? `\n${v.note}` : ''}`,
+            },
+          ]
+        }
+        if (v.action === 'coverage') {
+          return [
+            {
+              type: 'text' as const,
+              text: `Evidence coverage: ${v.satisfied ?? 0}/${v.required ?? 0} requirements satisfied (${v.coverage ?? 0}).`,
+            },
+          ]
+        }
+        if (v.action === 'trace') return [{ type: 'text' as const, text: `Decision trace: ${v.count ?? 0} transition(s).` }]
+        if (v.action === 'validate') {
+          const st = v.validation?.status ?? '?'
+          const warn = v.validation?.warnings?.length ?? 0
+          return [{ type: 'text' as const, text: `Validation: ${st}${warn ? ` · ${warn} warning(s)` : ''}` }]
+        }
+        if (v.action === 'transition') {
+          return [
+            {
+              type: 'text' as const,
+              text: `State ${v.state?.stateId ?? ''} recorded · ${v.trace?.summary ?? ''}`,
+            },
+          ]
+        }
+        if (v.ir?.id) {
+          return [
+            {
+              type: 'text' as const,
+              text: `IR ${v.ir.id} r${v.ir.revision ?? 1} (${v.ir.decision?.type ?? '—'}) · validation ${v.validation?.status ?? 'valid'}${v.applied?.length ? ` · applied: ${v.applied.join(', ')}` : ''}${v.note ? `\n${v.note}` : ''}`,
+            },
+          ]
+        }
+        return [{ type: 'text' as const, text: `${v.count ?? 0} IR(s).` }]
+      },
+    },
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const ws = resolveWorkspace(exec?.agent)
+      const a = (args ?? {}) as Record<string, unknown>
+      const action = String(a.action ?? '')
+
+      try {
+        if (action === 'list') {
+          const items = listIRs(ws)
+          return losslessJson({ ok: true, action, count: items.length, irs: items }) as unknown as Record<string, JsonValue>
+        }
+
+        if (action === 'show') {
+          const id = String(a.id ?? '').trim().toUpperCase()
+          const rev = typeof a.revision === 'number' ? a.revision : undefined
+          const current = readIR(ws, id)
+          // 当前修订就在 IR###.json；只有历史修订才去 .history/ 找
+          const ir =
+            rev === undefined ? current : current?.revision === rev ? current : readIRRevision(ws, id, rev ?? 0)
+          if (!ir) return fail(`找不到 IR \`${id}\`${rev !== undefined ? ` 修订 r${rev}` : ''}。`, { action })
+          return losslessJson({
+            ok: true,
+            action,
+            ir,
+            revisions: listIRRevisions(ws, id),
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        if (action === 'validate') {
+          if (!a.ir) return fail('`validate` 需要 `ir` 对象。', { action })
+          const { ir, report } = parseIR(a.ir)
+          return losslessJson({
+            ok: report.status === 'valid',
+            action,
+            validation: report,
+            ir,
+            ...(report.status === 'failed' ? { note: 'Not saved — fix the errors (each carries a `repair` hint) and re-submit.' } : {}),
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        if (action === 'propose') {
+          if (!a.ir) return fail('`propose` 需要 `ir` 对象。', { action })
+          const base = normalizeIR(a.ir)
+          const candidate = {
+            ...base,
+            id: '',
+            revision: 1,
+            provenance: {
+              createdAt: new Date().toISOString(),
+              ...(a.skill ? { skill: String(a.skill) } : {}),
+              ...(a.decision_id ? { decisionId: String(a.decision_id) } : {}),
+              ...(a.state_id ? { stateId: String(a.state_id) } : {}),
+              source: 'proposal' as const,
+              ...(a.note ? { note: String(a.note) } : {}),
+            },
+          }
+          const { report } = parseIR(candidate)
+          if (report.status === 'failed') {
+            return losslessJson({
+              ok: false,
+              action,
+              validation: report,
+              note: 'IR not saved — fix the errors (each carries a `repair` hint) and re-propose.',
+            }) as unknown as Record<string, JsonValue>
+          }
+          const saved = saveIR(ws, candidate)
+          if (isIRWriteError(saved)) return fail(saved.error, { action })
+          return losslessJson({
+            ok: true,
+            action,
+            ir: { id: saved.id, revision: saved.revision, decision: { type: saved.decision.type } },
+            validation: report,
+            note: 'IR recorded. Intent is now typed — execution follows the plan projection.',
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        if (action === 'delta') {
+          const id = String(a.id ?? '').trim().toUpperCase()
+          const current = readIR(ws, id)
+          if (!current) return fail(`找不到 IR \`${id}\`。`, { action })
+          if (!a.delta) return fail('`delta` 需要 `delta` 对象。', { action })
+          const delta = a.delta as IRDelta
+          const res = applyDelta(current, delta)
+          if (!res.ok) {
+            return losslessJson({
+              ok: false,
+              action,
+              errors: res.errors,
+              note: 'Delta rejected — IR unchanged. Fix the errors and retry.',
+            }) as unknown as Record<string, JsonValue>
+          }
+          const saved = saveIR(ws, res.ir)
+          if (isIRWriteError(saved)) return fail(saved.error, { action })
+          return losslessJson({
+            ok: true,
+            action,
+            ir: { id: saved.id, revision: saved.revision, decision: { type: saved.decision.type } },
+            applied: res.applied,
+            delta: summarizeDelta(delta),
+            validation: res.report,
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        if (action === 'transition') {
+          const id = String(a.id ?? '').trim().toUpperCase()
+          const input: TransitionInput = {
+            irId: id,
+            ...(typeof a.revision === 'number' ? { revision: a.revision } : {}),
+            ...(a.decision_id ? { decisionId: String(a.decision_id) } : {}),
+            ...(Array.isArray(a.satisfies) ? { satisfies: a.satisfies as TransitionInput['satisfies'] } : {}),
+            ...(Array.isArray(a.completed) ? { completed: a.completed as TransitionInput['completed'] } : {}),
+            ...(Array.isArray(a.claims) ? { claims: a.claims as TransitionInput['claims'] } : {}),
+            ...(a.agent ? { agent: String(a.agent) } : {}),
+            ...(a.note ? { note: String(a.note) } : {}),
+          }
+          const res = applyTransition(ws, input)
+          if (!res.ok) {
+            return losslessJson({
+              ok: false,
+              action,
+              errors: res.errors,
+              note: 'Transition refused — state unchanged. Fix the errors and retry.',
+            }) as unknown as Record<string, JsonValue>
+          }
+          return losslessJson({
+            ok: true,
+            action,
+            state: { stateId: res.state.stateId, parentStateId: res.state.parentStateId ?? null },
+            ir: { id: res.ir.id, revision: res.ir.revision, decision: { type: res.ir.decision.type } },
+            trace: res.trace,
+          }) as unknown as Record<string, JsonValue>
+        }
+
+        if (action === 'coverage') {
+          const id = String(a.id ?? '').trim().toUpperCase()
+          const cov = evidenceCoverage(ws, id)
+          if (!cov.ok) return fail(cov.error, { action })
+          return losslessJson({ action, ...cov }) as unknown as Record<string, JsonValue>
+        }
+
+        if (action === 'trace') {
+          const trace = readTrace(ws)
+          const states = listStates(ws).map((s) => ({
+            stateId: s.stateId,
+            parentStateId: s.parentStateId ?? null,
+            irId: s.irId,
+            irRevision: s.irRevision,
+            decisionId: s.decisionId ?? null,
+            evidence: s.evidence,
+          }))
+          return losslessJson({ ok: true, action, count: trace.length, states, trace }) as unknown as Record<string, JsonValue>
+        }
+
+        return fail(`Unknown action "${action}".`, {
+          action,
+          allowed: ['propose', 'validate', 'delta', 'transition', 'coverage', 'trace', 'show', 'list'],
+        })
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e), { action })
+      }
+    },
+    presentCall: (args) => {
+      const a = args as { action?: string }
+      return { card: 'generic', title: `Research IR · ${a.action ?? 'show'}`, kind: 'execute' }
+    },
+  })
+
   return [
     projectTool as ToolDefinition,
     evidenceTool as ToolDefinition,
@@ -2610,6 +2972,7 @@ export function defineResearchTools(
     paperLatexTool as ToolDefinition,
     actionConstructionTool as ToolDefinition,
     diagramTool as ToolDefinition,
+    irTool as ToolDefinition,
   ]
 }
 

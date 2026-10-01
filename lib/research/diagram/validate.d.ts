@@ -14,7 +14,7 @@
  * ⚠️ 这里只**报告**，不修。修由 Agent 做（结构性修改），因为"自动修"意味着系统替
  * Agent 改论文内容 —— 那是 dev-note §33 禁止的越界。
  */
-import { type LayoutResult, type RenderOptions } from './layout.js';
+import type { LayoutResult, RenderOptions } from './layout.js';
 import { type NormalizedDiagram } from './normalize.js';
 import { type ValidationReport } from './types.js';
 export interface DiagramInspection {

@@ -29,6 +29,8 @@ export * from './types.js'
 export { normalizeIr, leafNodesOf, groupsDeepestFirst, groupsShallowestFirst } from './normalize.js'
 export type { NormalizedDiagram, NormalizedNode, NormalizedGroup, NormalizedEdge, NormalizeResult } from './normalize.js'
 export { layoutDiagram, clipAtRect } from './layout.js'
+export { layoutSequence } from './sequence.js'
+export { layoutAny, usesSequenceEngine } from './engine.js'
 export type { LayoutResult, PlacedNode, PlacedGroup, RoutedEdge, PlacedLabel, RenderOptions } from './layout.js'
 export { inspectDiagram, inspectNormalized } from './validate.js'
 export type { DiagramInspection } from './validate.js'
@@ -36,6 +38,7 @@ export { renderSvg } from './render.js'
 export type { RenderResult } from './render.js'
 export { FONT_FAMILY, FONT_SIZE, LAYOUT, NODE_STYLE_BY_TYPE, NODE_STYLES, edgeStyle, nodeStyle } from './styles.js'
 export {
+  collinearOverlap,
   measureText,
   polylineIntersectsRect,
   r3,
@@ -155,6 +158,7 @@ export function toCanonicalIr(diagram: NormalizedDiagram): DiagramIR {
       ...(n.group !== undefined ? { group: n.group } : {}),
       ...(n.style !== NODE_STYLE_BY_TYPE[n.type] ? { style: n.style } : {}),
       ...(n.evidence.length > 0 ? { evidence: n.evidence } : {}),
+      ...(n.refs !== undefined && n.refs.length > 0 ? { refs: [...n.refs] } : {}),
     })),
   }
   if (diagram.groups.length > 0) {
@@ -163,6 +167,7 @@ export function toCanonicalIr(diagram: NormalizedDiagram): DiagramIR {
       label: g.label,
       children: [...g.members],
       ...(g.style !== 'container' ? { style: g.style } : {}),
+      ...(g.refs !== undefined && g.refs.length > 0 ? { refs: [...g.refs] } : {}),
     }))
   }
   if (diagram.edges.length > 0) {
@@ -172,6 +177,15 @@ export function toCanonicalIr(diagram: NormalizedDiagram): DiagramIR {
       target: e.target,
       type: e.type,
       ...(e.label !== undefined ? { label: e.label } : {}),
+      ...(e.refs !== undefined && e.refs.length > 0 ? { refs: [...e.refs] } : {}),
+    }))
+  }
+  if (diagram.cards.length > 0) {
+    ir.cards = diagram.cards.map((c) => ({
+      id: c.id,
+      title: c.title,
+      ...(c.body !== undefined ? { body: c.body } : {}),
+      ...(c.refs !== undefined && c.refs.length > 0 ? { refs: [...c.refs] } : {}),
     }))
   }
   if (diagram.labels.length > 0) {

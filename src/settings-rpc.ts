@@ -87,6 +87,8 @@ import {
 import { HOST_PROTOCOL, HOST_PROTOCOL_FIELD } from './protocol.js'
 import type { SkillCustomizationStore } from './research/skill-customization.js'
 import type { PaidBriefStore } from './research/paid-briefs.js'
+import { checkStudentChange } from './research/sync-watermarks.js'
+import type { SyncWatermarkStore } from './research/sync-watermarks.js'
 import {
   CUSTOMIZABLE_SECTIONS,
   clearAllCustomizations,
@@ -681,6 +683,14 @@ export interface SettingsRpcDeps {
    * 行为保守但不静默扣费）。
    */
   paidBriefStore?: PaidBriefStore
+  /**
+   * 上一次**归档响应**的水位（`sync-watermarks.ts`）：`X-Source-Updated-At` / `X-File-Count`。
+   *
+   * `mentor/download` 写、`mentor/list` 读 —— 两者一比就是"学生更新了工作区吗"。
+   * 缺省 = 没有记忆：`mentor/list` 对所有行都回 `sync: null`（界面不提示，
+   * **不**编造"有更新"）。
+   */
+  syncStore?: SyncWatermarkStore
   /** 服务器请求超时（测试用小值）。 */
   serverTimeoutMs?: number
   /**
@@ -833,7 +843,7 @@ async function fetchLatestRelease(
  * | `work/brief` | `{ projectId, intentKey }` | 一项研究工作的简报（非 owner 花 1 Token） |
  * | `mentor/fee-suggestion` | `{}` | 默认指导费用建议（100 / 20 / 80，导师可改） |
  * | `mentor/propose` | `{ projectId, guidanceScope, totalFee, depositAmount, successPaymentAmount, successCondition }` | 发起指导提案（免费；同一项目同一导师只能有一个生效提案） |
- * | `mentor/list` | `{}` | 我涉及的指导提案（我发起的 + 我收到的）；ACCEPTED 的带 `reviewFiles`（导师已上传几份指导结果，由服务器 `review_files` 给出；旧服务器才退回逐项目读 `/files`） |
+ * | `mentor/list` | `{}` | 我涉及的指导提案（我发起的 + 我收到的）；ACCEPTED 的带 `reviewFiles`（导师已上传几份，服务器 `review_files`）与 **`sync`**（"学生更新了工作区吗"：与本地水位比对的结果，`null` = 无从判断） |
  * | `mentor/accept` | `{ proposalId, intentKey }` | 接受指导（研究者）→ **冻结押金**、建合同与关系 |
  * | `mentor/reject` | `{ proposalId }` | 拒绝指导（研究者） |
  * | `mentor/downloadState` | `{ projectId, prefix, source? }` | 【下载】对话框一次拿齐：预检（文件数 / 体积 / 预计文件名）+ **全部**可选工作区（`source` 选哪一侧，省略 = `owner`） |
@@ -2081,7 +2091,27 @@ export function createSettingsRpcHandler(
                 }
               }),
             )
-            return { ok: true, value: { proposals: withReview } }
+            /*
+             * "学生更新了工作区吗"（导师要提示**重新下载**）—— 判据在宿主：
+             * 服务器给 `workspace_updated_at` / `workspace_files`，与**本地存的水位**
+             * （上一次归档响应的 `X-Source-Updated-At` / `X-File-Count`）比对。
+             *
+             * ⚠️ 三态纪律：从没下载过 / 旧服务器没这些字段 / 服务器说不可知 → `null`，
+             * 界面**不提示**（查不到 ≠ 没更新，也不编造"有更新"）。
+             *
+             * 角色**不在这里判**：宿主不知道"我"是谁，为此多发一次 `fetchAccount`
+             * 正是 review_files 那轮刚消掉的 1+N 里的那个 N。所以 ACCEPTED 行全算好，
+             * 由界面按角色（导师侧 `!incoming`）决定显不显示 —— 学生自己知道他更新过。
+             */
+            const withSync = withReview.map((p) => {
+              if (p.status !== 'ACCEPTED') return p
+              const watermark = deps.syncStore?.get(base, p.projectId)
+              return {
+                ...p,
+                sync: checkStudentChange(watermark, p.workspaceUpdatedAt, p.workspaceFiles),
+              }
+            })
+            return { ok: true, value: { proposals: withSync } }
           } catch (e) {
             return serverFail(e)
           }
@@ -2451,7 +2481,7 @@ export function createSettingsRpcHandler(
           downloadProgress = progress
           try {
             const base = resolveServerUrl(config, env()).url
-            const { received, filename, fileCount } = await fetchProjectArchive(
+            const { received, filename, fileCount, sourceUpdatedAt } = await fetchProjectArchive(
               base,
               apiKey,
               projectId,
@@ -2466,6 +2496,22 @@ export function createSettingsRpcHandler(
             )
             // 校验（ZIP 完整性 + 条目数）在这一步：不合格会抛错，半成品同时被清掉
             const saved = part.commit(filename ?? fallback, { fileCount })
+            /*
+             * 存下**这一版**的水位 —— 两个值都取自**本次归档响应**本身，
+             * 不取下载前后列表里的：下载前的可能比 ZIP 旧（多提示一次、不漏），
+             * 下载后再拉的可能比 ZIP 新（**会漏文件**，学生在下载途中又传了一个）。
+             *
+             * 只存 `owner` 侧（列表的 `workspace_*` 就是 owner 侧；mentor 侧是学生的动作，
+             * 没有可比的列表字段）。老服务器没有 `X-Source-Updated-At` → 不写：
+             * 保持"未知"比写一个错的水位强。
+             */
+            if (source === 'owner' && sourceUpdatedAt) {
+              deps.syncStore?.set(base, projectId, {
+                updatedAt: sourceUpdatedAt,
+                fileCount,
+                downloadedAt: new Date().toISOString(),
+              })
+            }
             progress.received = received
             progress.running = false
             return { ok: true, value: { dir: target.path, ...saved } }

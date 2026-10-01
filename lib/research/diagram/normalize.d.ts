@@ -21,6 +21,8 @@ export interface NormalizedNode {
     /** 声明顺序 —— 层内排序的依据（Agent 用它控制同层次序，不需要坐标）。 */
     order: number;
     evidence: DiagramEvidence[];
+    /** 这个节点承载的论文资产编号（渲染为盒底一行小字）。 */
+    refs?: string[];
 }
 export interface NormalizedGroup {
     id: string;
@@ -33,6 +35,8 @@ export interface NormalizedGroup {
     parent?: string;
     /** 1 = 顶层；2 = 嵌套一层。 */
     depth: number;
+    /** 这个模块承载的论文资产编号。 */
+    refs?: string[];
 }
 export interface NormalizedEdge {
     id: string;
@@ -40,6 +44,15 @@ export interface NormalizedEdge {
     target: string;
     type: DiagramEdgeType;
     label?: string;
+    refs?: string[];
+    order: number;
+}
+/** 流程之外的卡片（承载次级论点 / 关键数字）。 */
+export interface NormalizedCard {
+    id: string;
+    title: string;
+    body?: string;
+    refs?: string[];
     order: number;
 }
 export interface NormalizedLabel {
@@ -67,6 +80,7 @@ export interface NormalizedDiagram {
     nodes: NormalizedNode[];
     groups: NormalizedGroup[];
     edges: NormalizedEdge[];
+    cards: NormalizedCard[];
     labels: NormalizedLabel[];
     styleDefaults: DiagramStyleDefaults;
 }

@@ -64,7 +64,7 @@ const KEY = 'cf_live_0123456789abcdef0123456789abcdef0123456789abcdef0123456789a
 const PROJECT_ID = '6a628fdc-86e4-4935-b619-8b479b0e6218'
 
 /** 建一个 host 夹具：假 fetch 按脚本作答。 */
-function makeHost({ handler, listLocalWorkspaces }) {
+function makeHost({ handler, listLocalWorkspaces, syncStore }) {
   let config = CFG.resolveConfig({
     customizationFile: 'mentor.json',
     customizationDir: mkdtempSync(join(tmpdir(), 'cf-cust-')),
@@ -121,6 +121,7 @@ function makeHost({ handler, listLocalWorkspaces }) {
     fetchImpl,
     serverTimeoutMs: 5000,
     ...(listLocalWorkspaces ? { listLocalWorkspaces } : {}),
+    ...(syncStore ? { syncStore } : {}),
   })
   return { handler: handlerFn, calls }
 }
@@ -668,7 +669,15 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
   /** 目录里**下载留下的东西**（`.zip` 与 `.part`）—— 工作区自己的 `workspace/` 不算。 */
   const leftovers = (dir) => readdirSync(dir).filter((n) => n.endsWith('.zip') || n.endsWith('.part'))
   /** 一次归档响应：默认用**正文流**（走真实的边收边写路径）。 */
-  const archiveReply = ({ zip = ZIP, entries = 3, chunks, headers = true, chunkDelayMs } = {}) => ({
+  const archiveReply = ({
+    zip = ZIP,
+    entries = 3,
+    chunks,
+    headers = true,
+    chunkDelayMs,
+    /** 归档水位头（`X-Source-Updated-At`；不给 = 老服务器没这个头）。 */
+    watermark = null,
+  } = {}) => ({
     status: 200,
     bytes: zip,
     ...(chunks ? { chunks, chunkDelayMs } : { chunks: [zip] }),
@@ -678,6 +687,7 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
         if (!headers) return null
         if (key === 'content-disposition') return DISPOSITION
         if (key === 'x-file-count') return String(entries)
+        if (key === 'x-source-updated-at') return watermark
         return null
       },
     },
@@ -1064,6 +1074,205 @@ section('[8] 下载正文的卡死超时（stall）')
   )
   part.abort()
   assertEq(readdirSync(dir), [], '卡死后宿主清掉 .part（不留半成品）')
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * [9] "学生更新了工作区" —— 水位**存自归档响应**，与列表比对后提示重新下载
+ *
+ * 判据两条互补、缺一不可（服务器 API.md §13 与 CHANGELOG）：
+ *     workspace_updated_at > 水位   → 学生传了新文件 → 提示重新下载
+ *     workspace_files      ≠ 文件数  → 学生删了文件   → 提示重新下载
+ * 时间戳看不到删除（删文件不让 MAX(created_at) 前进），文件数看不到改写
+ * （改同一路径只动时间戳）—— 所以两个水位都要存，且**都取自那一次归档响应**
+ * （下载前后列表里的值与 ZIP 会错位：取早了多提示一次、取晚了**会漏文件**）。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[9] 学生更新工作区的检测（水位 → 比对 → 提示）')
+{
+  const SW = await import(lib('research/sync-watermarks.js'))
+  const WM_AT = '2026-10-01T10:00:00+08:00'
+  const wm = { updatedAt: WM_AT, fileCount: 3, downloadedAt: '2026-10-01T11:00:00.000Z' }
+
+  /* ── ① 判据函数：两条互补判据 + 三态（纯函数先钉住）───────────────────── */
+  assertEq(SW.checkStudentChange(undefined, WM_AT, 3), null, '从没下载过 → 无从判断（不编造"有更新"）')
+  assertEq(SW.checkStudentChange(wm, undefined, undefined), null, '旧服务器不给列表字段 → 无从判断')
+  assertEq(SW.checkStudentChange(wm, null, null), null, '服务器说不可知 → 无从判断（查不到 ≠ 没有）')
+  assertEq(
+    SW.checkStudentChange(wm, '2026-10-02T09:00:00+08:00', 3),
+    { changed: true, reason: 'uploaded' },
+    '时间戳变大、文件数没动 → 学生改了同一路径',
+  )
+  assertEq(
+    SW.checkStudentChange(wm, WM_AT, 2),
+    { changed: true, reason: 'deleted' },
+    '文件数变了、时间戳没动 → 学生删了文件',
+  )
+  assertEq(
+    SW.checkStudentChange(wm, '2026-10-02T09:00:00+08:00', 4),
+    { changed: true, reason: 'uploaded' },
+    '两个都变 → 报 uploaded（有证据就不放过）',
+  )
+  assertEq(
+    SW.checkStudentChange(wm, WM_AT, 3),
+    { changed: false, reason: null },
+    '两个判据都可判且都说没动 → 没动',
+  )
+  assertEq(
+    SW.checkStudentChange(wm, WM_AT, null),
+    null,
+    '只有一半判据可用 → 无从判断（查不全 ≠ 没变，会漏掉看不见的删除）',
+  )
+  assertEq(
+    SW.checkStudentChange({ ...wm, fileCount: null }, WM_AT, 3),
+    null,
+    '老服务器没存文件数 → 只有时间戳不够断言"没动"',
+  )
+  assertEq(SW.checkStudentChange(wm, 'not-a-date', 3), null, '时间戳解析不了 → 该分支未知')
+  // 同一台服务器给的 ISO：等值比较（毫秒级时差不算"更新"）
+  assertEq(
+    SW.checkStudentChange(wm, '2026-10-01T02:00:00Z', 3),
+    { changed: false, reason: null },
+    '同一时刻的不同写法（+08:00 vs Z）不算更新',
+  )
+
+  /* ── ② 水位存自**归档响应**：owner 侧存；mentor 侧 / 老服务器不存 ──────── */
+  const zipBytes = (entries = 3) => {
+    const local = Buffer.concat([Buffer.from('PK\u0003\u0004'), Buffer.alloc(26, 7)])
+    const eocd = Buffer.alloc(22)
+    eocd.writeUInt32LE(0x06054b50, 0)
+    eocd.writeUInt16LE(entries, 8)
+    eocd.writeUInt16LE(entries, 10)
+    return Buffer.concat([local, eocd])
+  }
+  const archiveHeaders = (watermark, entries = 3) => ({
+    get: (k) => {
+      const key = String(k).toLowerCase()
+      if (key === 'content-disposition') return "attachment; filename*=UTF-8''w.zip"
+      if (key === 'x-file-count') return String(entries)
+      if (key === 'x-source-updated-at') return watermark
+      return null
+    },
+  })
+  const dlDir = join(work, 'wm-dl')
+  const store = SW.createMemorySyncWatermarkStore()
+  const dlHost = (watermark, entries = 3) =>
+    makeHost({
+      syncStore: store,
+      handler: async (call) => {
+        // ⚠️ 先判归档，且用 **includes**：`/files/archive?source=mentor` 结尾不是
+        // `/files/archive`，而 `/files/archive` 又 includes('/files') —— 两种顺序/匹配
+        // 写法都会把 ZIP 请求当成文件列表回 JSON（实测：下载拿到 0 字节 → 假失败）
+        if (call.url.includes('/files/archive')) {
+          return {
+            status: 200,
+            bytes: zipBytes(entries),
+            chunks: [zipBytes(entries)],
+            headers: archiveHeaders(watermark, entries),
+          }
+        }
+        return { status: 200, body: { items: [], total_bytes: 0 } }
+      },
+      listLocalWorkspaces: async () => ({
+        available: true,
+        items: [{ id: 'ws-0', title: 'w', path: dlDir, updatedAt: '' }],
+      }),
+    })
+
+  // owner 侧（导师下学生的工作区）→ 存水位，且两个值都来自这次归档响应
+  const got = await dlHost(WM_AT, 3).handler('mentor/download', {
+    projectId: PROJECT_ID, workspaceId: 'ws-0', prefix: 'x', source: 'owner',
+  })
+  assertEq(got.ok, true, `owner 侧下载成功${got.ok ? '' : `（${got.error?.code}）`}`)
+  const saved = Object.values(store.all())[0]
+  assertEq(Object.keys(store.all()).length, 1, '只记一个项目的水位')
+  assertEq(saved?.updatedAt, WM_AT, '水位取自 X-Source-Updated-At（不是下载前后列表里的值）')
+  assertEq(saved?.fileCount, 3, '文件数取自 X-File-Count（默认快照口径 = workspace_files）')
+  assert(Boolean(saved?.downloadedAt), '落盘时刻也有（诊断用，不参与比较）')
+
+  // 老服务器没有水位头 → **不写**：保持"未知"比写个错的水位强
+  const noHeader = await dlHost(null, 5).handler('mentor/download', {
+    projectId: PROJECT_ID, workspaceId: 'ws-0', prefix: 'x', source: 'owner',
+  })
+  assertEq(noHeader.ok, true, '老服务器（无水位头）下载照常成功')
+  assertEq(store.all()[Object.keys(store.all())[0]]?.updatedAt, WM_AT, '没有水位头就不动旧水位（不覆盖成错值）')
+
+  // mentor 侧（学生取导师那一份）→ 不存：列表的 workspace_* 是 owner 侧，存了也没得比
+  const mentorDl = await dlHost('2026-10-05T00:00:00Z', 2).handler('mentor/download', {
+    projectId: PROJECT_ID, workspaceId: 'ws-0', prefix: 'x', source: 'mentor',
+  })
+  assertEq(mentorDl.ok, true, 'mentor 侧下载成功')
+  assertEq(store.all()[Object.keys(store.all())[0]]?.updatedAt, WM_AT, 'mentor 侧的水位不写进 owner 记录（不可比）')
+
+  /* ── ③ mentor/list 把比对结果给出来（三态 + 只挂在 ACCEPTED 上）────────── */
+  const baseProposal = (over = {}) => ({
+    id: 'p-wm',
+    mentor_id: 'm-1',
+    researcher_id: 'r-1',
+    project_id: PROJECT_ID,
+    guidance_scope: '-',
+    total_fee: 100,
+    deposit_amount: 20,
+    success_payment_amount: 80,
+    success_condition: { type: 'MUTUAL_COMPLETION' },
+    status: 'ACCEPTED',
+    review_files: 1,
+    expires_at: '2026-12-01T00:00:00Z',
+    created_at: '2026-09-19T00:00:00Z',
+    ...over,
+  })
+  const listHost = (body, withStore = true) =>
+    makeHost({
+      ...(withStore ? { syncStore: store } : {}),
+      handler: async (call) =>
+        call.url.endsWith('/mentorship-proposals')
+          ? { status: 200, body }
+          : { status: 500, body: {} },
+    })
+  const list = async (body, withStore = true) =>
+    (await listHost(body, withStore).handler('mentor/list', {})).value?.proposals ?? []
+
+  // (a) 学生传了新文件（时间戳变大）→ uploaded，且三态字段照直读
+  const [a] = await list([baseProposal({
+    workspace_updated_at: '2026-10-02T09:00:00+08:00',
+    workspace_files: 4,
+  })])
+  assertEq(a.sync, { changed: true, reason: 'uploaded' }, '(a) 水位之后学生又传了 → 提示重新下载')
+  assertEq(a.workspaceFiles, 4, '(a) workspace_files 解析成数字')
+  assertEq(a.workspaceUpdatedAt, '2026-10-02T09:00:00+08:00', '(a) workspace_updated_at 原样读出')
+
+  // (b) 时间戳没动、文件数变了 → deleted（删除不会让时间戳前进）
+  const [b] = await list([baseProposal({ workspace_updated_at: WM_AT, workspace_files: 2 })])
+  assertEq(b.sync, { changed: true, reason: 'deleted' }, '(b) 文件数变小 → 学生删了文件')
+
+  // (c) 两个判据都说没动 → changed: false（界面不提示）
+  const [c] = await list([baseProposal({ workspace_updated_at: WM_AT, workspace_files: 3 })])
+  assertEq(c.sync, { changed: false, reason: null }, '(c) 没动 → 不提示')
+
+  // (d) 服务器说不可知（项目不可读 / 软删除）→ null，且**不**退化成 0 / epoch
+  const [d] = await list([baseProposal({ workspace_updated_at: null, workspace_files: null })])
+  assertEq(d.sync, null, '(d) 不可知 → 无从判断（三态不破）')
+  assertEq(d.workspaceFiles, null, '(d) 显式 null 原样保留（不是 0）')
+
+  // (e) 旧服务器：响应里没有这两个字段 → undefined / sync: null
+  const [e] = await list([baseProposal()])
+  assertEq(e.workspaceFiles, undefined, '(e) 旧服务器：字段缺失 → undefined（不是 0）')
+  assertEq(e.workspaceUpdatedAt, undefined, '(e) 时间戳同样缺失')
+  assertEq(e.sync, null, '(e) 没有字段就无从判断 → null（界面不提示）')
+
+  // (f) **这个项目从没下载过**（store 里只有上面那个项目的水位）→ null：不编造"有更新"
+  const [f2] = await list([baseProposal({
+    project_id: 'never-downloaded',
+    workspace_updated_at: '2026-10-02T09:00:00+08:00',
+    workspace_files: 9,
+  })])
+  assertEq(f2.sync, null, '(f) 没有水位 → null（不是 true，也不是 false）')
+
+  // (g) 宿主没装 syncStore（精简环境）→ 一律 null，不报错
+  const [g] = await list([baseProposal({ workspace_updated_at: '2026-10-02T09:00:00+08:00', workspace_files: 9 })], false)
+  assertEq(g.sync, null, '(g) 没有水位存储 → null（提示能力缺席 ≠ 报错）')
+
+  // (h) 只有 ACCEPTED 才挂 sync：PROPOSED 行不谈"学生更新"
+  const [h] = await list([baseProposal({ status: 'PROPOSED' })])
+  assertEq('sync' in h, false, '(h) 非 ACCEPTED 行不带 sync 字段')
 }
 
 rmSync(work, { recursive: true, force: true })

@@ -222,6 +222,9 @@ export const zh = {
   'community.mentor.progress.studentGot': '导师已指导',
   'community.mentor.progress.mentorWaiting': '待我指导',
   'community.mentor.progress.mentorDone': '我已指导',
+  // 「学生更新了 → 重新下载」的两态（判据：时间戳变大 / 文件数变，见 sync-watermarks.ts）
+  'community.mentor.studentUpdated': '学生更新了文件，需要重新下载',
+  'community.mentor.studentDeleted': '学生删除了文件，需要重新下载',
   'community.mentor.status.PROPOSED': '等待响应',
   'community.mentor.status.ACCEPTED': '已接受',
   'community.mentor.status.REJECTED': '已拒绝',

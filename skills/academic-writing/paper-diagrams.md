@@ -158,7 +158,20 @@ Rules the schema enforces:
 - `edges[].type` ∈ data-flow / control-flow / dependency / association / residual / feedback.
 - `edges[].style`, node `style` and group `style` may only name built-in style tokens (default, module, input, output, data, model, process, decision, loss, container, highlight). There is no free-form styling; that is what keeps figures in one paper visually consistent.
 - No `x` / `y` fields. Layout is the renderer's job.
+- `refs` (optional, on a node / group / edge / card) binds the element to the **paper assets it carries**, e.g. `["C1","E008"]`. Ids are checked against the research record: a ref that is not a recorded claim or evidence is an error (`UNKNOWN_REF`).
+- `cards` (optional, top level): `[{"title","body?","refs?"}]`, rendered in a panel **outside** the flow.
 - `show_descriptions` (top level) and `layout.layer_gap` (12–120) are the two **content-and-density** switches; see below.
+
+### A figure carries an argument, not a shape
+
+The reason a paper has a figure at all is that some part of the argument is easier to see than to read. A picture of the pipeline — boxes and labelled arrows — carries the *process*, which the prose already states. What it can carry and the prose usually cannot is **which part of the argument each element is doing work for**.
+
+`refs` is that link. Put on the box that implements a mechanism the claim it supports, on the edge that measures something the claim about measuring it, and on a `card` the supporting detail. The validator checks the ids against the workspace, so a figure cannot cite a claim that does not exist — a dead citation on a figure is worse than no citation, because the reader goes looking for it.
+
+Two habits follow from this:
+
+- **If you are about to add an edge or a node to say one more thing, write a `card` instead.** A card sits outside the flow, cannot create a routing problem, and does not make the graph denser. The flow should show the process; the cards should carry the points. Moving per-node `description` text into cards is usually the right trade: it keeps the boxes small enough to stay legible when the figure is scaled into a column.
+- **Read the diagnostics as a work list, not as errors.** `UNKNOWN_REF` means the figure claims something the record does not have. `LABEL_OVERLAP` means a label could not be placed anywhere without covering a box — the label is too long for the space, so shorten it or give the layout more room. `EDGE_OVERLAP` means two edges are drawn on top of each other and read as one line.
 
 ### When a figure has to carry a lot
 
@@ -167,6 +180,21 @@ Rules the schema enforces:
 Descriptions are **off by default**, because a figure whose every node also carries a paragraph is a figure nobody reads. Turn them on (`show_descriptions: true` in the IR) when the boxes genuinely have two levels. The switch lives in the IR, so re-rendering the same IR gives the same figure.
 
 A faithful figure of a long process gets tall. The drawn width is fixed by the column, so a tall figure is scaled down and its text shrinks with it — the height budget **is** a text-legibility budget. `layout.layer_gap` is the lever: the default 64 units suits short figures, while a figure of eight or more layers usually needs 16–32 to stay above 7 pt once scaled into a column. Lower the gap rather than dropping content, and check `effectiveNodePt` after `export`.
+
+### The diagram type is a contract, not a label
+
+Three contracts are implemented, and they are not interchangeable — picking the wrong one produces a figure that merely *looks* like the thing you meant:
+
+| type | what it draws | use when the point is |
+|---|---|---|
+| `method-overview`, `architecture`, `module-structure`, `system-architecture`, `data-flow`, `component-relationship`, `workflow` | the layered flow: nodes in layers, routed edges | **what depends on what** |
+| `sequence` | participants as columns, messages top-to-bottom in **declaration order** | **who says what to whom, in what order** |
+| `lifecycle` | states and transitions, self-transitions drawn as loops, initial/final markers from the `input` / `output` node roles | **which states the system moves between, and on what event** |
+
+Two consequences that surprise people:
+
+- **In a layered figure, "step 3" does not exist.** Layer ordering encodes dependency, and the renderer is free to place independent nodes in any order within a layer. If the order *is* the message, use `sequence` — its vertical axis is declaration order and nothing else.
+- **Self-transitions are legal.** A state that re-enters itself is a loop, not an error; and a cycle in a `lifecycle` figure is the normal case, so the renderer does not warn about it there.
 
 Two things the renderer does not do, so do not assume them:
 

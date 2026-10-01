@@ -197,6 +197,8 @@ export declare const en: {
     readonly 'community.mentor.progress.studentGot': "Mentor has given guidance";
     readonly 'community.mentor.progress.mentorWaiting': "Guidance pending";
     readonly 'community.mentor.progress.mentorDone': "Guidance delivered";
+    readonly 'community.mentor.studentUpdated': "Student updated files — re-download.";
+    readonly 'community.mentor.studentDeleted': "Student deleted files — re-download.";
     readonly 'community.mentor.status.PROPOSED': "Awaiting response";
     readonly 'community.mentor.status.ACCEPTED': "Accepted";
     readonly 'community.mentor.status.REJECTED': "Declined";

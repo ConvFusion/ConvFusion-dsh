@@ -52,6 +52,8 @@ export interface NormalizedNode {
   /** 声明顺序 —— 层内排序的依据（Agent 用它控制同层次序，不需要坐标）。 */
   order: number
   evidence: DiagramEvidence[]
+  /** 这个节点承载的论文资产编号（渲染为盒底一行小字）。 */
+  refs?: string[]
 }
 
 export interface NormalizedGroup {
@@ -65,6 +67,8 @@ export interface NormalizedGroup {
   parent?: string
   /** 1 = 顶层；2 = 嵌套一层。 */
   depth: number
+  /** 这个模块承载的论文资产编号。 */
+  refs?: string[]
 }
 
 export interface NormalizedEdge {
@@ -73,7 +77,18 @@ export interface NormalizedEdge {
   target: string
   type: DiagramEdgeType
   label?: string
+  refs?: string[]
   order: number
+}
+
+/** 流程之外的卡片（承载次级论点 / 关键数字）。 */
+export interface NormalizedCard {
+  id: string
+  title: string
+  body?: string
+  refs?: string[]
+  order: number
+  /** 正文按卡片宽度折行后的行（在 layout 里算，这里只存原文）。 */
 }
 
 export interface NormalizedLabel {
@@ -100,6 +115,7 @@ export interface NormalizedDiagram {
   nodes: NormalizedNode[]
   groups: NormalizedGroup[]
   edges: NormalizedEdge[]
+  cards: NormalizedCard[]
   labels: NormalizedLabel[]
   styleDefaults: DiagramStyleDefaults
 }
@@ -268,12 +284,15 @@ export function normalizeIr(raw: unknown): NormalizeResult {
     const group = asString(rawNode.group)
     const description = asString(rawNode.description)
     const evidence = normalizeEvidence(rawNode.evidence)
+    const nodeRefs = normalizeRefs(rawNode.refs, id)
+    diagnostics.push(...nodeRefs.diags)
 
     nodes.push({
       id,
       type: nodeType,
       label,
       ...(description !== undefined ? { description } : {}),
+      ...(nodeRefs.refs !== undefined ? { refs: nodeRefs.refs } : {}),
       style: style ?? styleDefaults.node ?? NODE_STYLE_BY_TYPE[nodeType],
       ...(group !== undefined ? { group } : {}),
       order: nodes.length,
@@ -329,7 +348,17 @@ export function normalizeIr(raw: unknown): NormalizeResult {
           }
           members.push(cid)
         }
-        const g: NormalizedGroup = { id, label, style: style ?? styleDefaults.group ?? 'container', members, order: groups.length, depth: 1 }
+        const groupRefs = normalizeRefs(rawGroup.refs, id)
+        diagnostics.push(...groupRefs.diags)
+        const g: NormalizedGroup = {
+          id,
+          label,
+          style: style ?? styleDefaults.group ?? 'container',
+          members,
+          order: groups.length,
+          depth: 1,
+          ...(groupRefs.refs !== undefined ? { refs: groupRefs.refs } : {}),
+        }
         groups.push(g)
         groupById.set(id, g)
       }
@@ -455,10 +484,6 @@ export function normalizeIr(raw: unknown): NormalizeResult {
       diagnostics.push(error('MISSING_TARGET', `Edge "${id}" points at unknown id "${target}".`, id, `Declare a node or group with id "${target}", or fix the typo.`))
       continue
     }
-    if (source === target) {
-      diagnostics.push(error('SELF_EDGE', `Edge "${id}" connects "${source}" to itself.`, id, 'Self-loops are not supported; model the recurrence as a feedback edge between two distinct nodes.'))
-      continue
-    }
     let edgeType = pickEnum(rawEdge.type, EDGE_TYPES)
     if (rawEdge.type !== undefined && edgeType === undefined) {
       diagnostics.push(
@@ -471,13 +496,44 @@ export function normalizeIr(raw: unknown): NormalizeResult {
       )
     }
     const label = asString(rawEdge.label)
+    const edgeRefs = normalizeRefs(rawEdge.refs, id)
+    diagnostics.push(...edgeRefs.diags)
     edges.push({
       id,
       source,
       target,
       type: edgeType ?? styleDefaults.edge ?? 'data-flow',
       ...(label !== undefined ? { label } : {}),
+      ...(edgeRefs.refs !== undefined ? { refs: edgeRefs.refs } : {}),
       order: edges.length,
+    })
+  }
+
+  /* ── cards：流程之外的卡片栏 ──────────────────────────────────────── */
+  const cards: NormalizedCard[] = []
+  const rawCards = Array.isArray(src.cards) ? src.cards : []
+  for (let i = 0; i < rawCards.length; i++) {
+    const rawCard = rawCards[i]
+    if (!isObject(rawCard)) {
+      diagnostics.push(error('BAD_FIELD_TYPE', `cards[${i}] is not an object.`, undefined, 'Each card is {"title","body?"}.'))
+      continue
+    }
+    const title = asString(rawCard.title)?.trim() ?? ''
+    const body = asString(rawCard.body)?.trim()
+    if (!title && (body === undefined || body === '')) {
+      diagnostics.push(
+        error('CARD_EMPTY', `cards[${i}] has neither title nor body, so it would render as an empty box.`, undefined, 'Give the card a title, a body, or delete it.'),
+      )
+      continue
+    }
+    const cardRefs = normalizeRefs(rawCard.refs, title || `cards[${i}]`)
+    diagnostics.push(...cardRefs.diags)
+    cards.push({
+      id: asString(rawCard.id) ?? `card${cards.length + 1}`,
+      title: title || (body as string),
+      ...(title && body !== undefined ? { body } : {}),
+      ...(cardRefs.refs !== undefined ? { refs: cardRefs.refs } : {}),
+      order: cards.length,
     })
   }
 
@@ -536,12 +592,49 @@ export function normalizeIr(raw: unknown): NormalizeResult {
       nodes,
       groups,
       edges,
+      cards,
       labels,
       styleDefaults,
     },
     diagnostics,
     fatal: false,
   }
+}
+
+/**
+ * `refs` 解析：一串论文资产编号（`C1` / `C003` / `E008`）。
+ *
+ * 形状不对时**报 warning 而不是静默丢弃**：`refs` 是图上要印出来的东西，
+ * 悄悄丢掉一个引用等于图上少了一个论点标注，而作者以为它印上去了。
+ */
+const REF_PATTERN = /^[A-Za-z]{1,3}\d{1,4}$/
+function normalizeRefs(value: unknown, owner: string): { refs?: string[]; diags: Diagnostic[] } {
+  const diags: Diagnostic[] = []
+  if (value === undefined) return { diags }
+  if (!Array.isArray(value)) {
+    diags.push(error('BAD_FIELD_TYPE', `\`refs\` of "${owner}" is not an array.`, owner, 'Use an array of ids, e.g. ["C1","E008"].'))
+    return { diags }
+  }
+  const out: string[] = []
+  for (const item of value) {
+    const id = asString(item)
+    if (id === undefined || !id.trim()) {
+      diags.push(error('BAD_FIELD_TYPE', `\`refs\` of "${owner}" has a non-string entry.`, owner, 'Every ref is a string id.'))
+      continue
+    }
+    if (!REF_PATTERN.test(id)) {
+      diags.push(
+        warning(
+          'BAD_REF_SHAPE',
+          `Ref "${id}" on "${owner}" does not look like a claim / evidence id.`,
+          owner,
+          'Ids look like "C1" (claim) or "E008" (evidence); a ref that never matches an id is silently dead.',
+        ),
+      )
+    }
+    if (!out.includes(id)) out.push(id)
+  }
+  return out.length > 0 ? { refs: out, diags } : { diags }
 }
 
 /** `evidence` 字段宽松解析：字符串或 `{source, note}` 都接受。 */

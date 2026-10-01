@@ -310,3 +310,31 @@ export function simplifyPolyline(points: readonly Point[]): Point[] {
   }
   return out
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 共线重叠（走线审计用）
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * 两条**轴对齐**线段的共线重叠长度（不共线或不相交时返回 0）。
+ *
+ * 用途：两条边在同一条通道上叠着走时，读者看到的是一根线 —— 这是"连线错误"里
+ * 最容易被当成画错的一类，必须在 diagnostics 里点名并给出**实测长度**。
+ */
+export function collinearOverlap(a1: Point, a2: Point, b1: Point, b2: Point): number {
+  const aHoriz = Math.abs(a1.y - a2.y) < 0.5
+  const aVert = Math.abs(a1.x - a2.x) < 0.5
+  const bHoriz = Math.abs(b1.y - b2.y) < 0.5
+  const bVert = Math.abs(b1.x - b2.x) < 0.5
+  if (aHoriz && bHoriz && Math.abs(a1.y - b1.y) < 0.5) {
+    const lo = Math.max(Math.min(a1.x, a2.x), Math.min(b1.x, b2.x))
+    const hi = Math.min(Math.max(a1.x, a2.x), Math.max(b1.x, b2.x))
+    return Math.max(0, hi - lo)
+  }
+  if (aVert && bVert && Math.abs(a1.x - b1.x) < 0.5) {
+    const lo = Math.max(Math.min(a1.y, a2.y), Math.min(b1.y, b2.y))
+    const hi = Math.min(Math.max(a1.y, a2.y), Math.max(b1.y, b2.y))
+    return Math.max(0, hi - lo)
+  }
+  return 0
+}

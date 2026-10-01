@@ -197,6 +197,8 @@ export declare const zh: {
     'community.mentor.progress.studentGot': string;
     'community.mentor.progress.mentorWaiting': string;
     'community.mentor.progress.mentorDone': string;
+    'community.mentor.studentUpdated': string;
+    'community.mentor.studentDeleted': string;
     'community.mentor.status.PROPOSED': string;
     'community.mentor.status.ACCEPTED': string;
     'community.mentor.status.REJECTED': string;

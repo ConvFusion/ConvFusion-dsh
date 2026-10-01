@@ -74,6 +74,7 @@
  */
 import type { SkillCustomizationStore } from './research/skill-customization.js';
 import type { PaidBriefStore } from './research/paid-briefs.js';
+import type { SyncWatermarkStore } from './research/sync-watermarks.js';
 import type { Config } from './config.js';
 import { type SecretField } from './config.js';
 import { type FetchLike, type TokenBalance } from './server-client.js';
@@ -441,6 +442,14 @@ export interface SettingsRpcDeps {
      * 行为保守但不静默扣费）。
      */
     paidBriefStore?: PaidBriefStore;
+    /**
+     * 上一次**归档响应**的水位（`sync-watermarks.ts`）：`X-Source-Updated-At` / `X-File-Count`。
+     *
+     * `mentor/download` 写、`mentor/list` 读 —— 两者一比就是"学生更新了工作区吗"。
+     * 缺省 = 没有记忆：`mentor/list` 对所有行都回 `sync: null`（界面不提示，
+     * **不**编造"有更新"）。
+     */
+    syncStore?: SyncWatermarkStore;
     /** 服务器请求超时（测试用小值）。 */
     serverTimeoutMs?: number;
     /**
@@ -506,7 +515,7 @@ export declare function compareVersions(a: string, b: string): number;
  * | `work/brief` | `{ projectId, intentKey }` | 一项研究工作的简报（非 owner 花 1 Token） |
  * | `mentor/fee-suggestion` | `{}` | 默认指导费用建议（100 / 20 / 80，导师可改） |
  * | `mentor/propose` | `{ projectId, guidanceScope, totalFee, depositAmount, successPaymentAmount, successCondition }` | 发起指导提案（免费；同一项目同一导师只能有一个生效提案） |
- * | `mentor/list` | `{}` | 我涉及的指导提案（我发起的 + 我收到的）；ACCEPTED 的带 `reviewFiles`（导师已上传几份指导结果，由服务器 `review_files` 给出；旧服务器才退回逐项目读 `/files`） |
+ * | `mentor/list` | `{}` | 我涉及的指导提案（我发起的 + 我收到的）；ACCEPTED 的带 `reviewFiles`（导师已上传几份，服务器 `review_files`）与 **`sync`**（"学生更新了工作区吗"：与本地水位比对的结果，`null` = 无从判断） |
  * | `mentor/accept` | `{ proposalId, intentKey }` | 接受指导（研究者）→ **冻结押金**、建合同与关系 |
  * | `mentor/reject` | `{ proposalId }` | 拒绝指导（研究者） |
  * | `mentor/downloadState` | `{ projectId, prefix, source? }` | 【下载】对话框一次拿齐：预检（文件数 / 体积 / 预计文件名）+ **全部**可选工作区（`source` 选哪一侧，省略 = `owner`） |

@@ -1663,6 +1663,20 @@ interface HostProposal {
    * 文件里。宿主在 `mentor/list` 里补齐；`null` = 没查到（未知），不是"没有"。
    */
   reviewFiles?: number | null
+  /**
+   * **宿主算好的**："上一次下载之后，学生那一侧动过吗"。
+   *
+   * 宿主拿服务器的 `workspace_updated_at` / `workspace_files` 与**本地水位**
+   * （上一次归档响应的 `X-Source-Updated-At` / `X-File-Count`）比对得到：
+   *
+   * - `{ changed: true, reason: 'uploaded' | 'deleted' }` —— 学生动过 → 提示重新下载；
+   * - `{ changed: false }` —— 两个判据都说没动；
+   * - `null` —— **无从判断**（从没下载过 / 旧服务器不给字段 / 服务器说不可知）。
+   *
+   * ⚠️ `undefined` = 旧宿主不返回这个字段（协议 <21）→ 界面**不提示**，
+   * 但那不等于"没更新"，所以只能按"拿不到就不提示"处理，不许编成 false。
+   */
+  sync?: { changed: boolean; reason: 'uploaded' | 'deleted' | null } | null
   expiresAt: string
   createdAt: string
 }
@@ -4156,6 +4170,11 @@ export function CommunityTab({
       tone: 'success',
       text: t('community.exchange.downloadDone', { dir: v.dir, name: v.name }),
     })
+    /*
+     * 下载成功的那一刻，宿主已把**这一版的水位**存下 —— 刷新提案让"学生更新了"
+     * 的提示**当场消失**（否则要等下一次刷新才对上，用户会以为提示坏了）。
+     */
+    await loadProposals()
   }
 
   /* ── 列表加载：**只有登录后才联网**；未登录显示示例数据 ─────────────── */
@@ -5411,6 +5430,21 @@ export function CommunityTab({
                         </div>
                         {/* 费用数字（不做解释性描述）—— 名称之下一行 */}
                         <div style={S.hint}>{feeText(p)}</div>
+                        {/*
+                          **导师侧**的"学生更新了"提示（2026-10）。
+                          判据是宿主拿**上一次归档响应的水位**比出来的（见 `sync`）：
+                          时间戳变大 = 传了新文件；文件数变了 = 删了文件（互补，缺一不可）。
+                          只在导师侧显示：学生自己知道他更新过；`!incoming` 就是"我发起的"= 我是导师。
+                        */}
+                        {!incoming && p.sync?.changed ? (
+                          <div style={{ ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' }}>
+                            {t(
+                              p.sync.reason === 'deleted'
+                                ? 'community.mentor.studentDeleted'
+                                : 'community.mentor.studentUpdated',
+                            )}
+                          </div>
+                        ) : null}
                       </div>
                       {/* 右侧：状态 + 操作，整组不许被压缩、不许换行 */}
                       <div

@@ -43,6 +43,14 @@ function assert(cond, label) {
     console.log(`  ✗ FAIL ${label}`)
   }
 }
+function assertEqualish(actual, expect, label) {
+  if (Math.abs(actual - expect) <= 1) passed++
+  else {
+    failed++
+    failures.push(label)
+    console.log(`  ✗ FAIL ${label}\n    actual: ${actual}\n    expect: ~${expect}`)
+  }
+}
 function assertEq(actual, expect, label) {
   if (Object.is(actual, expect)) passed++
   else {
@@ -147,7 +155,9 @@ console.log('\n[1] 技能登记 C08P07')
  * ══════════════════════════════════════════════════════════════════════ */
 console.log('\n[2] Diagram IR 结构')
 {
-  assertEq(D.DIAGRAM_TYPES.length, 7, '7 种图类型（§7）')
+  assertEq(D.DIAGRAM_TYPES.length, 9, '9 种图类型（§7 + sequence/lifecycle）')
+  assert(D.DIAGRAM_TYPES.includes('sequence'), 'sequence 是合法图型')
+  assert(D.DIAGRAM_TYPES.includes('lifecycle'), 'lifecycle 是合法图型')
   assertEq(D.NODE_TYPES.length, 10, '10 种 node 角色（§10）')
   assertEq(D.EDGE_TYPES.length, 6, '6 种 edge 关系（§12）')
   assertEq(D.STYLE_TOKENS.length, 11, '11 个样式 token（§14）')
@@ -412,7 +422,6 @@ const broken = {
     'UNKNOWN_GROUP_MEMBER',
     'MISSING_TARGET',
     'MISSING_SOURCE',
-    'SELF_EDGE',
     'UNKNOWN_LABEL_ANCHOR',
   ]) {
     assert(found.includes(code), `Test 5: 报出 ${code}`)
@@ -804,6 +813,328 @@ console.log('\n[11] PDF 导出')
       rmSync(ws, { recursive: true, force: true })
     }
   }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * [15] 按模式分渲染契约：sequence 走第二套引擎、lifecycle 支持自环与初始终态
+ *
+ * 改动前：7 个类型名共用 1 个分层引擎（`layout.ts` 里根本没有 type 分支），
+ * 自环被 `SELF_EDGE` 直接拒掉 —— 于是**状态机根本画不出来**，时序图只能是流程图的近似。
+ * ══════════════════════════════════════════════════════════════════════ */
+console.log('\n[15] sequence / lifecycle 两套渲染契约')
+
+/* ── (一) 时序图：横轴参与者、纵轴时间顺序 ───────────────────────── */
+{
+  const seq = {
+    version: '1.0', type: 'sequence', title: 'One research transition',
+    layout: { direction: 'LR' },
+    nodes: [
+      { id: 'llm', type: 'model', label: 'LLM' },
+      { id: 'kernel', type: 'module', label: 'Kernel', refs: ['C001'] },
+      { id: 'ir', type: 'data', label: 'Research IR' },
+    ],
+    edges: [
+      { id: 'm1', source: 'llm', target: 'ir', label: 'propose', refs: ['C001'] },
+      { id: 'm2', source: 'llm', target: 'kernel', label: 'validate' },
+      { id: 'm3', source: 'kernel', target: 'llm', type: 'feedback', label: 'reject + receipt' },
+      { id: 'm4', source: 'kernel', target: 'kernel', label: 're-check', type: 'feedback' },
+    ],
+    cards: [{ id: 'k1', title: 'Why per-transition', body: 'Scored on the trace, not only on the final answer.' }],
+  }
+  const b = D.buildDiagram(seq)
+  assertEq(b.report.valid, true, '时序图有效')
+  assertEq((b.layout.lifelines ?? []).length, 3, '每个参与者一条生命线')
+  assertEq((b.layout.messages ?? []).length, 4, '每条边一行消息')
+
+  // 声明顺序 = 时间顺序：y 必须严格递增
+  const ys = (b.layout.messages ?? []).map((m) => m.y)
+  assert(ys.every((y, i) => i === 0 || y > ys[i - 1]), '消息按声明顺序自上而下（y 严格递增）')
+
+  // 参与者是列：x 必须严格递增，且消息是水平线
+  const xs = b.layout.nodes.map((n) => n.rect.x)
+  assert(xs.every((x, i) => i === 0 || x > xs[i - 1]), '参与者按声明顺序自左向右成列')
+  const m2 = b.layout.edges.find((e) => e.id === 'm2')
+  assertEq(m2.points[0].y, m2.points[1].y, '消息是水平箭头（同一 y）')
+
+  // 自消息画成折回环（起点终点同 x，但有 4 个点）
+  const m4 = b.layout.edges.find((e) => e.id === 'm4')
+  assertEq(m4.points.length, 4, '自消息画成折回环（4 点）')
+
+  // 生命线从参与者头下方延伸到消息下方
+  const head = b.layout.nodes[0].rect
+  assert((b.layout.lifelines ?? [])[0].y0 >= head.y + head.h - 1, '生命线起于参与者头之下')
+  assert((b.layout.lifelines ?? [])[0].y1 >= ys[ys.length - 1], '生命线延伸到最后一行的下方')
+
+  // 渲染层：生命线 / 消息标签 / 引用 / 卡片都要在 SVG 里
+  assert(b.svg.includes('cf-lifeline'), 'SVG 画出生命线（虚线）')
+  assert(b.svg.includes('propose [C001]'), '消息把 refs 并入标签')
+  assert(b.svg.includes('cf-card'), '卡片在时序图里同样可用')
+  // 时序图天然"宽而扁"，卡片因此排在**下方一行**（而不是右侧竖栏，那样会把画布撑到
+  // 近千单位宽、缩进后字只有 6pt）。要守的不变量是：卡片在消息之下，且不与任何元素重叠。
+  assert(b.layout.cards[0].rect.y > Math.max(...ys), '卡片排在最后一条消息之下')
+  assert(
+    b.layout.cards.every((c) => b.layout.nodes.every((n) => !D.rectsOverlap(c.rect, n.rect, 0))),
+    '卡片不与参与者重叠',
+  )
+  assert(b.layout.cards.length >= 1 && b.layout.cards[0].rect.w > 0, '卡片有实际尺寸')
+  // groups 在时序图里没有意义 → 明确忽略并说明，而不是静默丢掉
+  const withGroup = D.buildDiagram({ ...seq, groups: [{ id: 'g', label: 'G', children: ['llm', 'ir'] }] })
+  assert(withGroup.report.warnings.some((w) => w.code === 'UNSUPPORTED_IN_MODE'), '时序图里的 groups → UNSUPPORTED_IN_MODE')
+  assertEq(withGroup.svg, b.svg, '被忽略的 groups 不改变图形本身')
+}
+
+/* ── (二) 状态机：自环 + 初始态 + 终态 ──────────────────────────── */
+{
+  const lc = {
+    version: '1.0', type: 'lifecycle', title: 'Research state lifecycle',
+    layout: { direction: 'LR' },
+    nodes: [
+      { id: 'idle', type: 'input', label: 'Idle' },
+      { id: 'proposed', type: 'process', label: 'Proposed' },
+      { id: 'validated', type: 'decision', label: 'Validated' },
+      { id: 'committed', type: 'output', label: 'Committed' },
+    ],
+    edges: [
+      { id: 't1', source: 'idle', target: 'proposed', label: 'decide' },
+      { id: 't2', source: 'proposed', target: 'validated', label: 'check' },
+      { id: 't3', source: 'proposed', target: 'proposed', type: 'feedback', label: 'revise' },
+      { id: 't4', source: 'validated', target: 'committed', label: 'accept' },
+      { id: 't5', source: 'validated', target: 'proposed', type: 'feedback', label: 'reject' },
+    ],
+  }
+  const b = D.buildDiagram(lc)
+  assertEq(b.report.valid, true, '状态机有效')
+  // 自环过去报 SELF_EDGE 直接作废；现在必须画出来
+  assertEq(b.report.errors.some((e) => e.code === 'SELF_EDGE'), false, '自环不再是错误')
+  const loop = b.layout.edges.find((e) => e.id === 't3')
+  assertEq(loop.declaredSource, loop.declaredTarget, '自环两端同一节点')
+  assertEqualish(loop.points.length, 4, '自环画成折回环（4 点）')
+  // 状态机里环是常态，不该报噪声
+  assertEq(b.report.warnings.some((w) => w.code === 'CYCLE_DETECTED'), false, 'lifecycle 模式不报 CYCLE_DETECTED')
+  // 初始态 / 终态标记
+  assert(b.svg.includes('cf-initial-state'), 'input 节点画初始态标记（实心圆 + 箭头）')
+  assert(b.svg.includes('cf-final-state'), 'output 节点画终态环')
+  // 对比：同样的图在 workflow 模式下仍报环（说明抑制只针对 lifecycle）
+  const asFlow = D.buildDiagram({ ...lc, type: 'workflow' })
+  assert(asFlow.report.warnings.some((w) => w.code === 'CYCLE_DETECTED'), 'workflow 模式仍报 CYCLE_DETECTED')
+  // 非状态机模式不画状态机标记
+  assertEq(asFlow.svg.includes('cf-initial-state'), false, 'workflow 模式不画初始态标记')
+  assertEq(asFlow.svg.includes('cf-final-state'), false, 'workflow 模式不画终态环')
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * [14] 图承载论文观点：refs 绑定 + cards 承载次级论点
+ *
+ * 对照 archify 补齐的两件事：图元能指向**论点本身**（claim / evidence 编号），
+ * 以及"想多表达观点时加卡片、不要加边"。
+ * ══════════════════════════════════════════════════════════════════════ */
+console.log('\n[14] refs 绑定论文资产 / cards 承载次级论点')
+{
+  const base = {
+    version: '1.0', type: 'method-overview', layout: { direction: 'LR', algorithm: 'hierarchical' },
+    nodes: [
+      { id: 'a', type: 'input', label: 'Input', refs: ['C1'] },
+      { id: 'b', type: 'module', label: 'Kernel', refs: ['C2', 'E008'] },
+      { id: 'c', type: 'output', label: 'Committed' },
+    ],
+    edges: [
+      { id: 'e1', source: 'a', target: 'b', label: 'proposal', refs: ['C1'] },
+      { id: 'e2', source: 'b', target: 'c', label: 'valid', refs: ['C2'] },
+    ],
+    cards: [
+      { id: 'k1', title: 'What the gate buys', body: 'Unsupported transitions fall while accuracy holds.', refs: ['E008'] },
+      { id: 'k2', title: 'Scope', body: 'Determinism at commitment time, not of reasoning.' },
+    ],
+  }
+  const known = new Set(['C1', 'C2', 'E008'])
+
+  // (a) refs 真的画进 SVG，且不随 show_descriptions 开关消失（它是论点锚点，不是细节）
+  const withD = D.buildDiagram({ ...base, show_descriptions: false }, { knownRefs: known })
+  assert(withD.svg.includes('[C1]'), '节点 refs 渲染成 [C1] 角标')
+  assert(withD.svg.includes('[C2 · E008]'), '多个 refs 用 · 连接')
+  assert(withD.svg.includes('cf-card'), 'cards 渲染为卡片元素')
+  assert(withD.svg.includes('What the gate buys'), '卡片标题进 SVG')
+  assert(withD.layout.cards.length === 2, '两张卡片都排上了')
+  assert(
+    withD.layout.cards.every((card) => card.rect.x > Math.max(...withD.layout.nodes.map((n) => n.rect.x + n.rect.w))),
+    '卡片整体位于**流程之外**（不会与走线互相干扰）',
+  )
+
+  // (b) 未知引用必须被抓住（印一个不存在的编号比不印更糟）
+  const ghost = D.buildDiagram(
+    { ...base, nodes: [...base.nodes, { id: 'd', type: 'data', label: 'Ghost', refs: ['C99'] }] },
+    { knownRefs: known },
+  )
+  assert(ghost.report.errors.some((e) => e.code === 'UNKNOWN_REF' && e.measured?.includes('C99')), '未记录的引用 → UNKNOWN_REF（带 measured）')
+  // 不提供 knownRefs 时只做形状检查，不误报"不存在"
+  const noKnown = D.buildDiagram({ ...base, nodes: [...base.nodes, { id: 'd', type: 'data', label: 'Ghost', refs: ['C99'] }] })
+  assertEq(noKnown.report.errors.some((e) => e.code === 'UNKNOWN_REF'), false, '未提供 knownRefs 时不报 UNKNOWN_REF')
+
+  // (c) 形状不对的 ref 要报，不能静默丢掉（丢掉等于图上少一个论点标注而作者不知道）
+  const badShape = D.inspectDiagram({ ...base, nodes: [{ id: 'x', type: 'data', label: 'X', refs: ['not-an-id'] }] })
+  assert(badShape.report.warnings.some((w) => w.code === 'BAD_REF_SHAPE'), '形状不对的 ref → BAD_REF_SHAPE')
+  const notArray = D.inspectDiagram({ ...base, nodes: [{ id: 'x', type: 'data', label: 'X', refs: 'C1' }] })
+  assert(notArray.report.errors.some((e) => e.code === 'BAD_FIELD_TYPE'), 'refs 不是数组 → BAD_FIELD_TYPE')
+
+  // (d) 空卡片要报（会渲染成一个空盒子）
+  const emptyCard = D.inspectDiagram({ ...base, cards: [{ title: '   ' }] })
+  assert(emptyCard.report.errors.some((e) => e.code === 'CARD_EMPTY'), '空卡片 → CARD_EMPTY')
+
+  // (e) refs / cards 进 canonical IR（否则重渲染会丢）
+  const canon = D.toCanonicalIr(D.normalizeIr(base).diagram)
+  assertEq(JSON.stringify(canon.nodes[0].refs), JSON.stringify(['C1']), 'canonical IR 保留节点 refs')
+  assertEq(canon.cards?.length, 2, 'canonical IR 保留 cards')
+  assertEq(JSON.stringify(canon.edges?.[0].refs), JSON.stringify(['C1']), 'canonical IR 保留边 refs')
+  const again = D.buildDiagram(canon, { knownRefs: known })
+  assertEq(again.svg, withD.svg.replace(/ show_descriptions="[^"]*"/, ''), '同一 IR（含 refs/cards）重渲染一致')
+
+  // (f) 标签压盒子：能避开时避开，避不开时如实报
+  const tilted = (gap) => ({
+    version: '1.0', type: 'method-overview', layout: { direction: 'LR', algorithm: 'hierarchical', layer_gap: gap },
+    nodes: [
+      { id: 'k', type: 'module', label: 'Kernel validates' },
+      { id: 'r', type: 'decision', label: 'Rejected with a receipt' },
+    ],
+    edges: [{ id: 'e', source: 'k', target: 'r', label: 'unsupported transition' }],
+  })
+  const roomy = D.buildDiagram(tilted(140))
+  assertEq(roomy.report.warnings.some((w) => w.code === 'LABEL_OVERLAP'), false, '空间足够时标签自动避开')
+  // 真的挤：每层 4 个节点、32 条边长标签 —— 候选落点全被占满，必须如实报
+  const denseNodes = []
+  const denseEdges = []
+  for (let l = 0; l < 3; l++) for (let k = 0; k < 4; k++) denseNodes.push({ id: `n${l}_${k}`, type: 'module', label: `N${l}${k}` })
+  for (let k = 0; k < 4; k++)
+    for (let k2 = 0; k2 < 4; k2++) {
+      denseEdges.push({ id: `e${k}_${k2}`, source: `n0_${k}`, target: `n1_${k2}`, label: `transition label ${k}${k2}` })
+      denseEdges.push({ id: `f${k}_${k2}`, source: `n1_${k}`, target: `n2_${k2}`, label: `another label ${k}${k2}` })
+    }
+  const dense = D.buildDiagram({ version: '1.0', type: 'architecture', layout: { direction: 'LR', layer_gap: 12 }, nodes: denseNodes, edges: denseEdges })
+  const labelWarnings = dense.report.warnings.filter((w) => w.code === 'LABEL_OVERLAP')
+  assert(labelWarnings.length > 0, `密集图确实无处安放标签（${labelWarnings.length} 条）`)
+  assert(labelWarnings.every((w) => w.measured !== undefined), 'LABEL_OVERLAP 带 measured 数值')
+
+  // (g) 绑定 refs 就等于有溯源：不再报"没有出处"
+  const traced = D.buildDiagram({ ...base, nodes: base.nodes.map((n) => ({ ...n, refs: n.refs ?? ['C1'] })) })
+  assertEq(traced.report.warnings.some((w) => w.code === 'UNTRACED_NODE'), false, '绑定了 refs 的节点不再报缺溯源')
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * [13] 走线正确性（对照 archify 补的三类"连线错误"）
+ *
+ * 改动前实测：5 张图共 **15 处硬缺陷** —— 端点全部堆在节点中心（5/5 图）、
+ * 边共线重叠 18 处、边穿过无关容器 2 处。这一节把三类都钉住。
+ * ══════════════════════════════════════════════════════════════════════ */
+console.log('\n[13] 走线正确性：端点分散 / 不叠线 / 不穿容器')
+{
+  const routeCodes = (b) =>
+    [...b.report.errors, ...b.report.warnings].map((d) => d.code).filter((c) => c.startsWith('EDGE_'))
+  const anchorsAt = (b, which) => {
+    const map = new Map()
+    for (const e of b.layout.edges) {
+      const node = which === 'src' ? e.declaredSource : e.declaredTarget
+      const p = which === 'src' ? e.points[0] : e.points[e.points.length - 1]
+      const arr = map.get(node) ?? []
+      arr.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+      map.set(node, arr)
+    }
+    return map
+  }
+
+  // (a) fan-out：3 条边必须落在 3 个**不同**的锚点上，且不得报任何走线问题
+  const fanOut = {
+    type: 'workflow', layout: { direction: 'LR' },
+    nodes: [
+      { id: 'src', type: 'input', label: 'Input' },
+      { id: 'a', type: 'process', label: 'Branch A' },
+      { id: 'b', type: 'process', label: 'Branch B' },
+      { id: 'c', type: 'process', label: 'Branch C' },
+    ],
+    edges: [
+      { id: 'e1', source: 'src', target: 'a', label: 'path A' },
+      { id: 'e2', source: 'src', target: 'b', label: 'path B' },
+      { id: 'e3', source: 'src', target: 'c', label: 'path C' },
+    ],
+  }
+  const fo = D.buildDiagram(fanOut)
+  const out = anchorsAt(fo, 'src').get('src')
+  assertEq(new Set(out).size, 3, `fan-out 的 3 条边落在 3 个不同锚点（改动前全在一点）`)
+  assertEq(routeCodes(fo).length, 0, 'fan-out 无走线诊断')
+
+  // (b) fan-in
+  const fanIn = {
+    type: 'workflow', layout: { direction: 'LR' },
+    nodes: [
+      { id: 'a', type: 'input', label: 'A' }, { id: 'b', type: 'input', label: 'B' }, { id: 'c', type: 'input', label: 'C' },
+      { id: 'sink', type: 'output', label: 'Merge' },
+    ],
+    edges: [
+      { id: 'e1', source: 'a', target: 'sink', label: 'x' },
+      { id: 'e2', source: 'b', target: 'sink', label: 'y' },
+      { id: 'e3', source: 'c', target: 'sink', label: 'z' },
+    ],
+  }
+  const fi = D.buildDiagram(fanIn)
+  assertEq(new Set(anchorsAt(fi, 'tgt').get('sink')).size, 3, 'fan-in 的 3 条边落在 3 个不同锚点')
+  assertEq(routeCodes(fi).length, 0, 'fan-in 无走线诊断')
+
+  // (c) 容器是障碍：残差边不得从 Encoder 框里穿过去（改动前必报 EDGE_CROSSES_CONTAINER）
+  const grouped = {
+    type: 'architecture', layout: { direction: 'LR' },
+    nodes: [
+      { id: 'input', type: 'input', label: 'Input' },
+      { id: 'backbone', type: 'module', label: 'Backbone', group: 'encoder' },
+      { id: 'fusion', type: 'module', label: 'Feature Fusion', group: 'encoder' },
+      { id: 'head', type: 'output', label: 'Prediction Head' },
+    ],
+    groups: [{ id: 'encoder', label: 'Encoder', children: ['backbone', 'fusion'] }],
+    edges: [
+      { id: 'e1', source: 'input', target: 'encoder' },
+      { id: 'e2', source: 'backbone', target: 'fusion' },
+      { id: 'e3', source: 'encoder', target: 'head' },
+      { id: 'e4', source: 'input', target: 'head', type: 'residual', label: 'skip' },
+    ],
+  }
+  const gp = D.buildDiagram(grouped)
+  assertEq(gp.report.errors.some((e) => e.code === 'EDGE_CROSSES_CONTAINER'), false, '残差边不再穿过 Encoder 容器')
+  assertEq(routeCodes(gp).length, 0, '容器共享层图无走线诊断')
+
+  // (d) 真实规模：RDP 图（12 节点 13 边，含回边与容器）
+  const rdp = D.buildDiagram({
+    type: 'method-overview', title: 'RDP', show_descriptions: true,
+    layout: { direction: 'TB', algorithm: 'hierarchical', layer_gap: 16 },
+    nodes: [
+      { id: 'state_t', type: 'input', label: 'Research State', description: 'Q_t, H_t, M_t' },
+      { id: 'enc', type: 'model', label: 'State Encoder', group: 'dcrm' },
+      { id: 'heads', type: 'model', label: 'Decision Heads', group: 'dcrm' },
+      { id: 'calib', type: 'module', label: 'Calibration Module', group: 'dcrm' },
+      { id: 'gate', type: 'decision', label: 'Abstention Gate', group: 'dcrm' },
+      { id: 'decision_t', type: 'decision', label: 'Research Decision' },
+      { id: 'exec', type: 'process', label: 'Direct Execution' },
+      { id: 'llm', type: 'external', label: 'Escalate to General LLM' },
+      { id: 'human', type: 'external', label: 'Human Advisor' },
+      { id: 'action_t', type: 'output', label: 'Research Action' },
+      { id: 'evidence_t', type: 'data', label: 'Evidence' },
+      { id: 'state_t1', type: 'data', label: 'New Research State' },
+    ],
+    groups: [{ id: 'dcrm', label: 'DCRM', children: ['enc', 'heads', 'calib', 'gate'] }],
+    edges: [
+      { id: 'e1', source: 'state_t', target: 'dcrm' },
+      { id: 'e2', source: 'enc', target: 'heads' }, { id: 'e3', source: 'heads', target: 'calib' },
+      { id: 'e4', source: 'calib', target: 'gate' }, { id: 'e5', source: 'dcrm', target: 'decision_t' },
+      { id: 'e6', source: 'decision_t', target: 'exec' }, { id: 'e7', source: 'decision_t', target: 'llm' },
+      { id: 'e8', source: 'llm', target: 'human', label: 'still uncertain' },
+      { id: 'e9', source: 'exec', target: 'action_t' }, { id: 'e10', source: 'human', target: 'action_t' },
+      { id: 'e11', source: 'action_t', target: 'evidence_t' }, { id: 'e12', source: 'evidence_t', target: 'state_t1' },
+      { id: 'e13', source: 'state_t1', target: 'state_t', type: 'feedback', label: 'state update' },
+    ],
+  })
+  assertEq(rdp.report.valid, true, 'RDP 图有效')
+  assertEq(routeCodes(rdp).length, 0, `RDP 图无走线诊断（实际：${routeCodes(rdp).join(',')}）`)
+
+  // (e) 原语正反例：共线重叠长度
+  assertEq(D.collinearOverlap({ x: 0, y: 10 }, { x: 100, y: 10 }, { x: 50, y: 10 }, { x: 150, y: 10 }), 50, '共线重叠长度 = 50')
+  assertEq(D.collinearOverlap({ x: 0, y: 10 }, { x: 100, y: 10 }, { x: 0, y: 20 }, { x: 100, y: 20 }), 0, '平行但不同线 → 0')
+  assertEq(D.collinearOverlap({ x: 0, y: 0 }, { x: 0, y: 100 }, { x: 0, y: 150 }, { x: 0, y: 200 }), 0, '同线但不相交 → 0')
 }
 
 /* ══════════════════════════════════════════════════════════════════════

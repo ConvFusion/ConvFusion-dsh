@@ -21,6 +21,7 @@
  * | `research_state_read` | 读取当前研究状态 | 只读 |
  * | `research_state_propose` | **提出**状态更新 | **只提案，绝不自动应用**（§20 / §21） |
  * | `research_project` | 查询/更新研究主题 | 主题**必须**带理由与依据；初始输入永久保留，只动 frontmatter |
+ * | `research_ir` | Typed Research IR：提案/校验/增量变更/状态推进 | 三层验证不过不落盘；**不写** `research-state.md`；历史不删除 |
  *
  * ## 不允许出现的工具（重要的"没有"）
  *
@@ -47,6 +48,7 @@ export declare const PAPER_DOWNLOAD_TOOL = "research_paper_download";
 export declare const PAPER_LATEX_TOOL = "research_paper_latex";
 export declare const ACTION_CONSTRUCTION_TOOL = "research_action_construction";
 export declare const DIAGRAM_TOOL = "research_diagram";
+export declare const IR_TOOL = "research_ir";
 /**
  * 构造研究资产工具集。
  *

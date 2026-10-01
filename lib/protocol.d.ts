@@ -108,8 +108,15 @@
  *   （导师：上传比 `mentor` 侧、下载读 `owner` 侧；学生：上传比 `owner` 侧、
  *   下载读 `mentor` 侧）。宿主省略该字段时按 `owner` 处理（= 旧行为，不会出错，
  *   但学生读不到导师那份），故照旧升号让"宿主需重启"说出来。
+ *
+ * - `21`：**【指导中】提示"学生更新了工作区"**（服务器加了 `workspace_updated_at` /
+ *   `workspace_files` 两个列表字段 + 归档水位头 `X-Source-Updated-At`）。
+ *   `mentor/list` 的 ACCEPTED 行因此多出 **`sync`**（宿主与**本地存的水位**比对的结果：
+ *   `{ changed, reason }` 或 `null` = 无从判断），`mentor/download` 成功后把这一版的
+ *   水位存下来（只存 `owner` 侧）。旧宿主不返回 `sync` → 界面永远不提示（不是"没更新"），
+ *   要的是**提示能力**本身，故照旧升号让设置页把"宿主需重启"说出来。
  */
-export declare const HOST_PROTOCOL = 20;
+export declare const HOST_PROTOCOL = 21;
 /** 状态响应里的协议字段名（两边共用，避免拼错）。 */
 export declare const HOST_PROTOCOL_FIELD = "protocol";
 //# sourceMappingURL=protocol.d.ts.map
