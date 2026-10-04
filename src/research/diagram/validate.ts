@@ -22,16 +22,7 @@ import {
   LAYOUT,
   FONT_SIZE,
 } from './styles.js'
-import {
-  collinearOverlap,
-  measureText,
-  rectsOverlap,
-  polylineIntersectsRect,
-  r3,
-  rectBottom,
-  rectRight,
-  type Rect,
-} from './geometry.js'
+import { collinearOverlap, measureText, rectsOverlap, polylineIntersectsRect, r3, rectBottom, rectRight, type Rect, type Point, segmentDistance, segmentsIntersect } from './geometry.js'
 import {
   error,
   warning,
@@ -392,6 +383,49 @@ function visualChecks(diagram: NormalizedDiagram, layout: LayoutResult, options:
             `${ov.toFixed(1)} units shared between ${p.id} and ${q.id}`,
           ),
         )
+      }
+    }
+  }
+
+  /* ── 线间最小间距（`layout.edge_gap`）：近平行线贴太近同样读不出来 ──────
+   * `EDGE_OVERLAP` 只抓共线叠置；两条线既不共线也不重叠、却只隔 2–3 个单位时，
+   * 打印出来是一团。这条规则按 IR 声明的阈值把它们报出来。
+   * 共享端点（同一节点边的进/出）不计 —— 它们本来就要在节点处汇合。
+   */
+  {
+    const edgeGap = diagram.edgeGap ?? 0
+    if (edgeGap > 0) {
+      const segs: Array<{ id: string; a: Point; b: Point }> = []
+      for (const e of layout.edges) {
+        for (let i = 0; i + 1 < e.points.length; i++) {
+          segs.push({ id: e.id, a: e.points[i] as Point, b: e.points[i + 1] as Point })
+        }
+      }
+      const dist = (p: Point, q: Point): number => Math.hypot(p.x - q.x, p.y - q.y)
+      let reported = 0
+      for (let i = 0; i < segs.length && reported < 8; i++) {
+        for (let j = i + 1; j < segs.length && reported < 8; j++) {
+          const p = segs[i] as (typeof segs)[number]
+          const q = segs[j] as (typeof segs)[number]
+          if (p.id === q.id) continue
+          const sharing = Math.min(dist(p.a, q.a), dist(p.a, q.b), dist(p.b, q.a), dist(p.b, q.b))
+          if (sharing <= 3) continue
+          // 交叉 ≠ 并排过近：两条线在一点相交是可接受的（甚至不可避免），
+          // 这条规则要抓的是"平行贴在一起、读者分不出是两条线"。
+          if (segmentsIntersect(p.a, p.b, q.a, q.b)) continue
+          const d = segmentDistance(p.a, p.b, q.a, q.b)
+          if (d >= edgeGap) continue
+          reported += 1
+          out.push(
+            warning(
+              'EDGE_TOO_CLOSE',
+              `Edges "${p.id}" and "${q.id}" pass within ${d.toFixed(1)} units, below layout.edge_gap = ${edgeGap}.`,
+              p.id,
+              'Increase layer_gap/node spacing so the routes have room, or reorder the nodes that share a corridor.',
+              `${d.toFixed(1)} < ${edgeGap}`,
+            ),
+          )
+        }
       }
     }
   }

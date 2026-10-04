@@ -3,7 +3,7 @@ name: Baseline Selection & Comparison Protocol
 category: experiment/baseline-selection
 type: system
 status: active
-version: 1.0
+version: 1.1
 origin: experiment/design, experiment/method
 ---
 
@@ -37,6 +37,14 @@ requires: method-plan | 基线要与方法可比
 4. **Freeze one evaluation protocol.** Same data version, splits, preprocessing, metric implementation and tuning budget for every method. Unequal tuning is the most common way comparisons become unfair; state the protocol once and apply it verbatim.
 5. **Pre-compute expected results and a decision margin.** Give each baseline realistic expected values with a plausible range, and decide in advance how large a gap counts as a real improvement rather than run-to-run variation. If the predicted margin is not clearly above that threshold, revisit the design before implementing.
 6. **Specify what the implementation must guarantee.** Each baseline must run from a documented config, use the shared data pipeline and metric code, and emit raw predictions so the comparison can be recomputed. Anything not faithfully reimplementable is reported as cited-only rather than silently approximated.
+
+### When your metric requires a representation the compared systems lack
+
+Some metrics cannot be computed on a system as it stands: measuring transition legality presupposes a typed state whose mutations can be checked. In that situation:
+
+1. **Do not present the comparison as a head-to-head.** Running an adapted version of another system measures your adaptation, not that system.
+2. **Do the strongest honest thing**: instantiate the *mechanism* each published family relies on under your own protocol, label it as such, cite the family, and state the fidelity limits of the instantiation — what the original does that your instantiation does not.
+3. **Name the comparison you did not run, and why**, in the limitations: an authored procedure taken as input is a different object from a run whose procedure is an output.
 
 ## Reasoning Guidance
 

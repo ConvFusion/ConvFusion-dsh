@@ -38,6 +38,7 @@ import {
   maturityDimensionText,
   maturityLevelText,
   progressCountText,
+  skillText,
   translateOr,
   type Translate,
 } from './i18n/index.js'
@@ -72,6 +73,63 @@ type ProgressGap =
   | { code: 'missingArtifacts'; count: number }
   | { code: 'openQuestions'; count: number }
 
+/** 一个研究工作自己的可数资产（宿主 `captureWorkProgress` 的产物）。 */
+interface WorkCounts {
+  sections: number
+  sectionsWithContent: number
+  claims: number
+  claimsWithoutEvidence: number
+  evidence: number
+  evidenceUsedInManuscript: number
+  /** 未解决缺口（已记录的 ∪ 规则检查实时发现的）。 */
+  gaps: number
+  gapsHigh: number
+  openProposals: number
+}
+
+/** 一个研究工作自己的进展（一个工作 = 一个 Paper）。 */
+interface WorkProgress {
+  id: string
+  /** 完整标题（tab 的悬停提示）。 */
+  title: string
+  /** 短标题（tab 上用）。 */
+  short: string
+  /** 是否是当前激活的论文。 */
+  active: boolean
+  status: string
+  version: string
+  /** 该工作成熟度等级折算的均值（0..1）。 */
+  overall: number
+  /** `derived` = 该论文还没有成熟度评估，等级是按真实资产**推定**的（界面必须标明）。 */
+  maturitySource: 'recorded' | 'derived'
+  maturity: Array<{ dimension: string; level: string; scale: number }>
+  counts: WorkCounts
+  /** 最高优先级的未解决缺口；没有缺口时没有这个字段。 */
+  next?: { code: string; priority: string; target?: string; skill?: string }
+}
+
+/** 汇总里的一行（一个工作；宿主 `WorkAggregateRow` 的镜像）。 */
+interface WorkAggregateRow {
+  id: string
+  title: string
+  short: string
+  active: boolean
+  overall: number
+  maturitySource: 'recorded' | 'derived'
+  counts: WorkCounts
+}
+
+/**
+ * 多个工作的合计（宿主 `WorksAggregate` 的镜像）。
+ *
+ * 只在多于一个工作时才由宿主带来；单工作/老宿主没有这个字段 → 总览照旧。
+ */
+interface WorksAggregate {
+  works: number
+  totals: WorkCounts
+  rows: WorkAggregateRow[]
+}
+
 /** 当前工作区的研究进展（宿主 `buildWorkspaceProgress` 的产物）。 */
 interface WorkspaceReport {
   at: string
@@ -80,6 +138,14 @@ interface WorkspaceReport {
   progress: { dimensions: ProgressDimension[]; stage: ProgressStage | null }
   counts: ProgressCountRow[]
   paper: boolean
+  /**
+   * 每个研究工作自己的进展（一个工作 = 一个 Paper）。
+   *
+   * 按可选读：老宿主不带这个字段，界面就退回"只有聚合内容"（今天的行为）。
+   */
+  works?: WorkProgress[]
+  /** 多工作汇总（可选读：单工作与老宿主都没有）。 */
+  aggregate?: WorksAggregate
   need: {
     gaps: ProgressGap[]
     clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown'
@@ -266,6 +332,19 @@ function decisionText(t: Translate, need: WorkspaceReport['need']): string | und
 }
 
 /**
+ * 工作级缺口（结构化 type）→ 本地化短语。
+ *
+ * 宿主只传故障类别（`gap.type`）与目标（章节名 / Claim id），文案在客户端按 code 取 ——
+ * 与面板其余部分同一条纪律（宿主不传成品文案）。取不到翻译时退化为 code 本身，
+ * 不编一句中文。
+ */
+function workGapText(t: Translate, next: NonNullable<WorkProgress['next']>): string {
+  const key = `progress.work.gap.${next.code}`
+  const text = t(key, next.target ? { target: next.target } : {})
+  return text === key ? next.code : text
+}
+
+/**
  * 会话头部的「研究进展」按钮。
  *
  * 会话作用域 → 换会话即重挂（`sessionId` 变化），因此**不存在跨会话串味**：
@@ -277,8 +356,16 @@ export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Eleme
   const [hover, setHover] = useState(false)
   const [busy, setBusy] = useState(false)
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
+  /** 当前选中的研究工作 id（空串 = 总览；宿主刷新后该工作消失则自动回到总览）。 */
+  const [workId, setWorkId] = useState('')
   const anchorRef = useRef<HTMLSpanElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
+
+  // 选中的工作可能已经不在报告里（换了工作区 / 论文被删）→ 回到总览，不留空面板。
+  const shownWorkIds = (probe.kind === 'shown' ? probe.report?.works ?? [] : []).map((w) => w.id).join('\u0000')
+  useEffect(() => {
+    if (workId && !shownWorkIds.split('\u0000').includes(workId)) setWorkId('')
+  }, [workId, shownWorkIds])
 
   const load = useCallback(async (): Promise<void> => {
     if (!sessionId) {
@@ -369,14 +456,40 @@ export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Eleme
 
   const report = probe.report
   const lastTurn = probe.lastTurn
+  /**
+   * 多研究工作：只有**多于一个**工作才出现 tab 条；只有一个（或没有）时
+   * 面板完全按今天的样子渲染 —— 不为了统一而给单工作加一层切换。
+   */
+  const works = report?.works ?? []
+  const multi = works.length > 1
+  const work = multi ? works.find((w) => w.id === workId) ?? null : null
   // 面板文字色/次要色/等宽字体都用 DSH 真实 token（每个都带兜底）
   const muted = 'var(--dsw-alias-label-tertiary, #81858c)'
   const mono: React.CSSProperties = {
     fontFamily: 'var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace)',
     fontSize: '11.5px',
   }
-  const section: React.CSSProperties = { marginTop: '10px' }
-  const sectionTitle: React.CSSProperties = { color: muted, fontSize: '11.5px', letterSpacing: '0.04em' }
+  /**
+   * 分区卡片：A/A2/B/C 四块各自成卡（边框 + 浅底 + 圆角）。
+   *
+   * ⚠️ 底只用一个**本文件里已经出现过**的 token（`--dsw-alias-interactive-bg-hover`），
+   * 并带兜底值：写错 token 名会静默落到兜底（2026-09 实测面板曾因此整块变深色），
+   * 而 `--dsw-alias-bg-layer-2` 是**不透明的 #fff**，用它做卡片底会与面板底色重复、看不出卡片边界。
+   */
+  const section: React.CSSProperties = {
+    marginTop: '10px',
+    padding: '9px 11px 10px',
+    borderRadius: '9px',
+    border: '1px solid var(--dsw-alias-border-l2, rgba(15,17,21,0.10))',
+    background: 'var(--dsw-alias-interactive-bg-hover, rgba(15,17,21,0.035))',
+  }
+  const sectionTitle: React.CSSProperties = {
+    color: muted,
+    fontSize: '11.5px',
+    letterSpacing: '0.04em',
+    fontWeight: 600,
+    marginBottom: '7px',
+  }
   const iconButton: React.CSSProperties = {
     border: 'none',
     background: 'transparent',
@@ -386,6 +499,113 @@ export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Eleme
     borderRadius: '4px',
     font: 'inherit',
     lineHeight: 1,
+  }
+  /* 工作 tab 条：紧凑一条，下边框表示选中（不引入新的主题 token）。 */
+  const tabStrip: React.CSSProperties = {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '2px',
+    marginTop: '8px',
+    borderBottom: '1px solid var(--dsw-alias-border-l2, rgba(15,17,21,0.10))',
+  }
+  const tab = (active: boolean): React.CSSProperties => ({
+    border: 'none',
+    background: 'transparent',
+    color: active ? 'var(--dsw-alias-label-primary, #0f1115)' : muted,
+    cursor: 'pointer',
+    padding: '4px 9px 6px',
+    marginBottom: '-1px',
+    fontWeight: active ? 600 : 400,
+    fontSize: '12px',
+    lineHeight: 1.4,
+    fontFamily: 'inherit',
+    maxWidth: '180px',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    borderBottom: active
+      ? '2px solid var(--dsw-alias-state-business-primary, #4176e6)'
+      : '2px solid transparent',
+  })
+  /** 工作面板里的一行资产（标签 + 数值 + 可选括注）。 */
+  const workRow = (label: string, value: string, note?: string): JSX.Element => (
+    <div key={label} style={{ display: 'flex', gap: '8px' }}>
+      <span style={{ minWidth: '92px', whiteSpace: 'nowrap', ...mono }}>{label}</span>
+      <span style={mono}>{value}</span>
+      {note ? <span style={{ color: muted }}>{note}</span> : null}
+    </div>
+  )
+  /**
+   * 汇总表的一个计数格：总数，需要标注的子集写在括号里（`5 (2)`），含义放悬停提示 ——
+   * 表头保持一个词，面板里不多塞解释文字。
+   *
+   * `alwaysTitle` 用于"这个数不需要相加也看得出来"的列（证据库），没有子集时也要有提示。
+   */
+  const aggCell = (
+    key: string,
+    value: number,
+    extra: number,
+    extraLabel: string,
+    alwaysTitle = false,
+  ): JSX.Element => (
+    <span key={key} title={extra > 0 || alwaysTitle ? extraLabel : undefined}>
+      {extra > 0 ? `${value} (${extra})` : String(value)}
+    </span>
+  )
+  /**
+   * 汇总表的一行：工作名 + 成熟度 + 六个计数（顺序与表头一致）。
+   *
+   * `totals` 存在时是**合计行**（工作名为"合计（N 个工作）"，成熟度留空 ——
+   * 各工作成熟度的平均不是任何东西的测量值，不编一个出来）。
+   */
+  const aggRow = (row: WorkAggregateRow | null, totals?: WorkCounts): JSX.Element => {
+    const c = totals ?? row?.counts
+    if (!c) return <React.Fragment key="empty" />
+    return (
+      <React.Fragment key={row ? row.id : 'totals'}>
+        {row ? (
+          <span
+            title={row.active ? `${row.title} · ${t('progress.works.active')}` : row.title}
+            style={{
+              color: row.active ? undefined : muted,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {row.active ? `● ${row.short}` : row.short}
+          </span>
+        ) : (
+          <span style={{ color: muted }}>{t('progress.works.totals', { count: report?.aggregate?.works ?? 0 })}</span>
+        )}
+        {row ? (
+          <span title={row.maturitySource === 'derived' ? t('progress.works.derived') : undefined}>
+            {pct(row.overall)}
+          </span>
+        ) : (
+          <span />
+        )}
+        <span>{`${c.sectionsWithContent}/${c.sections}`}</span>
+        {aggCell(
+          'claims',
+          c.claims,
+          c.claimsWithoutEvidence,
+          t('progress.work.count.claimsWithoutEvidence', { count: c.claimsWithoutEvidence }),
+        )}
+        {aggCell(
+          'evidence',
+          c.evidence,
+          c.evidenceUsedInManuscript,
+          // 证据库是全工作区共用的：合计里只报一份（宿主已如此），悬停说明免得看成"漏加了"
+          `${t('progress.works.evidenceShared')} · ${t('progress.work.count.evidenceUsed', {
+            count: c.evidenceUsedInManuscript,
+          })}`,
+          true,
+        )}
+        {aggCell('gaps', c.gaps, c.gapsHigh, t('progress.work.count.gapsHigh', { count: c.gapsHigh }))}
+        {aggCell('proposals', c.openProposals, 0, '')}
+      </React.Fragment>
+    )
   }
 
   return (
@@ -447,7 +667,9 @@ export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Eleme
             right: pos?.right ?? 12,
             visibility: pos ? 'visible' : 'hidden',
             zIndex: 2147483000,
-            width: 'min(440px, calc(100vw - 24px))',
+            // 600px：成熟度/资产两栏网格每行需要 ~256px（标签 92 + 条 88 + 等级文字），
+            // 440px 时每栏只有 ~200px，等级文字会被挤到第二行（用户反馈）。
+            width: 'min(600px, calc(100vw - 24px))',
             maxHeight: '70vh',
             overflowY: 'auto',
             padding: '12px 16px 14px',
@@ -467,10 +689,12 @@ export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Eleme
             <strong>{t('progress.name')}</strong>
             {report ? (
               <span style={{ color: muted, ...mono }}>
-                {t('progress.summary', { percent: pct(report.overall) })}
-                {report.progress.stage
-                  ? t('progress.currentStage', { stage: stageText(t, report.progress.stage) })
-                  : ''}
+                {t('progress.summary', { percent: pct(work ? work.overall : report.overall) })}
+                {work
+                  ? ` · ${t('progress.work.meta', { version: work.version, status: work.status })}`
+                  : report.progress.stage
+                    ? t('progress.currentStage', { stage: stageText(t, report.progress.stage) })
+                    : ''}
               </span>
             ) : (
               <span style={{ color: muted }}>{t('progress.noData')}</span>
@@ -498,19 +722,145 @@ export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Eleme
               </button>
             </span>
           </div>
-          <div style={{ color: muted, ...mono }}>{shortenPath(probe.workspace)}</div>
+          <div style={{ color: muted, ...mono }}>
+            {shortenPath(probe.workspace)}
+            {work ? ` · ${work.id}` : ''}
+          </div>
 
-          {report ? (
+          {/* 工作 tab：只在**多于一个**工作时出现（单工作与今天完全一致） */}
+          {multi ? (
+            <div role="tablist" aria-label={t('progress.name')} style={tabStrip} data-convfusion-progress-tabs="1">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={work === null}
+                title={t('progress.works.overview')}
+                style={tab(work === null)}
+                onClick={() => setWorkId('')}
+              >
+                {t('progress.works.overview')}
+              </button>
+              {works.map((w) => (
+                <button
+                  key={w.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={work?.id === w.id}
+                  title={w.active ? `${w.title} · ${t('progress.works.active')}` : w.title}
+                  style={tab(work?.id === w.id)}
+                  onClick={() => setWorkId(w.id)}
+                >
+                  {w.active ? `● ${w.short}` : w.short}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {report && work ? (
             <>
+              {/* A. 这个工作自己的成熟度（论文成熟度维度；无评估时按资产推定并标明） */}
+              <div style={section}>
+                <div style={sectionTitle}>
+                  {t('progress.work.section.maturity')}
+                  {work.maturitySource === 'derived' ? t('progress.work.maturityDerived') : ''}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
+                  {work.maturity.map((d) => (
+                    <div key={d.dimension} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ minWidth: '92px', whiteSpace: 'nowrap', ...mono }}>
+                        {translateOr(t, `maturity.paper.${d.dimension}`, d.dimension)}
+                      </span>
+                      <Bar scale={d.scale} />
+                      <span style={{ color: muted, whiteSpace: 'nowrap', ...mono }}>{maturityLevelText(t, d.level)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* A2. 这个工作自己的可数资产（真实计数） */}
+              <div style={section}>
+                <div style={sectionTitle}>{t('progress.work.section.assets')}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
+                  {workRow(
+                    t('progress.work.count.sections'),
+                    `${work.counts.sectionsWithContent}/${work.counts.sections}`,
+                  )}
+                  {workRow(
+                    t('progress.work.count.claims'),
+                    String(work.counts.claims),
+                    work.counts.claimsWithoutEvidence > 0
+                      ? t('progress.work.count.claimsWithoutEvidence', { count: work.counts.claimsWithoutEvidence })
+                      : undefined,
+                  )}
+                  {workRow(
+                    t('progress.work.count.evidence'),
+                    String(work.counts.evidence),
+                    t('progress.work.count.evidenceUsed', { count: work.counts.evidenceUsedInManuscript }),
+                  )}
+                  {workRow(
+                    t('progress.work.count.gaps'),
+                    String(work.counts.gaps),
+                    work.counts.gapsHigh > 0
+                      ? t('progress.work.count.gapsHigh', { count: work.counts.gapsHigh })
+                      : undefined,
+                  )}
+                  {work.counts.openProposals > 0
+                    ? workRow(t('progress.work.count.proposals'), String(work.counts.openProposals))
+                    : null}
+                </div>
+              </div>
+
+              {/* C. 这个工作的下一步（最高优先级缺口；没有缺口就不渲染这一段） */}
+              {work.next ? (
+                <div style={section}>
+                  <div style={sectionTitle}>{t('progress.work.section.next')}</div>
+                  <div>{t('progress.work.nextStep', { text: workGapText(t, work.next) })}</div>
+                  {work.next.skill ? (
+                    <div style={{ color: muted }}>
+                      {t('progress.work.nextSkill', { skill: skillText(t, work.next.skill, work.next.skill) })}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          ) : report ? (
+            <>
+              {/* 总览（多工作）：每个工作一行 + 合计 —— 一台工作一台读数，不复述某一个工作。
+                  下面的 A/A2/B/C 是**项目级**内容（Research State / 全局计数 / 回合变化），照旧保留。 */}
+              {multi && report.aggregate ? (
+                <div style={section} data-convfusion-progress-aggregate="1">
+                  <div style={sectionTitle}>{t('progress.works.section.aggregate')}</div>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(84px, 1.5fr) repeat(6, minmax(42px, 0.7fr))',
+                      gap: '3px 6px',
+                      alignItems: 'baseline',
+                      ...mono,
+                    }}
+                  >
+                    <span style={{ color: muted }}>{t('progress.works.col.work')}</span>
+                    <span style={{ color: muted }}>{t('progress.works.col.maturity')}</span>
+                    <span style={{ color: muted }}>{t('progress.works.col.sections')}</span>
+                    <span style={{ color: muted }}>{t('progress.works.col.claims')}</span>
+                    <span style={{ color: muted }}>{t('progress.works.col.evidence')}</span>
+                    <span style={{ color: muted }}>{t('progress.works.col.gaps')}</span>
+                    <span style={{ color: muted }}>{t('progress.works.col.proposals')}</span>
+                    {report.aggregate.rows.map((row) => aggRow(row))}
+                    {aggRow(null, report.aggregate.totals)}
+                  </div>
+                </div>
+              ) : null}
+
               {/* A. 研究现在到了哪里 */}
               <div style={section}>
                 <div style={sectionTitle}>{t('progress.section.maturity')}</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
                   {report.progress.dimensions.map((d) => (
                     <div key={d.dimension} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ minWidth: '92px', ...mono }}>{maturityDimensionText(t, d.dimension)}</span>
+                      <span style={{ minWidth: '92px', whiteSpace: 'nowrap', ...mono }}>{maturityDimensionText(t, d.dimension)}</span>
                       <Bar scale={d.scale} />
-                      <span style={{ color: muted, ...mono }}>{maturityLevelText(t, d.level)}</span>
+                      <span style={{ color: muted, whiteSpace: 'nowrap', ...mono }}>{maturityLevelText(t, d.level)}</span>
                     </div>
                   ))}
                 </div>
@@ -522,7 +872,7 @@ export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Eleme
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
                   {report.counts.map((row) => (
                     <div key={row.key} style={{ display: 'flex', gap: '8px' }}>
-                      <span style={{ minWidth: '92px', ...mono }}>{progressCountText(t, row.key)}</span>
+                      <span style={{ minWidth: '92px', whiteSpace: 'nowrap', ...mono }}>{progressCountText(t, row.key)}</span>
                       <span style={mono}>{row.value}</span>
                       {row.detail ? (
                         <span style={{ color: muted }}>

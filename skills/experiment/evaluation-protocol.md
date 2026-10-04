@@ -3,7 +3,7 @@ name: Evaluation Protocol & Metric Design
 category: experiment/evaluation-protocol
 type: system
 status: active
-version: 1.0
+version: 1.1
 origin: experiment/design, experiment/analysis, experiment/method
 ---
 
@@ -37,6 +37,15 @@ requires: method-plan | 评测协议服务于方法要检验的主张
 4. **Specify the evaluation loop and reporting granularity.** State which splits are used, how often evaluation runs, whether selection is per-seed or best-epoch, and that test data is touched once at the end. Report per-seed values, not only the best.
 5. **Declare success and failure thresholds in advance**, including the minimum effect worth claiming and any absolute floor such as beating the trivial baseline. Thresholds belong to the design, not to the later narrative.
 6. **Require machine-readable outputs from the implementation.** Evaluation code must write metrics and per-example predictions in a documented schema, one row per run, seed and example, so that later comparison, significance testing and error analysis work from artefacts rather than from prose.
+
+### Verifying labels you built yourself
+
+When the gold labels are yours rather than an external annotator's, the verification path is part of the protocol, not an afterthought.
+
+1. **Name it before the run.** State, before any measurement, which machine checks will hold (a walkthrough of every gold path, an independent re-implementation, constructed counter-examples) and who will verify the labels independently — how many people, drawn from where, on what sample, against what criterion and agreement threshold.
+2. **Prefer verification that can fail loudly.** A check that cannot fail is decoration: each machine check must be able to reject a gold path, and the human protocol must be able to reject a label.
+3. **Say what happens if a label is later found wrong.** Name the consequence up front: which already-reported numbers are invalidated, which runs must be repeated, and whether a sensitivity analysis is an acceptable substitute. Silent repair is not an option.
+4. **Report the verification state on the claim itself.** A claim resting on unverified author-built labels is weaker than the same claim resting on verified ones, and the paper must say which it is.
 
 ## Reasoning Guidance
 

@@ -63,6 +63,12 @@ export interface NormalizedLabel {
 /** 层间距的可调范围（见 `DiagramLayoutSpec.layer_gap`）。 */
 export declare const LAYER_GAP_MIN = 12;
 export declare const LAYER_GAP_MAX = 120;
+/** 并排泳道之间水平间距的范围（见 `DiagramLayoutSpec.group_gap`）。 */
+export declare const GROUP_GAP_MIN = 24;
+export declare const GROUP_GAP_MAX = 240;
+/** 线间最小间距的范围（见 `DiagramLayoutSpec.edge_gap`）。 */
+export declare const EDGE_GAP_MIN = 0;
+export declare const EDGE_GAP_MAX = 24;
 export interface NormalizedDiagram {
     version: string;
     type: DiagramType;
@@ -71,6 +77,12 @@ export interface NormalizedDiagram {
     algorithm: LayoutAlgorithm;
     /** 层间距覆盖值（未指定时用 `LAYOUT.layerGap`）。 */
     layerGap?: number;
+    /** 顶层 group 的排布方式（见 `DiagramLayoutSpec.arrange`）。 */
+    arrange?: 'auto' | 'lanes';
+    /** 并排 cluster 之间的水平间距（见 `DiagramLayoutSpec.group_gap`）。 */
+    groupGap?: number;
+    /** 线间最小间距（见 `DiagramLayoutSpec.edge_gap`）。 */
+    edgeGap?: number;
     /** 是否显示节点说明（来自 IR；渲染调用的显式参数优先）。 */
     showDescriptions?: boolean;
     canvas: {

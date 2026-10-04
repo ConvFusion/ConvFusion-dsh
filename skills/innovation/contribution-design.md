@@ -3,7 +3,7 @@ name: Contribution Design
 category: innovation/contribution-design
 type: system
 status: active
-version: 1.0
+version: 1.1
 origin: conception/structuring, decision/impact-evaluation
 ---
 
@@ -33,11 +33,21 @@ requires: claims | 先有主张，才能设计证明它的证据包
 
 1. **Name the contribution type explicitly.** New mechanism, new evidence or understanding, new benchmark or dataset, new capability, or a negative result that changes practice. Each type demands a different demonstration.
 2. **Write each contribution as a claim the field can reuse**, not as "we propose X". If a reader cannot take the result and apply it, it is a description of activity rather than a contribution.
-3. **Attach a demonstration to every claim.** A mechanism claim needs an ablation that isolates the mechanism; a capability claim needs a comparison at matched budget; a benchmark needs adoption criteria. A claim without its demonstration is a promise.
+3. **Attach a demonstration to every claim.** A mechanism claim needs an ablation that isolates the mechanism; a capability claim needs a comparison at matched budget; a benchmark needs adoption criteria (see *What a benchmark or dataset contribution must demonstrate*). A claim without its demonstration is a promise.
 4. **Choose the strongest available baselines before designing the method.** If the method is only compared with weak baselines the contribution cannot be assessed. Prefer the current state of the art plus the simplest strong alternative.
 5. **Plan the negative controls.** For any performance claim, include extra-compute and extra-tuning controls so that gains can be attributed to the mechanism rather than to resources.
 6. **State the scope of each claim** — the setting in which the collected evidence supports it — and refuse to generalise beyond it in the write-up.
 7. **Write the fallback contribution into the plan.** State which result would force the main claim to be restated, and what would still count as a valid contribution in that case.
+
+### What a benchmark or dataset contribution must demonstrate
+
+Naming "a new benchmark or dataset" as the contribution type is not enough; that type carries its own demonstration.
+
+1. **A construct statement**: which quantity the dataset makes measurable that was not measurable before, and why existing resources cannot carry it.
+2. **Adoption criteria**: size and diversity sufficient for external use; an annotation protocol documented well enough for a stranger to extend it; agreement among independent (non-author) annotators; per-item reliability, not only a global rate.
+3. **Usability by others**: what a third party must do to compute *their* metric on it — and if the answer is "adopt our representation first", that is a boundary to state, not a defect to hide.
+4. **A release contract**: licence, version, acquisition path, and what the dataset does and does not support.
+5. **A positioning decision**: an instrument built for your own question is a legitimate contribution but must be declared as such; calling it a benchmark invites the adoption bar above.
 
 ## Reasoning Guidance
 

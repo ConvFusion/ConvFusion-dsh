@@ -155,6 +155,33 @@ export interface DiagramLayoutSpec {
      * 而不是改全局默认。范围 12–120，越界会 clamp 并报 warning。
      */
     layer_gap?: number;
+    /**
+     * 顶层 group 的排布方式。
+     *
+     * `"auto"`（默认）沿用分层结果；`"lanes"` 把**顶层 group** 当作 cluster：
+     * 按声明顺序在同一带内左→右并排、顶部对齐（间距 `group_gap`），
+     * 非分组节点统一排到 cluster 带**之下**。用于"两个泳道框并排 + 其余节点在下方"
+     * 这类版式 —— 分层引擎做不到它：层区间内无外来节点的 group 会走就地排版
+     * （贴着子节点走成对角），而真正的泳道只能沿 v 方向堆叠。
+     *
+     * 仅支持 `direction: LR | TB`；其他方向回退 `"auto"` 并 warning。
+     */
+    arrange?: 'auto' | 'lanes';
+    /**
+     * 并排 cluster（含容器装修）之间的水平间距，SVG 单位，范围 24–240。
+     *
+     * 默认 110 ≈ 516 pt 页宽的 1/5 —— 并排的两个框之间要留出足够的白，
+     * 否则读者会把两个容器看成一条连续的带。
+     */
+    group_gap?: number;
+    /**
+     * 任意两条**不相邻**边线段之间的最小允许间距，SVG 单位，范围 0–24，0 = 关闭。
+     *
+     * 为什么单独一个旋钮：`EDGE_OVERLAP` 只抓"共线且真的叠在一起"，
+     * 而"两条近平行线贴得很近"同样读不出来 —— 它既不共线也不重叠。
+     * 打开后路由器会在通道内加大错位，校验器再按这个阈值报 `EDGE_TOO_CLOSE`。
+     */
+    edge_gap?: number;
 }
 export interface DiagramCanvasSpec {
     width?: number;
@@ -191,7 +218,7 @@ export interface DiagramIR {
 }
 export type DiagnosticSeverity = 'error' | 'warning';
 /** 诊断码。集中登记，便于 Agent 按 `code` 修复（而不是猜 message 措辞）。 */
-export declare const DIAGNOSTIC_CODES: readonly ["NOT_AN_OBJECT", "MISSING_FIELD", "BAD_FIELD_TYPE", "EMPTY_DIAGRAM", "UNKNOWN_DIAGRAM_TYPE", "UNKNOWN_NODE_TYPE", "UNKNOWN_EDGE_TYPE", "UNKNOWN_STYLE_TOKEN", "DUPLICATE_ID", "INVALID_ID", "MISSING_SOURCE", "MISSING_TARGET", "UNKNOWN_GROUP_MEMBER", "GROUP_MEMBERSHIP_CONFLICT", "GROUP_CYCLE", "GROUP_NESTING_TOO_DEEP", "NODE_IN_MULTIPLE_GROUPS", "UNKNOWN_LABEL_ANCHOR", "UNKNOWN_LAYOUT_ALGORITHM", "UNKNOWN_LAYOUT_DIRECTION", "UNKNOWN_VERSION", "ISOLATED_NODE", "CYCLE_DETECTED", "UNLAYERABLE_STRUCTURE", "NODE_OVERLAP", "EDGE_CROSSES_NODE", "EDGE_ENDPOINT_PILED", "EDGE_CROSSES_CONTAINER", "EDGE_OVERLAP", "UNKNOWN_REF", "BAD_REF_SHAPE", "CARD_EMPTY", "LABEL_OVERLAP", "UNSUPPORTED_IN_MODE", "TEXT_OVERFLOW", "GROUP_OVERLAPS_FOREIGN_NODE", "CANVAS_TOO_SMALL", "LONG_LABEL", "VAGUE_NODE_LABEL", "DUPLICATE_NODE_LABEL", "UNTRACED_NODE"];
+export declare const DIAGNOSTIC_CODES: readonly ["NOT_AN_OBJECT", "MISSING_FIELD", "BAD_FIELD_TYPE", "EMPTY_DIAGRAM", "UNKNOWN_DIAGRAM_TYPE", "UNKNOWN_NODE_TYPE", "UNKNOWN_EDGE_TYPE", "UNKNOWN_STYLE_TOKEN", "DUPLICATE_ID", "INVALID_ID", "MISSING_SOURCE", "MISSING_TARGET", "UNKNOWN_GROUP_MEMBER", "GROUP_MEMBERSHIP_CONFLICT", "GROUP_CYCLE", "GROUP_NESTING_TOO_DEEP", "NODE_IN_MULTIPLE_GROUPS", "UNKNOWN_LABEL_ANCHOR", "UNKNOWN_LAYOUT_ALGORITHM", "UNKNOWN_LAYOUT_DIRECTION", "UNKNOWN_VERSION", "ISOLATED_NODE", "CYCLE_DETECTED", "UNLAYERABLE_STRUCTURE", "NODE_OVERLAP", "EDGE_CROSSES_NODE", "EDGE_ENDPOINT_PILED", "EDGE_CROSSES_CONTAINER", "EDGE_OVERLAP", "EDGE_TOO_CLOSE", "UNKNOWN_REF", "BAD_REF_SHAPE", "CARD_EMPTY", "LABEL_OVERLAP", "UNSUPPORTED_IN_MODE", "TEXT_OVERFLOW", "GROUP_OVERLAPS_FOREIGN_NODE", "CANVAS_TOO_SMALL", "LONG_LABEL", "VAGUE_NODE_LABEL", "DUPLICATE_NODE_LABEL", "UNTRACED_NODE"];
 export type DiagnosticCode = (typeof DIAGNOSTIC_CODES)[number];
 export interface Diagnostic {
     code: DiagnosticCode;

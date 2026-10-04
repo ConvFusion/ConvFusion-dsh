@@ -32,6 +32,8 @@ const PROTO = await import(lib('protocol.js'))
 const PROGRESS_PLUGIN_NAME = 'convfusion'
 const CUST = await import(lib('research/skill-customization.js'))
 const CTX = await import(lib('research/context.js'))
+const CL = await import(lib('research/claims.js'))
+const EV = await import(lib('research/evidence.js'))
 
 let passed = 0
 let failed = 0
@@ -308,7 +310,369 @@ console.log('\n[5b] 工作区进度：任何时刻可重算、且不伪造精度
   assert(bareReport.progress.dimensions.every((d) => d.level === 'Unknown'), '未评估 → 全部显示 Unknown（不假装中间值）')
   assertEq(bareReport.overall, 0, '未评估 → 折算为 0')
   assertEq(bareReport.counts.find((r) => r.key === 'evidence')?.value, 0, '没有证据文件 → 证据计数是 0（真实读数）')
+  assertEq(bareReport.works.length, 0, '没有论文目录 → 0 个工作（界面不出 tab）')
   rmSync(bare, { recursive: true, force: true })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 5c. 多个研究工作：一个工作 = 一篇论文，每个工作只报**自己的**事实
+ *
+ * 工作区同时跑多篇论文时，"论文正文：已有"这种聚合陈述分不清是哪一篇。
+ * 所以 `works` 必须逐工作给数（章节/主张/证据/缺口/成熟度），并且**不能**把
+ * 聚合值当成分工作的值；同时聚合字段一个都不能少（向后兼容）。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[5c] 多个研究工作：每个工作只报自己的事实')
+{
+  const ws = mkdtempSync(join(tmpdir(), 'cf-works-'))
+  writeFileSync(
+    join(ws, 'project.md'),
+    ['---', 'type: research-project', 'topic: T', 'domain: Robotics', '---', '', '## Research Statement', '', 'T', ''].join('\n'),
+  )
+  mkdirSync(join(ws, 'papers', 'paper-alpha'), { recursive: true })
+  writeFileSync(
+    join(ws, 'papers', 'paper-alpha', 'paper.md'),
+    ['# Alpha Work', '', '## Abstract', '', 'a'.repeat(80), '', '## Method', '', 'b'.repeat(80), ''].join('\n'),
+  )
+  mkdirSync(join(ws, 'papers', 'paper-beta'), { recursive: true })
+  writeFileSync(
+    join(ws, 'papers', 'paper-beta', 'paper.md'),
+    ['# Beta Work', '', '## Abstract', '', 'c'.repeat(80), ''].join('\n'),
+  )
+  // 真实工作区里 `papers/__pycache__` 存在 —— 它不是一篇论文，不能算一个工作
+  mkdirSync(join(ws, 'papers', '__pycache__'), { recursive: true })
+
+  const report = PROG.buildWorkspaceProgress(PROG.captureProgress(ws, baseContent))
+  assertEq(report.works.length, 2, '两个论文目录 → 两个工作（papers/__pycache__ 不算）')
+  assertEq(report.works.map((w) => w.id), ['paper-alpha', 'paper-beta'], '工作按 id 稳定排序')
+  assert(report.works.every((w) => w.title && w.short), '每个工作都有标题与短标题（tab 用）')
+  assertEq(report.works[0].counts.sections, 2, '章节数只数**这个工作**自己的正文')
+  assertEq(report.works[1].counts.sections, 1, '另一个工作的章节数独立（不是聚合值）')
+  assertEq(report.works[0].maturity.length, 9, '工作成熟度是 9 个论文维度')
+  assertEq(report.works[1].maturity.length, 9, '（同上）')
+  assert(['recorded', 'derived'].includes(report.works[0].maturitySource), '成熟度标明来源（记录值 / 按资产推定）')
+  const mean = report.works[0].maturity.reduce((a, d) => a + d.scale, 0) / 9
+  assert(Math.abs(report.works[0].overall - mean) < 1e-9, '工作的整体折算 = 它自己 9 个维度的均值')
+  assert(report.works[0].counts.gaps >= 1, '规则检查的缺口被计入（实时检测，不依赖 gaps.md）')
+  assert(Boolean(report.works[0].next?.code), '最高优先级缺口成为"下一步"')
+  assert(!/[\u4e00-\u9fff]/.test(JSON.stringify(report.works)), '工作数据只带稳定 key/数值，不带宿主中文文案')
+  // 聚合字段一个都不能少
+  assertEq(report.progress.dimensions.length, 6, '聚合成熟度仍是 6 个 Research State 维度')
+  assert(report.counts.some((r) => r.key === 'evidence'), '聚合可数资产仍在')
+  assert(typeof report.paper === 'boolean', '聚合"论文正文有/无"仍在')
+
+  rmSync(join(ws, 'papers', 'paper-beta'), { recursive: true, force: true })
+  assertEq(PROG.captureProgress(ws, baseContent).works.length, 1, '删掉一篇 → 只剩一个工作（界面不出 tab）')
+  rmSync(ws, { recursive: true, force: true })
+  const gone = mkdtempSync(join(tmpdir(), 'cf-works-gone-'))
+  assertEq(PROG.captureProgress(gone, baseContent).works.length, 0, '工作区不存在时 0 个工作（不抛错）')
+  rmSync(gone, { recursive: true, force: true })
+
+  // 短标题收缩：tab 不能被长标题撑爆，但完整标题仍保留在 title 里
+  assertEq(
+    PROG.shortWorkTitle('Harnessing Scientific Reasoning with a Typed Research IR', 'p'),
+    'Harnessing Scientific',
+    '长标题收成前两个词',
+  )
+  assertEq(
+    PROG.shortWorkTitle('Verifying Research Commitments: State-Transition Gating', 'p'),
+    'Verifying Research',
+    '优先取副标题之前的部分',
+  )
+  assertEq(PROG.shortWorkTitle('', 'paper-x'), 'paper-x', '没有标题 → 退回 id')
+
+  // 工作面板只传缺口**类型**，短语在客户端本地化 —— 所以每种类型都必须有中英双语，
+  // 否则界面会退化成显示原始 code（提示词纪律：宿主不传成品文案，客户端不许缺词条）。
+  const union = /export type PaperGapType =([\s\S]*?)\n\nexport/.exec(
+    readFileSync(join(PKG, 'src', 'research', 'paper-data.ts'), 'utf8'),
+  )?.[1] ?? ''
+  const gapTypes = [...union.matchAll(/'([a-z-]+)'/g)].map((m) => m[1])
+  assert(gapTypes.length >= 10, `从源码解析出 ${gapTypes.length} 种缺口类型`)
+  const en = (await import(join(PKG, 'src', 'client', 'i18n', 'en.ts'))).en
+  const zh = (await import(join(PKG, 'src', 'client', 'i18n', 'zh.ts'))).zh
+  const untranslated = gapTypes.filter((type) => !( `progress.work.gap.${type}` in en && `progress.work.gap.${type}` in zh))
+  assertEq(untranslated, [], '每种缺口类型都有中英双语短语（不会退化成显示 code）')
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 5d. 总览（多工作）：汇总 = 各工作逐项之和；单工作路径一字不变（v2）
+ *
+ * 用户反馈：加了工作 tab 之后，「总览」仍然只重复某一个工作的内容。修法是让总览
+ * 概括**所有**工作（逐工作一行 + 合计）。这里守两件事：
+ *   ① 合计只能**做加法** —— 同一个数字不能在总览与工作 tab 上不同（同一来源，不重算）；
+ *   ② 工作数 ≤ 1 时报告**不带**汇总字段 —— 单工作的行为与加汇总之前完全一致。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[5d] 总览（多工作）：汇总 = 各工作逐项之和，单工作路径不变')
+{
+  const ws = mkdtempSync(join(tmpdir(), 'cf-agg-'))
+  writeFileSync(
+    join(ws, 'project.md'),
+    ['---', 'type: research-project', 'topic: T', 'domain: Robotics', '---', '', '## Research Statement', '', 'T', ''].join('\n'),
+  )
+
+  // Alpha：两个章节（都有实质内容）、正文引用了 E001、一个**有证据**的主张
+  mkdirSync(join(ws, 'papers', 'paper-alpha'), { recursive: true })
+  writeFileSync(
+    join(ws, 'papers', 'paper-alpha', 'paper.md'),
+    ['# Alpha Work', '', '## Abstract', '', 'a'.repeat(80), '', '## Method', '', `uses E001. ${'b'.repeat(80)}`, ''].join('\n'),
+  )
+  writeFileSync(join(ws, 'papers', 'paper-alpha', 'claims.md'), ['## C001', '', 'Alpha claim.', ''].join('\n'))
+  CL.createClaim(ws, { id: 'C001', statement: 'Alpha claim.', evidence: ['E001'], paper: 'paper-alpha' })
+  // 两条真实证据（工作区证据库是**共用**的，见下面的合计例外）
+  EV.createEvidence(ws, { name: 'Alpha run', sourceKind: 'experiment', rawArtifacts: ['alpha.json'], claim: 'Alpha claim.' })
+  EV.createEvidence(ws, { name: 'Beta run', sourceKind: 'experiment', rawArtifacts: ['beta.json'] })
+
+  // Beta：一个章节、一个**无证据**的主张、一个待修订提案 —— 两个工作明显不同量
+  mkdirSync(join(ws, 'papers', 'paper-beta', 'proposals'), { recursive: true })
+  writeFileSync(
+    join(ws, 'papers', 'paper-beta', 'paper.md'),
+    ['# Beta Work', '', '## Abstract', '', 'c'.repeat(80), ''].join('\n'),
+  )
+  writeFileSync(join(ws, 'papers', 'paper-beta', 'claims.md'), ['## C002', '', 'Beta claim.', ''].join('\n'))
+  CL.createClaim(ws, { id: 'C002', statement: 'Beta claim.', paper: 'paper-beta' })
+  writeFileSync(
+    join(ws, 'papers', 'paper-beta', 'proposals', 'RP001.md'),
+    ['---', 'id: RP001', 'type: paper-revision-proposal', 'status: proposed', 'trigger: test', '---', '',
+     '# Revision Proposal RP001', '', '## Reason', '', 'test', ''].join('\n'),
+  )
+
+  const snap = PROG.captureProgress(ws, baseContent)
+  const report = PROG.buildWorkspaceProgress(snap, new Date(0))
+  assertEq(report.works.length, 2, '（前提）两个工作')
+  assert(Boolean(report.aggregate), '多于一个工作 → 报告带汇总（总览有东西可概括）')
+  const agg = report.aggregate
+
+  assertEq(agg.works, 2, '汇总写明参与合计的工作数')
+  assertEq(agg.rows.map((r) => r.id), report.works.map((w) => w.id), '汇总行与工作 tab 同序同 id')
+  assert(
+    agg.rows.every((r) => r.title && r.short && typeof r.overall === 'number' && typeof r.active === 'boolean'),
+    '每行带短标题 / 全标题 / 成熟度折算 / 激活标记',
+  )
+  assert(agg.rows.every((r) => ['recorded', 'derived'].includes(r.maturitySource)), '每行标明成熟度来源（记录值 / 推定）')
+
+  const KEYS = [
+    'sections', 'sectionsWithContent', 'claims', 'claimsWithoutEvidence', 'evidence',
+    'evidenceUsedInManuscript', 'gaps', 'gapsHigh', 'openProposals',
+  ]
+  assertEq(Object.keys(agg.totals).sort(), [...KEYS].sort(), '合计的键与工作计数键完全一致（没有漏项、没有多算）')
+  for (const key of KEYS.filter((k) => k !== 'evidence')) {
+    assertEq(
+      agg.rows.map((r) => r.counts[key]),
+      report.works.map((w) => w.counts[key]),
+      `行内 ${key} 就是这个工作自己的数（照搬，不另算一套）`,
+    )
+    assertEq(
+      agg.totals[key],
+      report.works.reduce((a, w) => a + w.counts[key], 0),
+      `合计 ${key} = 各工作之和`,
+    )
+  }
+  // ⚠️ 唯一的例外：`evidence` 是**全工作区共用**的一份证据库（`paperStatusSummary` 里
+  // `evidence.total = listEvidence(workspace).length`），每个工作报的都是同一个读数。
+  // 相加会把同一批证据按工作数重复计（2 个工作 × 2 条 → 4），与同一面板里项目级 A2 的
+  // 「证据 2」当场矛盾 —— 所以合计只报**一份**，并且这条断言要能抓住"改回相加"。
+  const evidenceSum = report.works.reduce((a, w) => a + w.counts.evidence, 0)
+  assert(evidenceSum > agg.totals.evidence, `（前提）证据库共用，相加确实会多计（${evidenceSum} > ${agg.totals.evidence}）`)
+  assertEq(agg.totals.evidence, PROG.sharedEvidenceCount(snap.works), '证据合计 = 各工作共享的那**一份**证据库读数')
+  assertEq(
+    report.works.map((w) => w.counts.evidence),
+    report.works.map(() => agg.totals.evidence),
+    '（依据）每个工作的证据总数是同一个共享读数，不是各自独立的数',
+  )
+  assertEq(
+    agg.totals.evidenceUsedInManuscript,
+    report.works.reduce((a, w) => a + w.counts.evidenceUsedInManuscript, 0),
+    '「正文引用」确实是分工作的 → 照旧相加',
+  )
+  assertEq(agg.rows.map((r) => r.overall), report.works.map((w) => w.overall), '行内成熟度就是该工作的成熟度折算')
+  assertEq(agg.rows.map((r) => r.active), report.works.map((w) => w.active), '激活标记逐行照搬')
+
+  // 非空洞性：这些合计不是"一串 0 相加"（否则上面每条求和断言都自动成立）
+  assert(
+    agg.totals.sectionsWithContent >= 3 && agg.totals.claims >= 2,
+    `合计非平凡（章节 ${agg.totals.sectionsWithContent}/${agg.totals.sections}，主张 ${agg.totals.claims}）`,
+  )
+  assert(agg.totals.claimsWithoutEvidence >= 1, '合计里带"无支撑"子集（不是只数总数）')
+  assert(agg.totals.evidenceUsedInManuscript >= 1, '合计里带"正文引用"子集')
+  assert(agg.totals.gaps >= 2, '合计里带未解决缺口')
+  assert(agg.totals.openProposals >= 1, '合计里带待修订提案')
+  assertEq(
+    agg.totals.claims,
+    agg.rows.reduce((a, r) => a + r.counts.claims, 0),
+    '合计也能由**行**复算（表格与合计自洽）',
+  )
+
+  // 单一来源 + 纯函数：同一份快照必得同一份汇总
+  assertEq(PROG.aggregateWorks(snap.works), agg, 'aggregateWorks(快照里的 works) == 报告里的汇总')
+  assertEq(
+    { ...PROG.sumWorkCounts(report.works.map((w) => w.counts)), evidence: agg.totals.evidence },
+    agg.totals,
+    'sumWorkCounts 与汇总合计一致（证据一项按共用读数覆盖，见上面的例外）',
+  )
+  assertEq(PROG.buildWorkspaceProgress(snap, new Date(0)), report, '同一份磁盘状态 → 同一份报告（汇总不引入随机性）')
+  assertEq(PROG.aggregateWorks([]), null, '0 个工作 → 没有汇总')
+  assertEq(PROG.aggregateWorks([report.works[0]]), null, '1 个工作 → 没有汇总（单工作没有"合计"可言）')
+  assert(!/[\u4e00-\u9fff]/.test(JSON.stringify(agg)), '汇总只带稳定 key/数值，不带宿主中文文案（短语由客户端本地化）')
+
+  // 端点 == 纯函数（多工作时同样成立）
+  const handler = RPC.createSettingsRpcHandler({
+    getConfig: () => ({}),
+    store: CUST.createMemoryCustomizationStore(),
+    resolveSessionWorkspace: () => ws,
+  })
+  const res = await handler('progress/workspace', { sessionId: 's-agg' })
+  assertEq(res.value.research, true, '（前提）多工作工作区是研究项目')
+  assertEq({ ...res.value.report, at: null }, { ...report, at: null }, '端点结果 == 纯函数结果（多工作也一样）')
+  assertEq(res.value.report?.aggregate, agg, '端点带回汇总（面板拿到的就是这一个）')
+
+  // 单工作：**连字段都不带** —— 面板行为与加汇总之前一字不变
+  rmSync(join(ws, 'papers', 'paper-beta'), { recursive: true, force: true })
+  const one = PROG.buildWorkspaceProgress(PROG.captureProgress(ws, baseContent), new Date(0))
+  assertEq(one.works.length, 1, '（前提）删掉一篇后只剩一个工作')
+  assert(!('aggregate' in one), '单工作 → 报告里没有汇总字段')
+  assertEq(
+    Object.keys(one),
+    ['at', 'stateVersion', 'overall', 'works', 'progress', 'counts', 'paper', 'need'],
+    '单工作的字段集合与加汇总之前完全一致（旧客户端不会看到多余字段）',
+  )
+
+  /* ── 渲染（离线，无 DOM）：汇总块**真的**被画出来，而不只是源码里有 ──────────
+   *
+   * 把组件当普通函数跑，hooks 打桩、JSX 返回普通对象树 → 可以遍历出"面板实际渲染了
+   * 什么"。这条断言比源码正则强：它证明 props → 输出这条链真的通（组合错、条件写反、
+   * 数字传错都会在这里现形），也是在没有浏览器的情况下能做的最接近"看一眼"的检查。
+   * ──────────────────────────────────────────────────────────────────── */
+  console.log('\n[5e] 总览渲染（离线）：两个工作画出汇总块，单工作 / 工作 tab 不画')
+  const dict = (await import(join(PKG, 'src', 'client', 'i18n', 'en.ts'))).en
+  const mkT = (d) => (key, params) => {
+    const tpl = d[key] ?? key
+    return params ? tpl.replace(/\{(\w+)\}/g, (m, n) => (n in params ? String(params[n]) : m)) : tpl
+  }
+  const bundleSource = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
+  let capturedModule = null
+  new Function('window', bundleSource)({ __ModuleLoader__: { load: (m) => { capturedModule = m } } })
+  /** 把面板"渲染"成一棵普通对象树（hooks 打桩；不做 DOM、不装 react-dom）。 */
+  const render = (rep, workId = '') => {
+    const initial = [
+      { kind: 'shown', workspace: '/a/b/workspace', report: rep, lastTurn: null },
+      true, false, false, { top: 0, right: 0 }, workId,
+    ]
+    let hook = 0
+    const noop = () => {}
+    const ReactStub = {
+      Fragment: Symbol.for('react.fragment'),
+      createElement: (type, props, ...children) => ({
+        type,
+        props: { ...(props ?? {}), children: children.length > 1 ? children : children[0] },
+      }),
+      useState: (v) => [hook < initial.length ? initial[hook++] : v, noop],
+      useEffect: noop,
+      useLayoutEffect: noop,
+      useRef: () => ({ current: null }),
+      useCallback: (fn) => fn,
+    }
+    const jsxStub = (type, props) => ({ type, props: props ?? {} })
+    const fakeRequire = (id) => {
+      if (id === 'react') return ReactStub
+      if (id === 'react/jsx-runtime') return { jsx: jsxStub, jsxs: jsxStub, Fragment: ReactStub.Fragment }
+      throw new Error(`客户端 bundle 只该 require react / react/jsx-runtime，却要了 ${id}`)
+    }
+    return capturedModule.factory(fakeRequire).ResearchProgressButton({ sessionId: 's-render', t: mkT(dict) })
+  }
+  const texts = (node, out = []) => {
+    if (node === null || node === undefined || typeof node === 'boolean') return out
+    if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
+    if (Array.isArray(node)) { for (const n of node) texts(n, out); return out }
+    if (typeof node === 'object' && 'props' in node) texts(node.props?.children, out)
+    return out
+  }
+  const find = (node, pred, out = []) => {
+    if (!node || typeof node !== 'object') return out
+    if (Array.isArray(node)) { for (const n of node) find(n, pred, out); return out }
+    if ('props' in node) {
+      if (pred(node)) out.push(node)
+      find(node.props?.children, pred, out)
+    }
+    return out
+  }
+  const aggBlocksIn = (tree) => find(tree, (n) => n.props?.['data-convfusion-progress-aggregate'] !== undefined)
+  const tabsIn = (tree) => find(tree, (n) => n.props?.['data-convfusion-progress-tabs'] !== undefined)
+
+  const overview = render(report)
+  assertEq(aggBlocksIn(overview).length, 1, '两个工作 + 总览 → 汇总块真的渲染出来')
+  assertEq(tabsIn(overview).length, 1, '（前提）两个工作 → 有 tab 条')
+  const aggText = texts(aggBlocksIn(overview)[0]).join(' | ')
+  assert(
+    aggText.includes(dict['progress.works.totals'].replace('{count}', '2')),
+    '合计行写明确实是 2 个工作',
+  )
+  assert(
+    aggText.includes(report.works[0].short) && aggText.includes(report.works[1].short),
+    '两个工作各占一行（总览概括**所有**工作，不是复述某一个）',
+  )
+  assert(
+    aggText.includes(`${agg.totals.sectionsWithContent}/${agg.totals.sections}`),
+    `合计行的章节数 = 各工作之和（${agg.totals.sectionsWithContent}/${agg.totals.sections}）`,
+  )
+  assert(aggText.includes('1 (1)'), '某一行的"无支撑主张"以括号子集画出（不是只给总数）')
+  const hint = find(aggBlocksIn(overview)[0], (n) =>
+    String(n.props?.title ?? '') === dict['progress.work.count.claimsWithoutEvidence'].replace('{count}', '1'),
+  )
+  assert(hint.length >= 1, '括号里的子集含义有悬停说明（面板里不塞解释文字）')
+  // 证据列：共用证据库只报一份，且每格都带"共用证据库"的悬停说明（否则会被看成漏加了）
+  const sharedEvidenceCells = find(aggBlocksIn(overview)[0], (n) =>
+    String(n.props?.title ?? '').includes(dict['progress.works.evidenceShared']),
+  )
+  const evidenceCellText = (n) => (n > 0 ? `${agg.totals.evidence} (${n})` : String(agg.totals.evidence))
+  assertEq(
+    sharedEvidenceCells.map((n) => texts(n).join('')),
+    [
+      ...report.works.map((w) => evidenceCellText(w.counts.evidenceUsedInManuscript)),
+      evidenceCellText(agg.totals.evidenceUsedInManuscript),
+    ],
+    '证据列：两个工作各一份共享读数，合计也是**一份**（不相加），并带悬停说明',
+  )
+  assert(
+    aggText.includes(`${Math.round(report.works[0].overall * 100)}%`),
+    '每行带该工作自己的成熟度折算',
+  )
+  // 总览仍然保留**项目级**的 A / A2 / B / C（它们不是分工作的读数）
+  const overviewText = texts(overview).join(' | ')
+  assert(overviewText.includes(dict['progress.section.maturity']), '总览仍保留项目级 A（Research State 成熟度）')
+  assert(overviewText.includes(dict['progress.section.assets']), '总览仍保留项目级 A2（可数资产）')
+  assert(overviewText.includes(dict['progress.section.need']), '总览仍保留项目级 C（缺口与推进判定）')
+
+  const onWork = render(report, report.works[0].id)
+  assertEq(aggBlocksIn(onWork).length, 0, '工作 tab → 不画汇总块（汇总只属于总览）')
+  assertEq(tabsIn(onWork).length, 1, '工作 tab 仍在 tab 条里（切换没被汇总块挡住）')
+  assert(
+    texts(onWork).includes(dict['progress.work.section.assets']),
+    '工作 tab 渲染的是该工作自己的资产一段（原行为未变）',
+  )
+
+  const only = render(one)
+  assertEq(aggBlocksIn(only).length, 0, '单工作 → 不画汇总块（行为与加汇总之前一致）')
+  assertEq(tabsIn(only).length, 0, '单工作 → 也没有 tab 条')
+
+  const zero = mkdtempSync(join(tmpdir(), 'cf-agg-zero-'))
+  assert(!('aggregate' in PROG.buildWorkspaceProgress(PROG.captureProgress(zero, baseContent))), '0 个工作 → 也没有汇总字段')
+  rmSync(zero, { recursive: true, force: true })
+  rmSync(ws, { recursive: true, force: true })
+
+  // 汇总用的每个词条都必须中英双语（宿主不传成品文案 → 客户端不能缺词条）
+  const enDict = (await import(join(PKG, 'src', 'client', 'i18n', 'en.ts'))).en
+  const zhDict = (await import(join(PKG, 'src', 'client', 'i18n', 'zh.ts'))).zh
+  const aggKeys = [
+    'progress.works.section.aggregate',
+    'progress.works.col.work', 'progress.works.col.maturity', 'progress.works.col.sections',
+    'progress.works.col.claims', 'progress.works.col.evidence', 'progress.works.col.gaps',
+    'progress.works.col.proposals', 'progress.works.totals', 'progress.works.derived',
+    'progress.works.evidenceShared',
+  ]
+  assertEq(aggKeys.filter((k) => !(k in enDict) || !(k in zhDict)), [], '汇总用到的每个 key 都有中英双语')
+  assert(
+    /\{count\}/.test(enDict['progress.works.totals']) && /\{count\}/.test(zhDict['progress.works.totals']),
+    '「合计」一行两种语言都带 {count} 占位符（同 key 同占位符）',
+  )
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -625,6 +989,19 @@ console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会�
   assert(!bundle.includes('conversation.chat.turnTail'), 'bundle 不再占用对话流尾部的链式槽位（不再抢 deliverables）')
   assert(!bundle.includes('conversation.input.dock'), 'bundle 不再用预热组件（判定不再依赖"先挂载过"）')
   assert(bundle.includes('progress/workspace'), 'bundle 调的是新端点 progress/workspace')
+  // 多研究工作：tab 条**只在多于一个**工作时出现（单工作必须与从前完全一致）
+  assert(/works\.length > 1/.test(srcCode), 'tab 判定 = 工作数 > 1（单工作不加一层切换）')
+  assert(bundle.includes('data-convfusion-progress-tabs'), '多工作时渲染工作 tab 条')
+  assert(/report\?\.works \?\? \[\]/.test(srcCode), 'works 按可选读（老宿主缺字段时退回聚合视图）')
+  // 总览（多工作）：汇总块只在「总览 + 多于一个工作」时出现，行/合计都来自宿主那一个字段
+  assert(/multi && report\.aggregate/.test(srcCode), '汇总块的条件 = 总览 + 多于一个工作（单工作不渲染）')
+  assert(/report\.aggregate\.rows\.map/.test(srcCode), '工作行来自宿主的汇总（界面不自己聚合）')
+  assert(/report\.aggregate\.totals/.test(srcCode), '合计行来自宿主的汇总（界面不自己求和）')
+  assert(
+    !/\.reduce\(\(a, w\) => a \+ w\.counts/.test(srcCode),
+    '界面不对各工作计数求和（求和只有宿主一处，避免两处漂移）',
+  )
+  assert(bundle.includes('data-convfusion-progress-aggregate'), '多工作的总览渲染汇总块（带标记属性，便于人工与离线确认）')
 
   /* ── 图标旁的百分比（用户要求）+ 面板必须是**浅色**底 ──────────────────
    *

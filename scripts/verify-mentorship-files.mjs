@@ -1093,7 +1093,20 @@ section('[9] 学生更新工作区的检测（水位 → 比对 → 提示）')
   const wm = { updatedAt: WM_AT, fileCount: 3, downloadedAt: '2026-10-01T11:00:00.000Z' }
 
   /* ── ① 判据函数：两条互补判据 + 三态（纯函数先钉住）───────────────────── */
-  assertEq(SW.checkStudentChange(undefined, WM_AT, 3), null, '从没下载过 → 无从判断（不编造"有更新"）')
+  /*
+   * **从没下载过 ≠ 无从判断**（2026-10 用户指出）：手里没有副本，这本身就是该下载的理由 ——
+   * 早先这里返回 null（界面一声不吭），真实反馈就是"学生明明更新过了，导师侧没有任何提示"。
+   */
+  assertEq(
+    SW.checkStudentChange(undefined, WM_AT, 3),
+    { neverDownloaded: true },
+    '从没下载过 → 明确说"该下载"（不是无从判断）',
+  )
+  assertEq(
+    SW.checkStudentChange(undefined, undefined, undefined),
+    { neverDownloaded: true },
+    '从没下载过：服务器给不给字段都不影响 —— 反正要先下载一次',
+  )
   assertEq(SW.checkStudentChange(wm, undefined, undefined), null, '旧服务器不给列表字段 → 无从判断')
   assertEq(SW.checkStudentChange(wm, null, null), null, '服务器说不可知 → 无从判断（查不到 ≠ 没有）')
   assertEq(
@@ -1258,17 +1271,20 @@ section('[9] 学生更新工作区的检测（水位 → 比对 → 提示）')
   assertEq(e.workspaceUpdatedAt, undefined, '(e) 时间戳同样缺失')
   assertEq(e.sync, null, '(e) 没有字段就无从判断 → null（界面不提示）')
 
-  // (f) **这个项目从没下载过**（store 里只有上面那个项目的水位）→ null：不编造"有更新"
+  // (f) **这个项目从没下载过**（store 里只有上面那个项目的水位）→ 提示"该下载"
   const [f2] = await list([baseProposal({
     project_id: 'never-downloaded',
     workspace_updated_at: '2026-10-02T09:00:00+08:00',
     workspace_files: 9,
   })])
-  assertEq(f2.sync, null, '(f) 没有水位 → null（不是 true，也不是 false）')
+  assertEq(f2.sync, { neverDownloaded: true }, '(f) 没有水位 → 该下载（不是"无从判断"、也不是"没更新"）')
 
-  // (g) 宿主没装 syncStore（精简环境）→ 一律 null，不报错
+  /*
+   * (g) 宿主**没有水位存储**（精简环境）→ null：这台机器**记不住**下载过什么，
+   * 与"记得、只是没下过"（→ neverDownloaded）是两件事。
+   */
   const [g] = await list([baseProposal({ workspace_updated_at: '2026-10-02T09:00:00+08:00', workspace_files: 9 })], false)
-  assertEq(g.sync, null, '(g) 没有水位存储 → null（提示能力缺席 ≠ 报错）')
+  assertEq(g.sync, null, '(g) 没有水位存储 → null（记不住 ≠ 没下载过）')
 
   // (h) 只有 ACCEPTED 才挂 sync：PROPOSED 行不谈"学生更新"
   const [h] = await list([baseProposal({ status: 'PROPOSED' })])

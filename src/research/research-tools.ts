@@ -2086,7 +2086,10 @@ export function defineResearchTools(
           ...listClaims(ws).map((c) => c.id),
           ...listEvidence(ws).map((e) => e.id),
         ])
-        const options = { showDescriptions: a.show_descriptions === true, knownRefs }
+        // 只在**显式为 true** 时才传该键：否则一个恒为布尔的 false 会让 layout.ts 的
+        // `options.showDescriptions ?? diagram.showDescriptions === true` 永不回退到 IR，
+        // 于是 IR 里的 show_descriptions:true 被静默忽略（实测：每个节点只剩标签，描述全丢）。
+        const options = { ...(a.show_descriptions === true ? { showDescriptions: true } : {}), knownRefs }
 
         if (action === 'validate') {
           const inspection = inspectDiagram(raw, options)

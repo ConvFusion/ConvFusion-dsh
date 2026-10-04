@@ -3,7 +3,7 @@ name: Innovation Gap Analysis
 category: innovation/innovation-gap-analysis
 type: system
 status: active
-version: 1.0
+version: 1.1
 origin: conception/understanding, conception/gap-discovery
 ---
 
@@ -38,6 +38,14 @@ requires: literature-evidence | 缺口是文献图景上的判断，需先有文
 5. **Name the mechanism that produces the gap.** "No method handles X" is a description; "existing methods assume Y, which fails when X" is a mechanism, and it predicts what a solution must change. Prefer mechanistic gap statements.
 6. **Rank by consequence, not by ease of filling.** For each gap state what becomes possible if it is closed and which existing result would be overturned. A gap that changes nothing measurable is not worth a project.
 7. **Record contradiction pairs explicitly.** When two works disagree, keep both citations and state the condition under which each could be right — that condition is frequently the research question.
+
+### Measurement gaps: the construct matters but no instrument exists
+
+Not every gap is a missing method. A **measurement gap** is present when a quantity the field cares about cannot be measured with any existing resource — no dataset carries the needed annotation, or no metric expresses it.
+
+1. **Check for it early.** Ask of each candidate gap: "with what data and metric would we decide whether this is closed?" If the honest answer is "nothing that exists", the gap is a measurement gap.
+2. **Decide what that makes the paper.** Building the instrument can be a contribution in its own right (see contribution-design), or the work can proceed with a purpose-built instrument declared as such — but that choice fixes scale, verification and budget from the start.
+3. **Never let a measurement gap surface after the experiments.** It is a design-time finding: it changes the task-authoring plan, the verification plan and the cost estimate.
 
 ## Reasoning Guidance
 

@@ -101,6 +101,14 @@ export interface NormalizedLabel {
 export const LAYER_GAP_MIN = 12
 export const LAYER_GAP_MAX = 120
 
+/** 并排泳道之间水平间距的范围（见 `DiagramLayoutSpec.group_gap`）。 */
+export const GROUP_GAP_MIN = 24
+export const GROUP_GAP_MAX = 240
+
+/** 线间最小间距的范围（见 `DiagramLayoutSpec.edge_gap`）。 */
+export const EDGE_GAP_MIN = 0
+export const EDGE_GAP_MAX = 24
+
 export interface NormalizedDiagram {
   version: string
   type: DiagramType
@@ -109,6 +117,12 @@ export interface NormalizedDiagram {
   algorithm: LayoutAlgorithm
   /** 层间距覆盖值（未指定时用 `LAYOUT.layerGap`）。 */
   layerGap?: number
+  /** 顶层 group 的排布方式（见 `DiagramLayoutSpec.arrange`）。 */
+  arrange?: 'auto' | 'lanes'
+  /** 并排 cluster 之间的水平间距（见 `DiagramLayoutSpec.group_gap`）。 */
+  groupGap?: number
+  /** 线间最小间距（见 `DiagramLayoutSpec.edge_gap`）。 */
+  edgeGap?: number
   /** 是否显示节点说明（来自 IR；渲染调用的显式参数优先）。 */
   showDescriptions?: boolean
   canvas: { width?: number; height?: number }
@@ -201,6 +215,30 @@ export function normalizeIr(raw: unknown): NormalizeResult {
       layerGap = clamped
     }
   }
+  /** 一个"数值 + 范围"的通用解析：类型错报 error，越界 clamp 并 warning。 */
+  const pickNumber = (raw: unknown, field: string, min: number, max: number, hint: string): number | undefined => {
+    if (raw === undefined) return undefined
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+      diagnostics.push(error('BAD_FIELD_TYPE', `layout.${field} must be a number, got ${JSON.stringify(raw)}.`, undefined, hint))
+      return undefined
+    }
+    const clamped = Math.min(max, Math.max(min, raw))
+    if (clamped !== raw) {
+      diagnostics.push(warning('BAD_FIELD_TYPE', `layout.${field} ${raw} is outside [${min}, ${max}] and was clamped to ${clamped}.`, undefined, hint))
+    }
+    return clamped
+  }
+  let arrange: 'auto' | 'lanes' | undefined
+  if (layoutRaw.arrange !== undefined) {
+    if (layoutRaw.arrange === 'auto' || layoutRaw.arrange === 'lanes') arrange = layoutRaw.arrange
+    else {
+      diagnostics.push(
+        warning('BAD_FIELD_TYPE', `layout.arrange must be "auto" or "lanes", got ${JSON.stringify(layoutRaw.arrange)}; falling back to "auto".`, undefined, 'Use "lanes" to place top-level groups side by side.'),
+      )
+    }
+  }
+  const groupGap = pickNumber(layoutRaw.group_gap, 'group_gap', GROUP_GAP_MIN, GROUP_GAP_MAX, 'A gap of 100-140 units reads as "two separate lanes" at page width.')
+  const edgeGap = pickNumber(layoutRaw.edge_gap, 'edge_gap', EDGE_GAP_MIN, EDGE_GAP_MAX, '0 disables the minimum-separation rule; 6-12 is a visible separation in print.')
   if (layoutRaw.algorithm !== undefined && pickEnum(layoutRaw.algorithm, LAYOUT_ALGORITHMS) === undefined) {
     diagnostics.push(
       error('UNKNOWN_LAYOUT_ALGORITHM', `Unknown layout.algorithm: ${JSON.stringify(layoutRaw.algorithm)}`, undefined, `Use one of: ${LAYOUT_ALGORITHMS.join(', ')}.`),
@@ -587,6 +625,9 @@ export function normalizeIr(raw: unknown): NormalizeResult {
       direction,
       algorithm,
       ...(layerGap !== undefined ? { layerGap } : {}),
+      ...(arrange !== undefined ? { arrange } : {}),
+      ...(groupGap !== undefined ? { groupGap } : {}),
+      ...(edgeGap !== undefined ? { edgeGap } : {}),
       ...(src.show_descriptions === true ? { showDescriptions: true } : {}),
       canvas,
       nodes,

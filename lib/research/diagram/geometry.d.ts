@@ -49,6 +49,27 @@ export declare function longestSegment(points: readonly Point[]): {
  */
 export declare function charWidthEm(ch: string): number;
 /** 一行文本的视觉宽度（px）。 */
+/** 一个标签行拆成的排版 run：普通文字 / 数学斜体 / 下标 / 上标。 */
+export interface TextRun {
+    kind: 'text' | 'math' | 'sub' | 'sup';
+    text: string;
+}
+/** 上下标的相对字号（业界常用 0.7 左右）。 */
+export declare const SUB_SUP_SCALE = 0.72;
+/**
+ * 解析标签里的**受限公式标记**。
+ *
+ * 为什么只做受限子集而不是 LaTeX：图里的公式只有"变量 + 上下标"这一种形态
+ * （`S_{t+1}`、`D_t`），而 SVG 的 `<tspan>` 只能表达字形级别的排版。
+ * 完整 LaTeX 需要 TeX 引擎，那就把"确定性渲染"这条底线交出去了。
+ * 因此只支持三种记号：`$...$`（数学斜体）、`_{...}`（下标）、`^{...}`（上标）；
+ * 未配对 `$` 或后接非 `{` 的单个字符也接受（`$R_t$`）。
+ */
+export declare function parseLabelRuns(line: string): TextRun[];
+/** 按 run 计算宽度（上下标按缩小字号）。 */
+export declare function measureRuns(runs: readonly TextRun[], fontSize: number): number;
+/** 纯文本宽度（不含公式标记语义）。 */
+export declare function measureTextPlain(text: string, fontSize: number): number;
 export declare function measureText(text: string, fontSize: number): number;
 /**
  * 按**视觉宽度**换行。
@@ -79,4 +100,15 @@ export declare function simplifyPolyline(points: readonly Point[]): Point[];
  * 最容易被当成画错的一类，必须在 diagnostics 里点名并给出**实测长度**。
  */
 export declare function collinearOverlap(a1: Point, a2: Point, b1: Point, b2: Point): number;
+/** 点到线段的最短距离。 */
+export declare function pointSegmentDistance(p: Point, a: Point, b: Point): number;
+/**
+ * 两条线段的**最短间距**：相交记为 0，否则取四个端点到对方线段距离的最小值。
+ *
+ * 用于 `layout.edge_gap` 的"线之间必须留出间距"约束 —— 共线重叠检测（`collinearOverlap`）
+ * 只抓同一条直线上的叠置，抓不到"两条近平行线贴得很近"。
+ */
+export declare function segmentDistance(a1: Point, a2: Point, b1: Point, b2: Point): number;
+/** 两条线段是否**真相交**（用于把"交叉"与"并排过近"区分开）。 */
+export declare function segmentsIntersect(a1: Point, a2: Point, b1: Point, b2: Point): boolean;
 //# sourceMappingURL=geometry.d.ts.map

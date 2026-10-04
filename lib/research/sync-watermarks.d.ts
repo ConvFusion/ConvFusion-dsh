@@ -63,16 +63,37 @@ export interface SyncWatermark {
     downloadedAt: string;
 }
 /**
- * "学生那一侧动过吗"的判读结果（三态里的一半；另一半是"无从判断"）。
+ * "导师手里这份工作区是不是最新"的判读结果。
  *
- * - `changed: true` + `reason: 'uploaded'` —— 时间戳变大：学生传了新文件；
- * - `changed: true` + `reason: 'deleted'`  —— 文件数变了而时间戳没动：学生删了文件；
- * - `changed: false` —— 两个已知判据都说"没动"。
+ * | 情形 | 值 | 界面 |
+ * |---|---|---|
+ * | **从没下载过** | `{ neverDownloaded: true }` | 提示"先下载"——**手里没有副本本身就是该下载的理由** |
+ * | 下载过、学生又动过 | `{ changed: true, reason: 'uploaded' \| 'deleted' }` | 提示"学生更新了 / 删除了，需要重新下载" |
+ * | 下载过、学生没动 | `{ changed: false, reason: null }` | 不提示 |
+ *
+ * `null`（函数返回 `null`）单独表示**无从判断**：旧服务器不给列表字段、
+ * 服务器说不可知、或只有一半判据可用 —— 三种都不该编造"有更新"，也不该说"没更新"。
+ *
+ * ⚠️ **"从没下载过"必须与"无从判断"分开**（2026-10 用户指出）：
+ * 导师手里没有这个工作区的副本时，"学生有没有更新"其实不重要 —— 他**反正要下载一次**。
+ * 早先把两者都塞进 `null`，结果是"没下载过"也一声不吭（真实反馈：导师在【指导中】
+ * 看不到任何提示，而学生明明已经更新过了）。
  */
-export interface StudentSyncCheck {
-    changed: boolean;
-    reason: 'uploaded' | 'deleted' | null;
+export type StudentSyncCheck = 
+/** 本地没有这个项目的水位 = 从没成功下载过 → 该下载（与"无从判断"是两件事）。 */
+{
+    neverDownloaded: true;
 }
+/** 下载过，且学生那一侧动过（时间戳变大 / 文件数变了）。 */
+ | {
+    changed: true;
+    reason: 'uploaded' | 'deleted';
+}
+/** 下载过，两个判据都说没动。 */
+ | {
+    changed: false;
+    reason: null;
+};
 export interface SyncWatermarkStore {
     /** 读一条水位（没有下载记录 → `undefined`，**不是**"没更新"）。 */
     get(serverUrl: string, projectId: string): SyncWatermark | undefined;
@@ -92,12 +113,12 @@ export declare function createMemorySyncWatermarkStore(seed?: Record<string, Syn
 /**
  * 判读：**上一次下载之后，学生那一侧动过吗？**
  *
- * 三个输入两两独立，因此有几种"无从判断"，一律返回 `null`（**不**编成"没更新"）：
+ * 四种结果，**"该下载"与"无从判断"分开**：
  *
- * | 情况 | 返回 | 为什么不能说 `false` |
+ * | 情况 | 返回 | 为什么 |
  * |---|---|---|
- * | 从没下载过（`wm` 缺失） | `null` | 没有基准，谈不上"变过" |
- * | 旧服务器不给列表字段 | `null` | 服务器这一版不会说 |
+ * | 从没下载过（`wm` 缺失） | `{ neverDownloaded: true }` | 手里没有副本 → **该下载**（不需要知道学生有没有动过） |
+ * | 旧服务器不给列表字段 | `null` | 服务器这一版不会说 → 不编造 |
  * | 服务器说不可知（`null`） | `null` | 查不到 ≠ 没有（三态纪律） |
  * | 只有一半判据可用（如 `fileCount` 是 `null`） | `null` | 查不全 ≠ 没变（会漏掉那次看不见的删除） |
  *

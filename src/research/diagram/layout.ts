@@ -289,6 +289,38 @@ export function layoutDiagram(diagram: NormalizedDiagram, options: RenderOptions
    * 内容多、链条长的图需要密排才能在论文里保持可读，密排与否属于**这张图**的决定。
    */
   const layerGap = diagram.layerGap ?? LAYOUT.layerGap
+  /** 顶层 group 并排排布（见 `DiagramLayoutSpec.arrange`）。 */
+  const arrange = diagram.arrange ?? 'auto'
+  /** 并排 cluster 之间的水平间距。 */
+  const groupGap = diagram.groupGap ?? 110
+  /** 线间最小间距；0 = 关闭（默认，保持旧版式完全不变）。 */
+  const edgeGap = diagram.edgeGap ?? 0
+  /**
+   * 并排泳道下的**走廊模型**（只有 `arrange: "lanes"` 且方向为 LR 时填充）。
+   *
+   * 为什么需要它：分层路由按"层序"决定出入侧与折线通道，并排排布之后层序不再对应几何
+   * 位置 —— 跨簇边的 v 向移动会落在泳道内部，直接穿过节点（实测 `ir → guards`、
+   * `exev → ir` 穿过 `reject`）。走廊模型把这几个**自由空间**显式算出来，
+   * 跨簇边一律沿走廊走：泳道之间的竖向空档、泳道下方的横向总线、以及最外侧通道。
+   */
+  interface LaneCorridor {
+    /** 每个 cluster（顶层 group）的流向空间矩形，按 x 升序。 */
+    clusters: Array<{ id: string; x0: number; x1: number; y0: number; y1: number; ids: Set<string> }>
+    /** 每列泳道的"外侧"走廊 x：index 0 = 最左泳道左侧，k = 泳道 k 与 k+1 之间，n = 最右泳道右侧。 */
+    corridorX: number[]
+    /** 泳道下方的横向总线 y（在泳道底与松散节点顶之间）。 */
+    busY: number
+    /** 总线可用的最低 y —— 分道错位不得越过它，否则线就会切进松散节点带。 */
+    busMaxY: number
+    /** 节点 → cluster 下标（-1 = 非分组节点）。 */
+    nodeCluster: Map<string, number>
+  }
+  let laneCorridor: LaneCorridor | null = null
+  /**
+   * 并排泳道下走廊/总线的**分道步长**：必须明显大于 `edge_gap`，否则"相邻两条道"
+   * 的距离正好等于阈值、校验器仍会判为过近（实测 8 单位步长 + `edge_gap = 8` 触发 8 条警告）。
+   */
+  const routeStep = edgeGap > 0 ? Math.max(4, edgeGap * 1.25) : 6
 
   /* ── 1. 节点尺寸（由文字决定，不由 Agent 决定）───────────────────── */
   const sizes = new Map<string, NodeBox>()
@@ -651,6 +683,145 @@ export function layoutDiagram(diagram: NormalizedDiagram, options: RenderOptions
     }
   }
 
+  /* ── 6.5 顶层 group 并排排布（`layout.arrange: "lanes"`）────────────
+   * 目标版式：顶层 group 作为 cluster 在**同一带内左右并排、顶部对齐**（间距 groupGap），
+   * 非分组节点统一排到 cluster 带**之下**。
+   *
+   * 为什么必须单独一个 pass：`needsLane()` 只在"层区间里混进了外来节点"时给泳道，
+   * 否则 group 走就地排版 —— 两个 group 于是各自贴着子节点，在屏幕上走成**对角**；
+   * 而真正的泳道只能沿 v 方向堆叠。所以"两个并排泳道框 + 其余节点在下方"
+   * 在分层引擎里没有对应表达，只能显式重排。此处仍在**流向空间**里做，
+   * 路由、容器框、通道簿记都在这之后计算，于是它们自动跟着新位置走。
+   */
+  if (arrange === 'lanes' && flowBoxes.length > 0) {
+    if (diagram.direction !== 'LR' && diagram.direction !== 'TB') {
+      diagnostics.push(
+        warning('UNSUPPORTED_IN_MODE', `layout.arrange "lanes" supports LR and TB only; "${diagram.direction}" falls back to "auto".`, undefined, 'Use direction LR or TB, or drop arrange.'),
+      )
+    } else {
+      // 屏幕 x 轴 / y 轴分别对应哪条流向轴
+      const xAxis: 'u' | 'v' = diagram.direction === 'LR' ? 'u' : 'v'
+      const yAxis: 'u' | 'v' = diagram.direction === 'LR' ? 'v' : 'u'
+      const gx = (b: FlowBox): number => (xAxis === 'u' ? b.u : b.v)
+      const gy = (b: FlowBox): number => (yAxis === 'u' ? b.u : b.v)
+      const sx = (b: FlowBox): number => (xAxis === 'u' ? b.uSize : b.vSize)
+      const sy = (b: FlowBox): number => (yAxis === 'u' ? b.vSize : b.uSize)
+      const moveX = (b: FlowBox, v: number): void => { if (xAxis === 'u') b.u = v; else b.v = v }
+      const moveY = (b: FlowBox, v: number): void => { if (yAxis === 'u') b.u = v; else b.v = v }
+      const boxByNode = new Map(flowBoxes.map((b) => [b.node.id, b]))
+
+      /** 递归收集一个 group 下的全部节点 id。 */
+      const collectNodes = (rootId: string): string[] => {
+        const out: string[] = []
+        const walk = (id: string): void => {
+          const g = diagram.groups.find((x) => x.id === id)
+          if (g === undefined) {
+            if (boxByNode.has(id)) out.push(id)
+            return
+          }
+          for (const m of g.members) walk(m)
+        }
+        walk(rootId)
+        return out
+      }
+      const topGroups = diagram.groups.filter((g) => g.parent === undefined).sort((a, b) => a.order - b.order)
+      const clustered = new Set<string>()
+      const clusters: string[][] = []
+      for (const g of topGroups) {
+        const ids = collectNodes(g.id)
+        if (ids.length === 0) continue
+        for (const id of ids) clustered.add(id)
+        clusters.push(ids)
+      }
+      const loose = diagram.nodes.map((n) => n.id).filter((id) => !clustered.has(id) && boxByNode.has(id))
+
+      if (clusters.length > 1) {
+        /** cluster 框（含容器装修）沿 x 的宽度。 */
+        const metrics = clusters.map((ids) => {
+          const boxes = ids.map((id) => boxByNode.get(id) as FlowBox)
+          const x0 = Math.min(...boxes.map(gx))
+          const x1 = Math.max(...boxes.map((b) => gx(b) + sx(b)))
+          const y0 = Math.min(...boxes.map(gy))
+          return { x0, y0, w: x1 - x0 + 2 * LAYOUT.groupPadding }
+        })
+        let cursor = 0
+        clusters.forEach((ids, i) => {
+          const m = metrics[i] as { x0: number; y0: number; w: number }
+          const dx = cursor + LAYOUT.groupPadding - m.x0
+          const dy = LAYOUT.groupPadding + LAYOUT.groupLabelBand - m.y0 // 顶部对齐到 0
+          for (const id of ids) {
+            const b = boxByNode.get(id) as FlowBox
+            moveX(b, gx(b) + dx)
+            moveY(b, gy(b) + dy)
+          }
+          cursor += m.w + groupGap
+        })
+        if (loose.length > 0) {
+          const bottom =
+            Math.max(...[...clustered].map((id) => gy(boxByNode.get(id) as FlowBox) + sy(boxByNode.get(id) as FlowBox))) +
+            LAYOUT.groupPadding // 泳道框下沿（节点下沿 + 装修），带宽按框算才不会被装修吃掉
+          const top = Math.min(...loose.map((id) => gy(boxByNode.get(id) as FlowBox)))
+          // 泳道框下沿与松散节点之间要留出**总线带**：跨簇边全在这里分道，
+          // 只留一个 layerGap 时带宽不足，分道退化成一条 → 五条线叠成一根（实测）。
+          const busBand = Math.max(layerGap * 2, 6 * routeStep + 20)
+          const dy = bottom + busBand - top
+          for (const id of loose) {
+            const b = boxByNode.get(id) as FlowBox
+            moveY(b, gy(b) + dy)
+          }
+        }
+        // 走廊模型：泳道矩形（含装修）+ 之间/两侧的竖向自由档 + 泳道下方总线
+        if (diagram.direction === 'LR') {
+          const rects = clusters.map((ids, i) => {
+            const boxes = ids.map((id) => boxByNode.get(id) as FlowBox)
+            const x0 = Math.min(...boxes.map(gx)) - LAYOUT.groupPadding
+            const x1 = Math.max(...boxes.map((b) => gx(b) + sx(b))) + LAYOUT.groupPadding
+            const y0 = Math.min(...boxes.map(gy)) - LAYOUT.groupPadding - LAYOUT.groupLabelBand
+            const y1 = Math.max(...boxes.map((b) => gy(b) + sy(b))) + LAYOUT.groupPadding
+            return { id: `cluster${i}`, x0, x1, y0, y1, ids: new Set(ids) }
+          })
+          rects.sort((a, b) => a.x0 - b.x0)
+          const corridorX: number[] = []
+          corridorX.push(rects[0]!.x0 - layerGap * 1.2)
+          for (let i = 0; i + 1 < rects.length; i++) {
+            corridorX.push((rects[i]!.x1 + rects[i + 1]!.x0) / 2)
+          }
+          corridorX.push(rects[rects.length - 1]!.x1 + layerGap * 1.2)
+          const clusterBottom = Math.max(...rects.map((r) => r.y1))
+          const looseTop = loose.length > 0
+            ? Math.min(...loose.map((id) => gy(boxByNode.get(id) as FlowBox)))
+            : clusterBottom + layerGap
+          const nodeCluster = new Map<string, number>()
+          for (const n of diagram.nodes) {
+            const idx = rects.findIndex((r) => r.ids.has(n.id))
+            if (idx >= 0) nodeCluster.set(n.id, idx)
+          }
+          const busY = clusterBottom + Math.max(8, (looseTop - clusterBottom) * 0.25)
+          if (process.env.DBG_LANES === '1') {
+            console.log('[lanes]', JSON.stringify({ clusterBottom, looseTop, busY, busMaxY: looseTop - 10, corridorX: corridorX.map((v) => Math.round(v)) }))
+          }
+          laneCorridor = {
+            clusters: rects,
+            corridorX,
+            busY,
+            // 留出 10 单位余量：分道错位最多把总线推到 looseTop - 10
+            busMaxY: looseTop - 10,
+            nodeCluster,
+          }
+        }
+        // 通道簿记跟着实际位置更新（实验：可开关）
+        for (const l of layerIndexes) {
+          const bucket = flowBoxes.filter((b) => (layerOf.get(b.node.id) ?? 0) === l)
+          if (bucket.length === 0) continue
+          const u0 = Math.min(...bucket.map((b) => b.u))
+          const u1 = Math.max(...bucket.map((b) => b.u + b.uSize))
+          bandStart.set(l, u0)
+          bandWidth.set(l, u1 - u0)
+        }
+      }
+    }
+  }
+
   /* ── 7. 流向 → 屏幕 ─────────────────────────────────────────────── */
   const mapPoint = (u: number, v: number): Point => {
     switch (diagram.direction) {
@@ -745,7 +916,8 @@ export function layoutDiagram(diagram: NormalizedDiagram, options: RenderOptions
    * 完全重合（实测 RDP 图 e12 ↔ e13 重合 24.3 单位）。按边序在通道内错开几个单位，
    * 既保持正交、又不会越出通道（通道宽 = layerGap，错位幅度 ≤3）。
    */
-  const laneNudge = (order: number): number => (((order % 4) - 1.5) * 2)
+  const nudgeUnit = edgeGap > 0 ? Math.max(2, edgeGap / 1.5) : 2
+  const laneNudge = (order: number): number => (((order % 4) - 1.5) * nudgeUnit)
 
   const laneBefore = (l: number): number => {
     const idx = layerIndexes.indexOf(l)
@@ -877,6 +1049,11 @@ export function layoutDiagram(diagram: NormalizedDiagram, options: RenderOptions
    */
   let topLaneUse = 0
   let bottomLaneUse = 0
+  /** 走廊与总线的占用计数（并排泳道模式；按边序确定性递增，避免共线叠置）。 */
+  const corridorUse = new Map<number, number>()
+  const busUse = { n: 0 }
+  /** 松散节点（泳道下方的 ir/state）上下入口的交替错位计数。 */
+  const loosePortUse = new Map<string, number>()
 
   /** 已经放好的边标签矩形：后面的标签要避开它们（贪心、确定性）。 */
   const placedLabelRects: Rect[] = []
@@ -886,7 +1063,152 @@ export function layoutDiagram(diagram: NormalizedDiagram, options: RenderOptions
     const { edge, sourceId, targetId, sBox, tBox, ls, lt, sV, tV } = plan
 
     const candidates: Point[][] = []
-    if (sourceId === targetId) {
+    /**
+     * 并排泳道下的**走廊式路由**（只对跨 cluster 的边）。
+     *
+     * 为什么不能沿用下面的分层分支：那些分支用 `ls/lt`（层序）决定折线通道，
+     * 并排排布后层序与几何位置脱钩 —— v 向移动会落在泳道内部。这条分支把跨簇边
+     * 一律送进自由空间：源所在列的**外侧走廊** → 泳道下方的**横向总线** →
+     * 目标所在列的**外侧走廊** → 进入目标。同簇边仍走原分层路由（它们本来就干净）。
+     */
+    const srcCluster = laneCorridor?.nodeCluster.get(sourceId) ?? -1
+    const tgtCluster = laneCorridor?.nodeCluster.get(targetId) ?? -1
+    if (laneCorridor !== null && sourceId !== targetId && srcCluster !== tgtCluster) {
+      const lc = laneCorridor
+      const laneSide = (nodeId: string, box: { u: number; v: number; uSize: number; vSize: number }, clusterIdx: number): 1 | -1 => {
+        const c = lc.clusters[clusterIdx] as { x0: number; x1: number }
+        // 节点在所属泳道的哪一列：偏左 → 用左侧走廊，偏右 → 用右侧走廊（这样横向出口
+        // 只穿过空档，不穿过同排的另一个节点）。
+        return box.u + box.uSize / 2 < (c.x0 + c.x1) / 2 ? -1 : 1
+      }
+      const step = routeStep
+      /**
+       * 走廊内的**有界分道**：第 k 条用这条走廊的边取第 k 条车道（`lane` 从中间向外
+       * 来回取），而不是无限右移 —— 无限右移会越出走廊、压到泳道框上；
+       * 也不夹紧到同一个 y/x（夹紧等于把多条线叠成一条，正是 EDGE_OVERLAP 的来源）。
+       */
+      const laneOffset = (use: number, lanes: number): number =>
+        ((use % lanes) - (lanes - 1) / 2) * step
+      const CORRIDOR_LANES = 6
+      const corridor = (idx: number, side: 1 | -1): number => {
+        const key = idx + (side > 0 ? 1 : 0)
+        const used = corridorUse.get(key) ?? 0
+        corridorUse.set(key, used + 1)
+        return (lc.corridorX[key] as number) + laneOffset(used, CORRIDOR_LANES)
+      }
+      /** 松散节点的接入点：同一条边沿节点上边左右交替错开，避免两条线共用一个锚点。 */
+      const loosePort = (nodeId: string, box: { u: number; v: number; uSize: number; vSize: number }): number => {
+        const used = loosePortUse.get(nodeId) ?? 0
+        loosePortUse.set(nodeId, used + 1)
+        const k = Math.ceil(used / 2)
+        const dir = used === 0 ? 0 : used % 2 === 1 ? 1 : -1
+        return box.u + box.uSize / 2 + dir * k * Math.max(6, step)
+      }
+      const srcSide: 1 | -1 = srcCluster >= 0 ? laneSide(sourceId, sBox, srcCluster) : 1
+      const tgtSide: 1 | -1 = tgtCluster >= 0 ? laneSide(targetId, tBox, tgtCluster) : 1
+      const srcX = srcCluster >= 0 ? corridor(srcCluster, srcSide) : loosePort(sourceId, sBox)
+      const tgtX = tgtCluster >= 0 ? corridor(tgtCluster, tgtSide) : loosePort(targetId, tBox)
+      const busLanes = Math.max(1, Math.floor((lc.busMaxY - lc.busY) / step) + 1)
+      const bus = lc.busY + laneOffset(busUse.n++, Math.min(busLanes, 6))
+      const srcInLane = srcCluster >= 0
+      const tgtInLane = tgtCluster >= 0
+      /**
+       * 源是否位于所属泳道的**最底一行**：只有这时才允许直接向下出泳道。
+       *
+       * ⚠️ 判据必须是"本簇里没有别的节点在它下方"，不能拿节点下沿去比**泳道框**下沿 ——
+       * 框含装修（`groupPadding` + 标签带），底行的节点也会被判成"不能向下出"，
+       * 于是绕到泳道最外侧走长竖线（实测 `exev → ir` 就是这样多出一条右边距长线）。
+       */
+      const bottomRowFree =
+        srcInLane &&
+        ![...(lc.clusters[srcCluster] as { ids: Set<string> }).ids].some((id) => {
+          const b = flowBoxes.find((x) => x.node.id === id)
+          return b !== undefined && b.node.id !== sourceId && b.v > sBox.v + sBox.vSize + 1
+        })
+      const pts: Point[] = []
+      if (srcInLane && !tgtInLane && bottomRowFree) {
+        // 泳道 → 下方节点：直接从底边向下出。**不要**横着出 —— 那条横向短边会和同列
+        // 上下相邻边的分层路由抢同一条 y（实测 commit→exev 与 exev→ir 在 y=197 上重合 20 单位）。
+        const x = loosePort(sourceId, sBox)
+        pts.push({ x, y: sBox.v + sBox.vSize })
+        pts.push({ x, y: bus })
+        pts.push({ x: tgtX, y: bus })
+        pts.push({ x: tgtX, y: tBox.v })
+      } else if (!srcInLane && tgtInLane) {
+        // 下方节点 → 泳道：上到总线，沿总线到目标所在列的走廊，再在走廊里升到目标行、横向进入。
+        pts.push({ x: srcX, y: sBox.v })
+        pts.push({ x: srcX, y: bus })
+        pts.push({ x: tgtX, y: bus })
+        pts.push({ x: tgtX, y: tV })
+        pts.push({ x: tBox.u + (tgtSide > 0 ? tBox.uSize : 0), y: tV })
+      } else if (srcInLane && tgtInLane) {
+        // 泳道 ↔ 泳道：两框之间的空档本身就是自由空间，v 向移动在走廊里做完即可。
+        pts.push({ x: sBox.u + (srcSide > 0 ? sBox.uSize : 0), y: sV })
+        pts.push({ x: srcX, y: sV })
+        pts.push({ x: srcX, y: tV })
+        pts.push({ x: tBox.u + (tgtSide > 0 ? tBox.uSize : 0), y: tV })
+      } else if (srcInLane && !tgtInLane) {
+        // 源在泳道但**不在最底一行**（正下方还有同簇节点）：只能从侧面出泳道，
+        // 沿外侧走廊下行到总线，再横穿到目标列。
+        // ⚠️ 起笔点必须是**节点边框**：早先这种情况落到"两端都在下方"的兜底分支，
+        // 起笔写成走廊 x，于是画出一端悬空的长线（实测 `commit → state`）。
+        pts.push({ x: sBox.u + (srcSide > 0 ? sBox.uSize : 0), y: sV })
+        pts.push({ x: srcX, y: sV })
+        pts.push({ x: srcX, y: bus })
+        pts.push({ x: tgtX, y: bus })
+        pts.push({ x: tgtX, y: tBox.v })
+      } else {
+        // 两个端点都在下方（少见）：沿总线直接连。
+        pts.push({ x: srcX, y: sBox.v })
+        pts.push({ x: srcX, y: bus })
+        pts.push({ x: tgtX, y: bus })
+        pts.push({ x: tgtX, y: tBox.v })
+      }
+      candidates.push(pts)
+    } else if (
+      laneCorridor !== null &&
+      srcCluster >= 0 &&
+      srcCluster === tgtCluster &&
+      /**
+       * 同簇、**同一行**、左右相邻的两列节点之间的边，直接走两节点之间的微通道。
+       *
+       * 为什么不能用下面的分层分支：那会把边先送到"层通道"再折回目标所在列，
+       * 折回的那一段会落回本行的 y 上，与同源另一条边的横向短边**共线重叠**
+       * （实测 `guards → commit` 与 `guards → reject` 共享 12 单位，且反复调整锚点无效）。
+       * 两列之间本来就是自由空间，直连即可 —— 既不共线，也更短。
+       */
+      (tBox.u >= sBox.u + sBox.uSize || sBox.u >= tBox.u + tBox.uSize) &&
+      Math.min(sBox.v + sBox.vSize, tBox.v + tBox.vSize) - Math.max(sBox.v, tBox.v) > 0 &&
+      (() => {
+        const rightward = tBox.u > sBox.u
+        const mid = rightward
+          ? (sBox.u + sBox.uSize + tBox.u) / 2
+          : (tBox.u + tBox.uSize + sBox.u) / 2
+        const vLo = Math.min(sV, tV) - 2
+        const vHi = Math.max(sV, tV) + 2
+        // 微通道必须真的空着：任何别的节点都不能占住这条竖带
+        return !flowBoxes.some(
+          (b) =>
+            b.node.id !== sourceId &&
+            b.node.id !== targetId &&
+            b.u <= mid + 2 &&
+            b.u + b.uSize >= mid - 2 &&
+            b.v < vHi &&
+            b.v + b.vSize > vLo,
+        )
+      })()
+    ) {
+      const rightward = tBox.u > sBox.u
+      const mid = rightward
+        ? (sBox.u + sBox.uSize + tBox.u) / 2
+        : (tBox.u + tBox.uSize + sBox.u) / 2
+      candidates.push([
+        { x: rightward ? sBox.u + sBox.uSize : sBox.u, y: sV },
+        { x: mid, y: sV },
+        { x: mid, y: tV },
+        { x: rightward ? tBox.u : tBox.u + tBox.uSize, y: tV },
+      ])
+    } else if (sourceId === targetId) {
       /**
        * 自环（`source === target`）：状态机的自转移、流程的"就地重试"。
        *

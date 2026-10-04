@@ -263,7 +263,7 @@ const env = {
  * 带**工作区注册表**的宿主夹具：`mentor/download` 的目标目录只能按注册表 id 解析，
  * 所以下载相关的用例必须经它。
  */
-function makeHostWithWorkspaces(apiKey, workspaces) {
+function makeHostWithWorkspaces(apiKey, workspaces, opts = {}) {
   const h = makeHostFor(apiKey)
   let config = CFG.resolveConfig({
     customizationFile: 'live-ws.json',
@@ -283,6 +283,7 @@ function makeHostWithWorkspaces(apiKey, workspaces) {
       available: true,
       items: workspaces.map((w) => ({ ...w, updatedAt: '' })),
     }),
+    ...(opts.syncStore ? { syncStore: opts.syncStore } : {}),
   })
 }
 
@@ -1418,6 +1419,105 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
     prefix: PREFIX,
   })
   assertEq(badTarget.ok, false, '按路径指定目标 → 拒绝（只认注册表 id）')
+
+  /*
+   * ⑨-下载水位：学生动了文件 → mentor/list 提示导师"需要重新下载"（协议 v21）
+   *
+   * 判据两条互补：时间戳变大 = 传了新文件；文件数变了 = 删了文件
+   * （删除不会让时间戳前进，改同一路径只动时间戳）。
+   * 两个水位**都存自那次归档响应**（X-Source-Updated-At / X-File-Count）——
+   * 下载前后列表里的值与 ZIP 会错位：取早了多提示一次、取晚了**会漏文件**。
+   */
+  {
+    const SW = await import(lib('research/sync-watermarks.js'))
+    const wmStore = SW.createMemorySyncWatermarkStore()
+    const wmHost = makeHostWithWorkspaces(
+      adminKey,
+      [{ id: 'ws-wm', title: '水位', path: mentorWs }],
+      { syncStore: wmStore },
+    )
+    const mentorRow = async () => {
+      const list = await wmHost('mentor/list', {})
+      assertEq(list.ok, true, `mentor/list 可用${list.ok ? '' : `（${list.error?.code}）`}`)
+      return (list.value?.proposals ?? []).find((p) => p.projectId === projectId) ?? null
+    }
+
+    /*
+     * ⓪ **从没下载过**（空水位）→ 必须提示"先下载"（协议 v22）。
+     *
+     * 这正是 2026-10 的真实反馈：导师第一次进【指导中】什么都看不到，
+     * 而学生已经更新过了 —— 因为"没有水位"被当成了"无从判断"。
+     */
+    const virgin = makeHostWithWorkspaces(adminKey, [], {
+      syncStore: SW.createMemorySyncWatermarkStore(),
+    })
+    const virginList = await virgin('mentor/list', {})
+    const virginRow = (virginList.value?.proposals ?? []).find((p) => p.projectId === projectId)
+    assertEq(
+      virginRow?.sync,
+      { neverDownloaded: true },
+      '从没下载过 → 提示"先下载"（不是"无从判断"、也不是"没更新"）',
+    )
+
+    // ① 导师下载一次 → 水位来自**这次归档响应**
+    const first = await wmHost('mentor/download', {
+      projectId, workspaceId: 'ws-wm', prefix: PREFIX,
+    })
+    assertEq(
+      first.ok, true,
+      `水位测试：下载成功${first.ok ? '' : `（${first.error?.code}: ${first.error?.message}）`}`,
+    )
+    const saved = Object.values(wmStore.all())[0]
+    assert(Boolean(saved?.updatedAt), `水位已存（X-Source-Updated-At = ${saved?.updatedAt}）`)
+    assertEq(
+      typeof saved?.fileCount, 'number',
+      `文件数已存（X-File-Count = ${saved?.fileCount}，与列表的 workspace_files 同口径）`,
+    )
+
+    // 还没动 → 明确说"没动"（changed: false，不是 null —— 这两个判据此刻都可判）
+    const row0 = await mentorRow()
+    assertEq(row0?.sync, { changed: false, reason: null }, '下载后学生没动 → 不提示')
+    assert(
+      typeof row0?.workspaceUpdatedAt === 'string' && typeof row0?.workspaceFiles === 'number',
+      `列表给了 workspace_updated_at / workspace_files（${row0?.workspaceUpdatedAt} / ${row0?.workspaceFiles}）`,
+    )
+
+    // ② 学生传了新文件 → 时间戳变大 → uploaded
+    const added = await SC.uploadProjectFiles(
+      BASE,
+      researcherKey,
+      projectId,
+      [{ relPath: 'notes/watermark-probe.md', bytes: Buffer.from('# 新文件\n') }],
+      { fetchImpl: fetch },
+    )
+    assertEq(added.length, 1, '学生（owner）传了一个新文件')
+    const row1 = await mentorRow()
+    assertEq(row1?.sync, { changed: true, reason: 'uploaded' }, '学生传了新文件 → 提示重新下载')
+
+    // ③ 导师重新下载 → 水位更新 → 提示消失（用户要的闭环）
+    const again = await wmHost('mentor/download', {
+      projectId, workspaceId: 'ws-wm', prefix: PREFIX,
+    })
+    assertEq(again.ok, true, '重新下载成功')
+    const row2 = await mentorRow()
+    assertEq(row2?.sync, { changed: false, reason: null }, '下载到最新版后提示消失')
+
+    // ④ 学生**删了**文件 → 文件数变、时间戳不前进 → deleted
+    const listing = await api(`/projects/${projectId}/files`, {
+      headers: { authorization: `Bearer ${researcherKey}` },
+    })
+    const victim = (listing.body?.items ?? []).find(
+      (f) => f.relative_path === 'notes/watermark-probe.md',
+    )
+    assert(Boolean(victim), '找到学生要删的那个文件')
+    const del = await api(`/projects/${projectId}/files/${victim.id}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${researcherKey}` },
+    })
+    assertEq(del.status, 204, `学生删除成功（HTTP ${del.status}）`)
+    const row3 = await mentorRow()
+    assertEq(row3?.sync, { changed: true, reason: 'deleted' }, '学生删了文件 → 仍要提示重新下载')
+  }
 
   // ⑨-11 **反向流程**：导师在学生的 workspace/ 里继续推进研究 → 整包回传 → 学生下载后接着做
   //

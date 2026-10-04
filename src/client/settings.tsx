@@ -1448,6 +1448,27 @@ function canDownloadProposal(p: HostProposal, incoming: boolean): boolean {
 }
 
 /**
+ * 导师侧那行下载提示该说什么（没有该说的 → `null`，界面就不显示）。
+ *
+ * 抽成函数而不是行内三元：判别联合有**三个**分支（从没下载过 / 学生动过 / 没动），
+ * 塞进 JSX 的行内三元会变成"读三遍才知道显示什么"。
+ *
+ * | `sync` | 文案 |
+ * |---|---|
+ * | `{ neverDownloaded: true }` | 先下载（手里没副本） |
+ * | `{ changed: true, reason: 'uploaded' }` | 学生更新了文件，需要重新下载 |
+ * | `{ changed: true, reason: 'deleted' }` | 学生删除了文件，需要重新下载 |
+ * | `{ changed: false }` / `null` / `undefined` | 不提示（没动 / 无从判断 / 旧宿主） |
+ */
+function studentSyncHint(t: Translate, sync: HostProposal['sync']): string | null {
+  // 三态纪律：`null`/`undefined` = 无从判断（旧服务器、不可知、旧宿主）→ 不编造
+  if (!sync) return null
+  if ('neverDownloaded' in sync) return t('community.mentor.studentNeverDownloaded')
+  if (!sync.changed) return null
+  return t(sync.reason === 'deleted' ? 'community.mentor.studentDeleted' : 'community.mentor.studentUpdated')
+}
+
+/**
  * 押金比例的**兜底值**（20%）。
  *
  * ⚠️ 只在拿不到 `mentor/fee-suggestion` 时才用它。正常情况下比例来自服务器的建议
@@ -1664,19 +1685,21 @@ interface HostProposal {
    */
   reviewFiles?: number | null
   /**
-   * **宿主算好的**："上一次下载之后，学生那一侧动过吗"。
+   * **宿主算好的**："导师手里这份工作区是不是最新"（判别联合，见 `sync-watermarks.ts`）。
    *
-   * 宿主拿服务器的 `workspace_updated_at` / `workspace_files` 与**本地水位**
-   * （上一次归档响应的 `X-Source-Updated-At` / `X-File-Count`）比对得到：
+   * - `{ neverDownloaded: true }` —— 本地没有水位 = **从没成功下载过** → 提示"先下载"；
+   * - `{ changed: true, reason: 'uploaded' | 'deleted' }` —— 下载过、学生又动过 → 提示重新下载；
+   * - `{ changed: false }` —— 下载过、两个判据都说没动；
+   * - `null` —— **无从判断**（旧服务器不给字段 / 服务器说不可知 / 只有一半判据可用）。
    *
-   * - `{ changed: true, reason: 'uploaded' | 'deleted' }` —— 学生动过 → 提示重新下载；
-   * - `{ changed: false }` —— 两个判据都说没动；
-   * - `null` —— **无从判断**（从没下载过 / 旧服务器不给字段 / 服务器说不可知）。
-   *
-   * ⚠️ `undefined` = 旧宿主不返回这个字段（协议 <21）→ 界面**不提示**，
+   * ⚠️ `undefined` = 旧宿主不返回这个字段（协议 <22）→ 界面**不提示**，
    * 但那不等于"没更新"，所以只能按"拿不到就不提示"处理，不许编成 false。
+   *
+   * ⚠️ **"从没下载过"与"无从判断"必须分开**（2026-10 用户指出）：前者手里没副本，
+   * 该提示下载；后者是判不出来，不该编造。早先两者都在 `null` 里 → 导师第一次进
+   * 【指导中】一声不吭，而学生明明更新过了。
    */
-  sync?: { changed: boolean; reason: 'uploaded' | 'deleted' | null } | null
+  sync?: { neverDownloaded: true } | { changed: boolean; reason: 'uploaded' | 'deleted' | null } | null
   expiresAt: string
   createdAt: string
 }
@@ -5422,27 +5445,45 @@ export function CommunityTab({
                           gap: 2,
                         }}
                       >
-                        {/* 对方是谁：我收到的看导师，我发起的看项目（粗体、单行） */}
+                        {/*
+                          **哪份工作、和谁**（2026-10 用户要求）：两行都要有 ——
+                            · 我收到的（我是学生）→ 导师名（粗体）+ **研究工作名**；
+                            · 我发起的（我是导师）→ 研究工作名（粗体）+ 学生名。
+
+                          为什么两行都给：只给人名时，"同一个导师的多个研究工作"分不出来；
+                          只给工作名时，"**同名**工作分属两个学生"分不出来 —— 本机实测就有
+                          两份都叫「ConvFusion-dsh（run）」的提案（导师互换），光看名字根本分不清。
+
+                          ⚠️ 粗体那行是 `whiteSpace: nowrap + ellipsis`，所以区分用的那一半
+                          **必须另起一行**（`S.hint` 会换行）：挤进同一行会被省略号截掉，
+                          那就等于没显示。
+                        */}
                         <div style={S.listTitle}>
                           {incoming
                             ? (p.mentor?.displayName ?? t('community.mentor.unknownParty'))
                             : (p.projectTitle ?? t('community.mentor.untitledProject'))}
                         </div>
+                        {(() => {
+                          const line = incoming
+                            ? (p.projectTitle ?? t('community.mentor.untitledProject'))
+                            : (p.researcher?.displayName ?? '')
+                          return line ? <div style={S.hint}>{line}</div> : null
+                        })()}
                         {/* 费用数字（不做解释性描述）—— 名称之下一行 */}
                         <div style={S.hint}>{feeText(p)}</div>
                         {/*
-                          **导师侧**的"学生更新了"提示（2026-10）。
-                          判据是宿主拿**上一次归档响应的水位**比出来的（见 `sync`）：
-                          时间戳变大 = 传了新文件；文件数变了 = 删了文件（互补，缺一不可）。
-                          只在导师侧显示：学生自己知道他更新过；`!incoming` 就是"我发起的"= 我是导师。
+                          **导师侧**的下载提示（2026-10）—— 三态各有说法：
+                            · 从没下载过 → "先下载"（手里没副本，这本身就是该下载的理由）；
+                            · 下载过、学生动过 → "学生更新了 / 删除了，需要重新下载"；
+                            · 下载过、没动 / 无从判断 → 不提示。
+                          判据由宿主算好（`sync`）：拿**上一次归档响应的水位**与列表的
+                          `workspace_updated_at` / `workspace_files` 比 —— 时间戳变大 = 传了新文件，
+                          文件数变了 = 删了文件（互补，缺一不可）。
+                          只在导师侧显示：学生自己知道他更新过；`!incoming` = 我发起的 = 我是导师。
                         */}
-                        {!incoming && p.sync?.changed ? (
+                        {!incoming && studentSyncHint(t, p.sync) ? (
                           <div style={{ ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' }}>
-                            {t(
-                              p.sync.reason === 'deleted'
-                                ? 'community.mentor.studentDeleted'
-                                : 'community.mentor.studentUpdated',
-                            )}
+                            {studentSyncHint(t, p.sync)}
                           </div>
                         ) : null}
                       </div>

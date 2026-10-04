@@ -47,8 +47,16 @@ import { assessResearchProcess } from './research-process.js'
 import { assessAdvance, type AdvanceAssessment } from './advance.js'
 import { MATURITY_DIMENSIONS, type MaturityDimension, type MaturityLevel } from './research-data.js'
 import { listAllOutputs } from './output.js'
-import { DEFAULT_PAPER_ID } from './paper-data.js'
-import { paperDir } from './paper.js'
+import {
+  DEFAULT_PAPER_ID,
+  PAPER_MATURITY_DIMENSIONS,
+  type GapPriority,
+  type PaperGapType,
+  type PaperMaturityLevel,
+} from './paper-data.js'
+import { getActivePaperId, listPapers, paperDir } from './paper.js'
+import { paperStatusSummary, readPaperMaturity, suggestPaperMaturity } from './paper-evolution.js'
+import { detectPaperGaps, listPaperGaps, mergeDetectedGaps, paperTitle, prioritizeGaps } from './paper-gaps.js'
 
 /** 等级 → 进度条位置（**折算**，不是测量值）。 */
 export const MATURITY_SCALE: Record<MaturityLevel, number> = {
@@ -59,8 +67,262 @@ export const MATURITY_SCALE: Record<MaturityLevel, number> = {
   Established: 1,
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+ * 多个研究工作（一个工作 = 一个 Paper）
+ *
+ * 工作区可以**同时跑多个研究工作**（`papers/` 下每篇论文就是一个工作）。聚合报告
+ * 回答"这个项目到哪了"，但它把几篇论文的资产合在一起 —— "论文正文：已有" 这种陈述
+ * 分不清是哪一篇。所以快照里额外带一份 `works`：每个工作只报**它自己的**事实，
+ * 且全部来自既有 helper（`paperStatusSummary` / `readPaperMaturity` /
+ * `suggestPaperMaturity` / `detectPaperGaps`），**不另算一套**。
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** 一个研究工作自己的可数资产（全部是事实，不是估算）。 */
+export interface WorkCounts {
+  /** 正文章节总数。 */
+  sections: number
+  /** 有实质内容的章节数。 */
+  sectionsWithContent: number
+  claims: number
+  claimsWithoutEvidence: number
+  evidence: number
+  /** 正文实际引用的证据数。 */
+  evidenceUsedInManuscript: number
+  /** 未解决缺口（已记录的 ∪ 规则检查实时发现的）。 */
+  gaps: number
+  gapsHigh: number
+  openProposals: number
+}
+
+/** 一个研究工作的进展。 */
+export interface WorkProgress {
+  /** Paper id（工作 id）。 */
+  id: string
+  /** 完整标题（悬停显示）。 */
+  title: string
+  /** 短标题（tab 用）。 */
+  short: string
+  /** 是否是当前激活的论文。 */
+  active: boolean
+  status: string
+  version: string
+  /** 该工作成熟度等级折算的均值（0..1）。 */
+  overall: number
+  /**
+   * 成熟度的来源：
+   * `recorded` = `papers/<id>/maturity.md` 里有评估；`derived` = 没有评估，
+   * 按真实资产规则**推定**（界面必须标明"推定"，不能冒充评估值）。
+   */
+  maturitySource: 'recorded' | 'derived'
+  /** 论文成熟度维度（等级 + 等级折算）。 */
+  maturity: Array<{ dimension: string; level: PaperMaturityLevel; scale: number }>
+  counts: WorkCounts
+  /** 下一步：最高优先级的未解决缺口（结构化 code，界面自己本地化）。 */
+  next?: { code: PaperGapType; priority: GapPriority; target?: string; skill?: string }
+}
+
+/**
+ * 短标题（tab 用）：优先取副标题之前的部分，再收成前 2 个词或 22 个字符。
+ *
+ * 论文标题常常很长（`A: B, and C`），整条塞进 tab 会撑爆面板；这里只做**显示**收缩，
+ * 完整标题仍在 `title` 里（悬停可见），所以不丢信息。
+ */
+export function shortWorkTitle(title: string, id: string): string {
+  const source = (title || id).trim()
+  const head = source.split(/\s+[—–]\s+|:\s+/)[0]?.trim() || source
+  const words = head.split(/\s+/).filter(Boolean)
+  const brief = words.length > 2 ? words.slice(0, 2).join(' ') : head
+  const chars = [...brief]
+  return chars.length > 22 ? `${chars.slice(0, 22).join('')}…` : brief
+}
+
+/** 采集每个研究工作自己的进展（纯读盘；依次复用 Stage 5 的既有 helper）。 */
+export function captureWorkProgress(workspace: string): WorkProgress[] {
+  const activeId = getActivePaperId(workspace)
+  const out: WorkProgress[] = []
+
+  // `listPapers`（不是 `listPaperIds`）：只有真的能读出论文的目录才算一个工作
+  // （`papers/__pycache__` 这类目录不是论文）。
+  for (const paper of listPapers(workspace)) {
+    const summary = paperStatusSummary(workspace, paper.id)
+    if (!summary) continue
+
+    const title = paperTitle(paper)
+    const recorded = readPaperMaturity(workspace, paper.id)
+    const recordedKnown = PAPER_MATURITY_DIMENSIONS.some((d) => recorded[d].status !== 'Unknown')
+    const maturity = recordedKnown ? recorded : suggestPaperMaturity(workspace, paper.id)
+    const dimensions = PAPER_MATURITY_DIMENSIONS.map((d) => ({
+      dimension: d as string,
+      level: maturity[d].status,
+      scale: MATURITY_SCALE[maturity[d].status],
+    }))
+
+    // 未解决缺口 = 已记录的 ∪ 规则检查实时发现的。
+    // ⚠️ `mergeDetectedGaps` 是**纯函数**（不写盘）—— 面板只读，绝不落 Gap 文件。
+    const open = prioritizeGaps(
+      mergeDetectedGaps(listPaperGaps(workspace, paper.id), detectPaperGaps(workspace, paper.id)).gaps,
+    ).filter((g) => !g.resolved)
+    const top = open[0]
+    const target = top?.relatedClaim ?? top?.relatedSection
+
+    out.push({
+      id: paper.id,
+      title,
+      short: shortWorkTitle(title, paper.id),
+      active: paper.id === activeId,
+      status: summary.status,
+      version: summary.version,
+      overall: dimensions.reduce((a, d) => a + d.scale, 0) / dimensions.length,
+      maturitySource: recordedKnown ? 'recorded' : 'derived',
+      maturity: dimensions,
+      counts: {
+        sections: summary.sections.total,
+        sectionsWithContent: summary.sections.substantive,
+        claims: summary.claims.total,
+        claimsWithoutEvidence: summary.claims.withoutEvidence,
+        evidence: summary.evidence.total,
+        evidenceUsedInManuscript: summary.evidence.usedInManuscript,
+        gaps: open.length,
+        gapsHigh: open.filter((g) => g.priority === 'high').length,
+        openProposals: summary.openProposals,
+      },
+      ...(top
+        ? {
+            next: {
+              code: top.type,
+              priority: top.priority,
+              ...(target ? { target } : {}),
+              ...(top.suggestedSkill ? { skill: top.suggestedSkill } : {}),
+            },
+          }
+        : {}),
+    })
+  }
+  return out
+}
+
+/* ── 多个工作的**汇总**（v2：总览 tab 要概括所有工作，而不是复述某一个）─────────
+ *
+ * 汇总**只做加法**：每个加数都来自 `captureWorkProgress` 里那一个工作的 `counts`
+ * （而它又来自既有 helper）。这里不读第二遍盘、不另算一套 —— 否则总览与工作 tab
+ * 会给出两个互相矛盾的数字。唯一的例外见 `WorksAggregate.totals` 的说明（证据库）。
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/** 汇总里的一行（一个工作；只投影总览要显示的那几个数）。 */
+export interface WorkAggregateRow {
+  id: string
+  /** 完整标题（悬停）。 */
+  title: string
+  /** 短标题（行首）。 */
+  short: string
+  active: boolean
+  /** 该工作成熟度等级折算的均值（0..1）。 */
+  overall: number
+  maturitySource: 'recorded' | 'derived'
+  counts: WorkCounts
+}
+
+/**
+ * 多个工作的合计（工作数 > 1 时才存在；单工作时为 `undefined`）。
+ *
+ * 为什么要有它：工作区的聚合字段（`WorkspaceProgress.counts` / `paper`）是**项目级**
+ * 读数，几篇论文的资产合在一起 —— "证据 12" 分不清是哪一篇。总览 tab 因此需要
+ * 一份"每个工作各一行 + 逐项合计"的读数；它全部由各工作自己的数字相加得到。
+ */
+export interface WorksAggregate {
+  /** 参与合计的工作数。 */
+  works: number
+  /**
+   * 各工作 `counts` 的逐项求和（键与 `WorkCounts` 完全一致）。
+   *
+   * ⚠️ **一个刻意的例外：`evidence` 不相加。** `paperStatusSummary` 给每个工作报的
+   * `evidence.total` 是**同一个**工作区证据库的读数（`listEvidence(workspace)`），不是
+   * "属于这个工作的证据"。相加会把同一批证据按工作数重复计（实测 2 个工作 × 15 条 → 30），
+   * 与同一面板里项目级 A2 的「证据 15」当场矛盾 —— 那正是本插件不允许的"编一个数"。
+   * 所以 `evidence` 只报**一份**共享读数；「正文引用」`evidenceUsedInManuscript`
+   * 确实是分工作的，照旧相加。
+   */
+  totals: WorkCounts
+  /** 每个工作一行，顺序与工作 tab 一致。 */
+  rows: WorkAggregateRow[]
+}
+
+/** 工作计数的零元（逐项求和从它开始，保证键一个不少）。 */
+function zeroWorkCounts(): WorkCounts {
+  return {
+    sections: 0,
+    sectionsWithContent: 0,
+    claims: 0,
+    claimsWithoutEvidence: 0,
+    evidence: 0,
+    evidenceUsedInManuscript: 0,
+    gaps: 0,
+    gapsHigh: 0,
+    openProposals: 0,
+  }
+}
+
+/** 逐项求和（**唯一**一处加法：界面与回归测试都用它，避免两处求和漂移）。 */
+export function sumWorkCounts(counts: WorkCounts[]): WorkCounts {
+  const totals = zeroWorkCounts()
+  for (const c of counts) {
+    totals.sections += c.sections
+    totals.sectionsWithContent += c.sectionsWithContent
+    totals.claims += c.claims
+    totals.claimsWithoutEvidence += c.claimsWithoutEvidence
+    totals.evidence += c.evidence
+    totals.evidenceUsedInManuscript += c.evidenceUsedInManuscript
+    totals.gaps += c.gaps
+    totals.gapsHigh += c.gapsHigh
+    totals.openProposals += c.openProposals
+  }
+  return totals
+}
+
+/**
+ * 各工作报的**同一份**工作区证据库读数。
+ *
+ * 取最大值而不是求和：正常情况下每个工作的这个数都一样（都来自 `listEvidence(workspace)`），
+ * 万一将来出现不一致，报得出来也比静默少报好。
+ */
+export function sharedEvidenceCount(works: WorkProgress[]): number {
+  return works.reduce((max, w) => Math.max(max, w.counts.evidence), 0)
+}
+
+/**
+ * 由各工作构造汇总（纯函数：同一份 `works` 必得同一结果）。
+ *
+ * @returns 工作数 ≤ 1 时为 `null` —— 单工作没有"汇总"可言，界面照旧渲染今天的内容
+ */
+export function aggregateWorks(works: WorkProgress[]): WorksAggregate | null {
+  if (!Array.isArray(works) || works.length < 2) return null
+  const totals = sumWorkCounts(works.map((w) => w.counts))
+  // 见 `WorksAggregate.totals`：证据是**全工作区共用**的一份读数，相加会重复计数。
+  totals.evidence = sharedEvidenceCount(works)
+  return {
+    works: works.length,
+    totals,
+    rows: works.map((w) => ({
+      id: w.id,
+      title: w.title,
+      short: w.short,
+      active: w.active,
+      overall: w.overall,
+      maturitySource: w.maturitySource,
+      counts: { ...w.counts },
+    })),
+  }
+}
+
 /** 一个研究进度快照（纯数据，可从磁盘重建）。 */
 export interface ProgressSnapshot {
+  /**
+   * 工作区里每个研究工作自己的进展（一个工作 = 一个 Paper）。
+   *
+   * 聚合字段（`counts` / `paper` / `maturity`）保持不变：它们是**项目级**读数，
+   * 仍然要在；`works` 只是把"哪个工作到哪了"补上。
+   */
+  works: WorkProgress[]
   /** 推进判定：下一步是否需要用户拍板（见 `advance.ts`）。 */
   advance: AdvanceAssessment
   /** Research State 版本。 */
@@ -120,6 +382,7 @@ export function captureProgress(
     advance,
     stateVersion: state?.version ?? '—',
     maturity,
+    works: captureWorkProgress(workspace),
     counts: {
       evidence: evidence.length,
       evidenceSettled: evidence.filter((e) => e.status === 'supported' || e.status === 'verified').length,
@@ -498,6 +761,20 @@ export interface WorkspaceProgress {
   stateVersion: string
   /** 各成熟度维度等级折算的均值（0..1；全 Unknown 时为 0）。 */
   overall: number
+  /**
+   * 每个研究工作自己的进展（一个工作 = 一个 Paper；没有论文时为空）。
+   *
+   * 界面在**多于一个**工作时用它画 tab（见 `client/progress-panel.tsx`）；
+   * 只有一个工作时界面照旧渲染下面的聚合内容（不出现 tab 条）。
+   */
+  works: WorkProgress[]
+  /**
+   * 多个工作时的汇总（工作数 ≤ 1 时**没有这个字段**）。
+   *
+   * 总览 tab 用它概括所有工作（逐工作一行 + 合计）；单工作时字段缺席，
+   * 面板的行为与加它之前**完全一致**。
+   */
+  aggregate?: WorksAggregate
   /** A. 研究现在到了哪里。 */
   progress: {
     dimensions: Array<{ dimension: string; level: MaturityLevel; scale: number }>
@@ -536,10 +813,15 @@ export function progressCountRows(snapshot: ProgressSnapshot): ProgressCountRow[
 /** 由当前快照构造工作区报告（纯函数：同一份磁盘状态必得同一结果）。 */
 export function buildWorkspaceProgress(snapshot: ProgressSnapshot, at: Date = new Date()): WorkspaceProgress {
   const advance = snapshot.advance
+  const works = snapshot.works ?? []
+  // 汇总只在**多于一个**工作时出现；单工作/零工作时连字段都不带（旧形状一字不变）
+  const aggregate = aggregateWorks(works)
   return {
     at: at.toISOString(),
     stateVersion: snapshot.stateVersion,
     overall: meanScale(snapshot.maturity),
+    works,
+    ...(aggregate ? { aggregate } : {}),
     progress: {
       dimensions: MATURITY_DIMENSIONS.map((d) => ({
         dimension: d,

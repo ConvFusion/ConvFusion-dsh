@@ -66,6 +66,68 @@ type ProgressGap = {
     code: 'openQuestions';
     count: number;
 };
+/** 一个研究工作自己的可数资产（宿主 `captureWorkProgress` 的产物）。 */
+interface WorkCounts {
+    sections: number;
+    sectionsWithContent: number;
+    claims: number;
+    claimsWithoutEvidence: number;
+    evidence: number;
+    evidenceUsedInManuscript: number;
+    /** 未解决缺口（已记录的 ∪ 规则检查实时发现的）。 */
+    gaps: number;
+    gapsHigh: number;
+    openProposals: number;
+}
+/** 一个研究工作自己的进展（一个工作 = 一个 Paper）。 */
+interface WorkProgress {
+    id: string;
+    /** 完整标题（tab 的悬停提示）。 */
+    title: string;
+    /** 短标题（tab 上用）。 */
+    short: string;
+    /** 是否是当前激活的论文。 */
+    active: boolean;
+    status: string;
+    version: string;
+    /** 该工作成熟度等级折算的均值（0..1）。 */
+    overall: number;
+    /** `derived` = 该论文还没有成熟度评估，等级是按真实资产**推定**的（界面必须标明）。 */
+    maturitySource: 'recorded' | 'derived';
+    maturity: Array<{
+        dimension: string;
+        level: string;
+        scale: number;
+    }>;
+    counts: WorkCounts;
+    /** 最高优先级的未解决缺口；没有缺口时没有这个字段。 */
+    next?: {
+        code: string;
+        priority: string;
+        target?: string;
+        skill?: string;
+    };
+}
+/** 汇总里的一行（一个工作；宿主 `WorkAggregateRow` 的镜像）。 */
+interface WorkAggregateRow {
+    id: string;
+    title: string;
+    short: string;
+    active: boolean;
+    overall: number;
+    maturitySource: 'recorded' | 'derived';
+    counts: WorkCounts;
+}
+/**
+ * 多个工作的合计（宿主 `WorksAggregate` 的镜像）。
+ *
+ * 只在多于一个工作时才由宿主带来；单工作/老宿主没有这个字段 → 总览照旧。
+ */
+interface WorksAggregate {
+    works: number;
+    totals: WorkCounts;
+    rows: WorkAggregateRow[];
+}
 /** 当前工作区的研究进展（宿主 `buildWorkspaceProgress` 的产物）。 */
 interface WorkspaceReport {
     at: string;
@@ -77,6 +139,14 @@ interface WorkspaceReport {
     };
     counts: ProgressCountRow[];
     paper: boolean;
+    /**
+     * 每个研究工作自己的进展（一个工作 = 一个 Paper）。
+     *
+     * 按可选读：老宿主不带这个字段，界面就退回"只有聚合内容"（今天的行为）。
+     */
+    works?: WorkProgress[];
+    /** 多工作汇总（可选读：单工作与老宿主都没有）。 */
+    aggregate?: WorksAggregate;
     need: {
         gaps: ProgressGap[];
         clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown';

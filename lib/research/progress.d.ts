@@ -37,10 +37,130 @@
  */
 import { type AdvanceAssessment } from './advance.js';
 import { type MaturityDimension, type MaturityLevel } from './research-data.js';
+import { type GapPriority, type PaperGapType, type PaperMaturityLevel } from './paper-data.js';
 /** 等级 → 进度条位置（**折算**，不是测量值）。 */
 export declare const MATURITY_SCALE: Record<MaturityLevel, number>;
+/** 一个研究工作自己的可数资产（全部是事实，不是估算）。 */
+export interface WorkCounts {
+    /** 正文章节总数。 */
+    sections: number;
+    /** 有实质内容的章节数。 */
+    sectionsWithContent: number;
+    claims: number;
+    claimsWithoutEvidence: number;
+    evidence: number;
+    /** 正文实际引用的证据数。 */
+    evidenceUsedInManuscript: number;
+    /** 未解决缺口（已记录的 ∪ 规则检查实时发现的）。 */
+    gaps: number;
+    gapsHigh: number;
+    openProposals: number;
+}
+/** 一个研究工作的进展。 */
+export interface WorkProgress {
+    /** Paper id（工作 id）。 */
+    id: string;
+    /** 完整标题（悬停显示）。 */
+    title: string;
+    /** 短标题（tab 用）。 */
+    short: string;
+    /** 是否是当前激活的论文。 */
+    active: boolean;
+    status: string;
+    version: string;
+    /** 该工作成熟度等级折算的均值（0..1）。 */
+    overall: number;
+    /**
+     * 成熟度的来源：
+     * `recorded` = `papers/<id>/maturity.md` 里有评估；`derived` = 没有评估，
+     * 按真实资产规则**推定**（界面必须标明"推定"，不能冒充评估值）。
+     */
+    maturitySource: 'recorded' | 'derived';
+    /** 论文成熟度维度（等级 + 等级折算）。 */
+    maturity: Array<{
+        dimension: string;
+        level: PaperMaturityLevel;
+        scale: number;
+    }>;
+    counts: WorkCounts;
+    /** 下一步：最高优先级的未解决缺口（结构化 code，界面自己本地化）。 */
+    next?: {
+        code: PaperGapType;
+        priority: GapPriority;
+        target?: string;
+        skill?: string;
+    };
+}
+/**
+ * 短标题（tab 用）：优先取副标题之前的部分，再收成前 2 个词或 22 个字符。
+ *
+ * 论文标题常常很长（`A: B, and C`），整条塞进 tab 会撑爆面板；这里只做**显示**收缩，
+ * 完整标题仍在 `title` 里（悬停可见），所以不丢信息。
+ */
+export declare function shortWorkTitle(title: string, id: string): string;
+/** 采集每个研究工作自己的进展（纯读盘；依次复用 Stage 5 的既有 helper）。 */
+export declare function captureWorkProgress(workspace: string): WorkProgress[];
+/** 汇总里的一行（一个工作；只投影总览要显示的那几个数）。 */
+export interface WorkAggregateRow {
+    id: string;
+    /** 完整标题（悬停）。 */
+    title: string;
+    /** 短标题（行首）。 */
+    short: string;
+    active: boolean;
+    /** 该工作成熟度等级折算的均值（0..1）。 */
+    overall: number;
+    maturitySource: 'recorded' | 'derived';
+    counts: WorkCounts;
+}
+/**
+ * 多个工作的合计（工作数 > 1 时才存在；单工作时为 `undefined`）。
+ *
+ * 为什么要有它：工作区的聚合字段（`WorkspaceProgress.counts` / `paper`）是**项目级**
+ * 读数，几篇论文的资产合在一起 —— "证据 12" 分不清是哪一篇。总览 tab 因此需要
+ * 一份"每个工作各一行 + 逐项合计"的读数；它全部由各工作自己的数字相加得到。
+ */
+export interface WorksAggregate {
+    /** 参与合计的工作数。 */
+    works: number;
+    /**
+     * 各工作 `counts` 的逐项求和（键与 `WorkCounts` 完全一致）。
+     *
+     * ⚠️ **一个刻意的例外：`evidence` 不相加。** `paperStatusSummary` 给每个工作报的
+     * `evidence.total` 是**同一个**工作区证据库的读数（`listEvidence(workspace)`），不是
+     * "属于这个工作的证据"。相加会把同一批证据按工作数重复计（实测 2 个工作 × 15 条 → 30），
+     * 与同一面板里项目级 A2 的「证据 15」当场矛盾 —— 那正是本插件不允许的"编一个数"。
+     * 所以 `evidence` 只报**一份**共享读数；「正文引用」`evidenceUsedInManuscript`
+     * 确实是分工作的，照旧相加。
+     */
+    totals: WorkCounts;
+    /** 每个工作一行，顺序与工作 tab 一致。 */
+    rows: WorkAggregateRow[];
+}
+/** 逐项求和（**唯一**一处加法：界面与回归测试都用它，避免两处求和漂移）。 */
+export declare function sumWorkCounts(counts: WorkCounts[]): WorkCounts;
+/**
+ * 各工作报的**同一份**工作区证据库读数。
+ *
+ * 取最大值而不是求和：正常情况下每个工作的这个数都一样（都来自 `listEvidence(workspace)`），
+ * 万一将来出现不一致，报得出来也比静默少报好。
+ */
+export declare function sharedEvidenceCount(works: WorkProgress[]): number;
+/**
+ * 由各工作构造汇总（纯函数：同一份 `works` 必得同一结果）。
+ *
+ * @returns 工作数 ≤ 1 时为 `null` —— 单工作没有"汇总"可言，界面照旧渲染今天的内容
+ */
+export declare function aggregateWorks(works: WorkProgress[]): WorksAggregate | null;
 /** 一个研究进度快照（纯数据，可从磁盘重建）。 */
 export interface ProgressSnapshot {
+    /**
+     * 工作区里每个研究工作自己的进展（一个工作 = 一个 Paper）。
+     *
+     * 聚合字段（`counts` / `paper` / `maturity`）保持不变：它们是**项目级**读数，
+     * 仍然要在；`works` 只是把"哪个工作到哪了"补上。
+     */
+    works: WorkProgress[];
     /** 推进判定：下一步是否需要用户拍板（见 `advance.ts`）。 */
     advance: AdvanceAssessment;
     /** Research State 版本。 */
@@ -235,6 +355,20 @@ export interface WorkspaceProgress {
     stateVersion: string;
     /** 各成熟度维度等级折算的均值（0..1；全 Unknown 时为 0）。 */
     overall: number;
+    /**
+     * 每个研究工作自己的进展（一个工作 = 一个 Paper；没有论文时为空）。
+     *
+     * 界面在**多于一个**工作时用它画 tab（见 `client/progress-panel.tsx`）；
+     * 只有一个工作时界面照旧渲染下面的聚合内容（不出现 tab 条）。
+     */
+    works: WorkProgress[];
+    /**
+     * 多个工作时的汇总（工作数 ≤ 1 时**没有这个字段**）。
+     *
+     * 总览 tab 用它概括所有工作（逐工作一行 + 合计）；单工作时字段缺席，
+     * 面板的行为与加它之前**完全一致**。
+     */
+    aggregate?: WorksAggregate;
     /** A. 研究现在到了哪里。 */
     progress: {
         dimensions: Array<{

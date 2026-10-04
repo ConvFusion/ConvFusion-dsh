@@ -3,7 +3,7 @@ name: Venue Fit Decision
 category: academic-writing/venue-fit-decision
 type: system
 status: active
-version: 1.0
+version: 1.1
 origin: paper/venue (paper_decision)
 ---
 
@@ -37,6 +37,14 @@ requires: experiments/simulation-result | 投稿形态按已有结果（真实�
 4. **Default downwards when uncertain.** An over-claimed submission costs a review cycle; an under-claimed one can be upgraded later.
 5. **Convert the shortfall into a plan**: if the answer is conference, list exactly which additional experiments would justify a journal version and what each would cost.
 6. **Emit a typed decision** with confidence, reasoning, the template it implies, and the actions that would change it.
+
+### A dataset you built yourself does not raise the venue bar by itself
+
+Counting datasets for a venue decision counts *inputs you evaluated on*, not assets you produced.
+
+1. **Do not count your own benchmark as one of the "three datasets"** a journal expects. It is a separate contribution type with its own bar.
+2. **It raises the ceiling only if it meets that bar** — construct statement, adoption criteria, independent annotation agreement, release contract. Otherwise the paper stays at the scope its *evidence* supports, and the benchmark is reported as an instrument.
+3. **When it does meet the bar, say so explicitly in the venue decision**: a second contribution changes what the paper can claim, where it can go, and how much review it invites.
 
 ## Reasoning Guidance
 

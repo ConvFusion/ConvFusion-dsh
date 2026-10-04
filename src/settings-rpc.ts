@@ -2105,7 +2105,13 @@ export function createSettingsRpcHandler(
              */
             const withSync = withReview.map((p) => {
               if (p.status !== 'ACCEPTED') return p
-              const watermark = deps.syncStore?.get(base, p.projectId)
+              /*
+               * 没有水位存储（精简环境 / 离线测试）= 这台机器**记不住下载过什么** →
+               * `sync: null`（无从判断）。这与"没有水位记录"是两件事：后者是**记得**、
+               * 只是没下过 → `{ neverDownloaded: true }`（该下载）。
+               */
+              if (!deps.syncStore) return { ...p, sync: null }
+              const watermark = deps.syncStore.get(base, p.projectId)
               return {
                 ...p,
                 sync: checkStudentChange(watermark, p.workspaceUpdatedAt, p.workspaceFiles),

@@ -1656,10 +1656,14 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
   assert(/PROPOSED: 0, ACCEPTED: 1/.test(src), '按"还要不要动作"排序（等待响应在前）')
   // 只留状态 + 费用数字：描述性文字必须消失
   assert(src.includes('feeText(p)'), '每行显示费用数字')
-  // 版式：名称与费用**竖排**（曾经并排导致整行太长，右侧【下载】【上传】被挤成两行）
+  /*
+   * 版式：名称 / 补充行 / 费用**竖排**（曾经并排导致整行太长，右侧【下载】【上传】被挤成两行）。
+   * 2026-10 起左列中间多了一行"哪份研究工作"（见下面的行首断言），所以窗口放宽到 700 ——
+   * 判据是"三者都在同一个竖排左列里"，不是它们隔多少字符。
+   */
   assert(
-    /flexDirection: 'column',\s*gap: 2,[\s\S]{0,400}?S\.listTitle[\s\S]{0,400}?feeText\(p\)/.test(src),
-    '名称与费用竖排（左侧自己消化宽度）',
+    /flexDirection: 'column',\s*gap: 2,[\s\S]{0,700}?S\.listTitle[\s\S]{0,700}?feeText\(p\)/.test(src),
+    '名称 / 补充行 / 费用竖排（左侧自己消化宽度）',
   )
   // 右侧（状态 + 操作）整组不许被压、不许换行
   assert(
@@ -1683,6 +1687,22 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
   for (const k of ['studentWaiting', 'studentGot', 'mentorWaiting', 'mentorDone']) {
     assert(zhDict.includes(`'community.mentor.progress.${k}'`), `进展文案有中文：${k}`)
   }
+  /*
+   * 行首必须同时说出"**哪份工作、和谁**"（2026-10 用户要求）：
+   * 只给人名 → 同一导师的多个研究工作分不出来；只给工作名 → **同名**工作分属
+   * 两个学生分不出来（本机实测就有两份都叫「ConvFusion-dsh（run）」的提案）。
+   * 区分用的那一半另起一行（粗体那行是 nowrap+ellipsis，挤进去会被截掉）。
+   */
+  assert(
+    /const line = incoming\s*\?\s*\(p\.projectTitle \?\? t\('community\.mentor\.untitledProject'\)\)\s*:\s*\(p\.researcher\?\.displayName \?\? ''\)/.test(
+      src,
+    ),
+    '【指导中】的行给出"哪份研究工作"（学生侧）与"对方是谁"（导师侧）',
+  )
+  assert(
+    /incoming\s*\?\s*\(p\.mentor\?\.displayName \?\? t\('community\.mentor\.unknownParty'\)\)/.test(src),
+    '粗体那行仍是"对方"（导师名 / 工作名），补充行不抢主次',
+  )
 
   // 动作只长在「我收到的 + 等待响应」那一行（其余状态纯跟踪）
   assert(
@@ -1927,11 +1947,15 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     '下载成功后刷新提案（"学生更新了"的提示当场消失，而不是等下次刷新）',
   )
   assert(
-    /!incoming && p\.sync\?\.changed/.test(src),
+    /!incoming && studentSyncHint\(t, p\.sync\)/.test(src),
     '提示只在**导师侧**显示（学生自己知道他更新过）',
   )
   assert(
-    /p\.sync\.reason === 'deleted'/.test(src),
+    /studentSyncHint\(t, p\.sync\)/.test(src) && /'neverDownloaded' in sync/.test(src),
+    '下载提示的三态各有说法：没下载过（先下载）/ 更新了 / 删除了',
+  )
+  assert(
+    /sync\.reason === 'deleted' \? 'community\.mentor\.studentDeleted' : 'community\.mentor\.studentUpdated'/.test(src),
     '两态文案分开：更新 / 删除（判据不同，说的也该不同）',
   )
   assert(
@@ -2051,7 +2075,8 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     'community.exchange.uploadSummary',
     'community.exchange.uploading',
     'community.exchange.uploadNoChange',
-    // 协议 v21：学生更新工作区的两态提示
+    // 协议 v21/v22：导师侧下载提示的三态
+    'community.mentor.studentNeverDownloaded',
     'community.mentor.studentUpdated',
     'community.mentor.studentDeleted',
   ]) {
