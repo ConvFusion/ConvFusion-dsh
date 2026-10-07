@@ -64,7 +64,6 @@ export const en = {
 
   'community.title': 'ConvFusion.com',
   'community.entry.label': 'ConvFusion.com',
-  'community.button.title': 'Open ConvFusion.com (account · research network)',
   'community.notice.published': '{title} · state v{version}',
   'community.notice.tokens': '{tokens} Token',
   'community.notice.files': '{count} attachment(s)',
@@ -381,15 +380,13 @@ export const en = {
   'system.retrieval.clearFailed': 'Clear failed: {detail}',
 
   'progress.name': 'Research progress',
-  'progress.button.ariaWithPercent': 'Research progress (maturity conversion {percent})',
-  'progress.button.title': 'View research progress for this workspace',
-  'progress.button.titleWithPercent': 'View research progress for this workspace (maturity conversion {percent})',
+  // Session-tab copy: carry the percentage when one is known
+  'progress.tab.label': 'Progress {percent}',
   'progress.summary': 'Maturity conversion {percent}',
   'progress.currentStage': ' · Current stage: {stage}',
   'progress.noData': 'No data yet',
   'progress.reading': 'Reading…',
   'progress.refresh': 'Refresh',
-  'progress.close': 'Close',
   'progress.section.maturity': 'A · Research maturity (level conversion, not a measurement)',
   'progress.section.assets': 'A2 · Countable assets (actual counts)',
   'progress.paper': 'Paper body',

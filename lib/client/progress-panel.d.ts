@@ -1,35 +1,28 @@
 /**
- * ConvFusion 2.0 — 顶部「研究进展」按钮（+ 展开面板）
+ * ConvFusion 2.0 — 会话 Tab「研究进展」的正文（面板本体 + 整页容器）
  *
- * ## 为什么从"对话流里的进度卡"改成"顶部按钮"（2026-09 用户拍板）
- *
- * 旧实现挂在 `conversation.chat.turnTail`（链式槽位）。链式槽位有两件事**做不到**：
+ * ## 演进（两次用户拍板）
  *
  * ```text
- * 1. selector 只能拿到 owner props = { turn, seq, openFile } —— **没有会话身份**，
- *    所以"这个会话是不是研究项目"只能靠一个进程级全局变量（旧的 activeSessionId
- *    + researchSessions 缓存）来猜；
- * 2. 猜出来的结果被**所有**会话共用 —— 一旦某个研究会话预热过，链式选举就在
- *    每个会话里都命中我们的条目，于是进度内容出现在**非**研究会话的对话流里。
+ * 2026-09  conversation.chat.turnTail（对话流里的进度卡）
+ *            ↓ 链式槽位拿不到会话身份，只能靠进程级全局变量猜 → 内容跑到别的会话里
+ * 2026-09  conversation.session.header.utilities（顶部按钮 + 浮层）
+ *            ↓ 组件拿到**自己会话**的 sessionId，判定天然按会话正确
+ * 2026-10  conversation.view（会话 Tab，order 19：对话 | 轨迹 | 研究进展 | 科V社区）
  * ```
  *
- * 换成 `conversation.session.header.utilities` 后问题从根上消失：
- *
- * ```text
- * session 作用域的 list 槽位（追加式，replaceRisk: none）
- *   → 组件拿到**自己会话**的 `sessionId`（DSH 的 standard props）
- *   → 宿主按"这个会话自己的工作区"回答 research 与否（progress/workspace）
- *   → 非研究工作区：连按钮都不渲染（不是渲染成空，而是根本不占位）
- * ```
+ * 现在这一页是**会话 Tab 的正文**，按钮与浮层已移除（用户要求"只留 tab"）。
+ * tab 的显隐与文案由 `./convfusion-tab.js` 的闸门管：只在研究工作区注册，
+ * 文案里的百分比也取自闸门对宿主的那一次探针（面板没挂载时 tab 也要有数）。
  *
  * ## 三条必须守住的边界
  *
- * 1. **只显示在研究会话**：`research !== true` 一律不渲染按钮 —— 判定来自宿主，且
- *    用的是会话自己的 `header.cwd`，与插件进程的启动目录无关。
- * 2. **不发明数据**：面板只渲染宿主算好的报告；成熟度是**等级折算**（同时显示等级名），
- *    可数资产给真实计数。拿不到数据就什么都不显示，不显示 0%。
- * 3. **不动别人的槽位**：`list` 槽位是追加式，官方条目（open-in-app / session-log-export）
- *    照常显示；面板是本组件自己的浮层，不开模态、不拦截对话。
+ * 1. **只出现在研究工作区**：`research !== true` 时闸门根本不注册这个 tab（不是渲染成空，
+ *    而是根本不占位）；判定来自宿主，用的是会话自己的 `header.cwd`，与插件进程的启动目录无关。
+ * 2. **不发明数据**：只渲染宿主算好的报告；成熟度是**等级折算**（同时显示等级名），
+ *    可数资产给真实计数。拿不到数据就说明"宿主还没返回"，不显示 0%。
+ * 3. **会话作用域**：`sessionId` 来自 DSH 的 session 作用域 standard props，每个会话只问
+ *    自己的宿主答案 —— 这正是那次链式槽位故障的反面。
  */
 import { type Translate } from './i18n/index.js';
 /** 成熟度维度（等级 + 等级折算的位置）。 */
@@ -215,19 +208,53 @@ export type ProgressProbe = {
 export declare function readProgressValue(res: unknown): ProgressProbe;
 /** 只保留路径的最后两段（顶部浮层里不需要完整路径）。 */
 export declare function shortenPath(path: string | null): string;
-interface ButtonProps {
+/**
+ * 进展的后台刷新间隔（毫秒）。
+ *
+ * 两处用它：① 面板内容（研究资产一变，读数就该变）；② `./convfusion-tab.js` 的闸门
+ * —— tab 文案里的百分比来自闸门的探针，靠同一个低频轮询跟上变化。
+ */
+export declare const PROGRESS_REFRESH_MS = 60000;
+/** 「研究进展」正文与整页容器共用的 props。 */
+interface PanelProps {
     /** 当前会话 id（DSH 的 session 作用域 standard prop）。 */
-    sessionId?: string;
+    sessionId?: string | undefined;
     /** DSH Slot 标准注入。 */
     t: Translate;
 }
-/** 顶部百分比的后台刷新间隔（毫秒）。见 `ResearchProgressButton` 里的说明。 */
-export declare const PROGRESS_REFRESH_MS = 60000;
 /**
- * 会话头部的「研究进展」按钮。
+ * 「研究进展」的**正文**（面板本体）。
  *
- * 会话作用域 → 换会话即重挂（`sessionId` 变化），因此**不存在跨会话串味**：
- * 每个会话只问自己的宿主答案，缓存也只在组件内部。
+ * ## 为什么与组件分离
+ *
+ * 这一页原先只是会话头部一个按钮点开的**浮层**；用户 2026-10 拍板改成会话 Tab
+ * （`对话 | 轨迹 | 研究进展 | 科V社区`），于是正文必须能脱离那个按钮独立渲染：
+ *
+ * ```text
+ * conversation.view (id: convfusion-progress, order: 19)
+ *   └─ ResearchProgressView   ← 整页容器（自己滚动 + 居中列宽）
+ *        └─ ResearchProgressPanel  ← 本组件：读数 + A/A2/B/C 四块
+ * ```
+ *
+ * ## 三条边界
+ *
+ * 1. **不发明数据**：只渲染宿主算好的报告；成熟度是**等级折算**（同时显示等级名），
+ *    可数资产给真实计数。拿不到数据就说明"宿主还没返回"，**不显示 0%**。
+ * 2. **会话作用域**：`sessionId` 由 DSH 的 session 作用域 standard props 给到，
+ *    因此每个会话只问自己的宿主答案，**不存在跨会话串味**（这正是 2026-09 那次
+ *    链式槽位故障的反面：那时判定只能靠进程级全局变量猜）。
+ * 3. **数字只有一处来源**：面板与 tab 文案里的百分比都来自宿主同一次端点，界面不自己算。
+ *
+ * tab 的显隐（只在研究工作区出现）不在这里 —— 由 `./convfusion-tab.js` 的闸门决定
+ * 注册与否；tab 文案里的百分比同样由闸门从宿主答案里取（面板没挂载时也要有数）。
  */
-export declare function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Element | null;
+export declare function ResearchProgressPanel({ sessionId, t }: PanelProps): JSX.Element;
+/**
+ * 会话 Tab「研究进展」的正文（`conversation.view` 的占用者）。
+ *
+ * 整页容器：`conversation.view` 的容器是 `flex: 1; min-height: 0`，**没有 overflow**，
+ * 外层的 `.centerCol` 还是 `overflow: hidden` —— 所以滚动必须自己给，否则长内容被裁掉。
+ * 列宽用固定的居中列（会话正文那条可拖拽宽度是**对话**的排版，不适合卡片列表）。
+ */
+export declare function ResearchProgressView({ sessionId, t }: PanelProps): JSX.Element;
 export {};

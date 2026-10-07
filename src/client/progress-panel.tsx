@@ -1,38 +1,31 @@
 /**
- * ConvFusion 2.0 — 顶部「研究进展」按钮（+ 展开面板）
+ * ConvFusion 2.0 — 会话 Tab「研究进展」的正文（面板本体 + 整页容器）
  *
- * ## 为什么从"对话流里的进度卡"改成"顶部按钮"（2026-09 用户拍板）
- *
- * 旧实现挂在 `conversation.chat.turnTail`（链式槽位）。链式槽位有两件事**做不到**：
+ * ## 演进（两次用户拍板）
  *
  * ```text
- * 1. selector 只能拿到 owner props = { turn, seq, openFile } —— **没有会话身份**，
- *    所以"这个会话是不是研究项目"只能靠一个进程级全局变量（旧的 activeSessionId
- *    + researchSessions 缓存）来猜；
- * 2. 猜出来的结果被**所有**会话共用 —— 一旦某个研究会话预热过，链式选举就在
- *    每个会话里都命中我们的条目，于是进度内容出现在**非**研究会话的对话流里。
+ * 2026-09  conversation.chat.turnTail（对话流里的进度卡）
+ *            ↓ 链式槽位拿不到会话身份，只能靠进程级全局变量猜 → 内容跑到别的会话里
+ * 2026-09  conversation.session.header.utilities（顶部按钮 + 浮层）
+ *            ↓ 组件拿到**自己会话**的 sessionId，判定天然按会话正确
+ * 2026-10  conversation.view（会话 Tab，order 19：对话 | 轨迹 | 研究进展 | 科V社区）
  * ```
  *
- * 换成 `conversation.session.header.utilities` 后问题从根上消失：
- *
- * ```text
- * session 作用域的 list 槽位（追加式，replaceRisk: none）
- *   → 组件拿到**自己会话**的 `sessionId`（DSH 的 standard props）
- *   → 宿主按"这个会话自己的工作区"回答 research 与否（progress/workspace）
- *   → 非研究工作区：连按钮都不渲染（不是渲染成空，而是根本不占位）
- * ```
+ * 现在这一页是**会话 Tab 的正文**，按钮与浮层已移除（用户要求"只留 tab"）。
+ * tab 的显隐与文案由 `./convfusion-tab.js` 的闸门管：只在研究工作区注册，
+ * 文案里的百分比也取自闸门对宿主的那一次探针（面板没挂载时 tab 也要有数）。
  *
  * ## 三条必须守住的边界
  *
- * 1. **只显示在研究会话**：`research !== true` 一律不渲染按钮 —— 判定来自宿主，且
- *    用的是会话自己的 `header.cwd`，与插件进程的启动目录无关。
- * 2. **不发明数据**：面板只渲染宿主算好的报告；成熟度是**等级折算**（同时显示等级名），
- *    可数资产给真实计数。拿不到数据就什么都不显示，不显示 0%。
- * 3. **不动别人的槽位**：`list` 槽位是追加式，官方条目（open-in-app / session-log-export）
- *    照常显示；面板是本组件自己的浮层，不开模态、不拦截对话。
+ * 1. **只出现在研究工作区**：`research !== true` 时闸门根本不注册这个 tab（不是渲染成空，
+ *    而是根本不占位）；判定来自宿主，用的是会话自己的 `header.cwd`，与插件进程的启动目录无关。
+ * 2. **不发明数据**：只渲染宿主算好的报告；成熟度是**等级折算**（同时显示等级名），
+ *    可数资产给真实计数。拿不到数据就说明"宿主还没返回"，不显示 0%。
+ * 3. **会话作用域**：`sessionId` 来自 DSH 的 session 作用域 standard props，每个会话只问
+ *    自己的宿主答案 —— 这正是那次链式槽位故障的反面。
  */
 
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { fetchSettingsSend } from './settings.js'
 import {
   maturityDimensionText,
@@ -220,31 +213,26 @@ export function shortenPath(path: string | null): string {
 }
 
 /* ════════════════════════════════════════════════════════════════════════
- * 顶部按钮
+ * 共用的量
  * ════════════════════════════════════════════════════════════════════════ */
-
-interface ButtonProps {
-  /** 当前会话 id（DSH 的 session 作用域 standard prop）。 */
-  sessionId?: string
-  /** DSH Slot 标准注入。 */
-  t: Translate
-}
-
-/** 图标（16px，`currentColor`，与官方 header 工具图标同规格）。 */
-function ProgressGlyph(): JSX.Element {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect x="3.2" y="8.4" width="2.3" height="4.4" rx="0.6" fill="currentColor" />
-      <rect x="6.85" y="5.4" width="2.3" height="7.4" rx="0.6" fill="currentColor" />
-      <rect x="10.5" y="2.4" width="2.3" height="10.4" rx="0.6" fill="currentColor" />
-    </svg>
-  )
-}
 
 const pct = (v: number): string => `${Math.round(v * 100)}%`
 
-/** 顶部百分比的后台刷新间隔（毫秒）。见 `ResearchProgressButton` 里的说明。 */
+/**
+ * 进展的后台刷新间隔（毫秒）。
+ *
+ * 两处用它：① 面板内容（研究资产一变，读数就该变）；② `./convfusion-tab.js` 的闸门
+ * —— tab 文案里的百分比来自闸门的探针，靠同一个低频轮询跟上变化。
+ */
 export const PROGRESS_REFRESH_MS = 60000
+
+/** 「研究进展」正文与整页容器共用的 props。 */
+interface PanelProps {
+  /** 当前会话 id（DSH 的 session 作用域 standard prop）。 */
+  sessionId?: string | undefined
+  /** DSH Slot 标准注入。 */
+  t: Translate
+}
 
 /**
  * 成熟度条（纯 CSS，无图表依赖）。
@@ -345,21 +333,36 @@ function workGapText(t: Translate, next: NonNullable<WorkProgress['next']>): str
 }
 
 /**
- * 会话头部的「研究进展」按钮。
+ * 「研究进展」的**正文**（面板本体）。
  *
- * 会话作用域 → 换会话即重挂（`sessionId` 变化），因此**不存在跨会话串味**：
- * 每个会话只问自己的宿主答案，缓存也只在组件内部。
+ * ## 为什么与组件分离
+ *
+ * 这一页原先只是会话头部一个按钮点开的**浮层**；用户 2026-10 拍板改成会话 Tab
+ * （`对话 | 轨迹 | 研究进展 | 科V社区`），于是正文必须能脱离那个按钮独立渲染：
+ *
+ * ```text
+ * conversation.view (id: convfusion-progress, order: 19)
+ *   └─ ResearchProgressView   ← 整页容器（自己滚动 + 居中列宽）
+ *        └─ ResearchProgressPanel  ← 本组件：读数 + A/A2/B/C 四块
+ * ```
+ *
+ * ## 三条边界
+ *
+ * 1. **不发明数据**：只渲染宿主算好的报告；成熟度是**等级折算**（同时显示等级名），
+ *    可数资产给真实计数。拿不到数据就说明"宿主还没返回"，**不显示 0%**。
+ * 2. **会话作用域**：`sessionId` 由 DSH 的 session 作用域 standard props 给到，
+ *    因此每个会话只问自己的宿主答案，**不存在跨会话串味**（这正是 2026-09 那次
+ *    链式槽位故障的反面：那时判定只能靠进程级全局变量猜）。
+ * 3. **数字只有一处来源**：面板与 tab 文案里的百分比都来自宿主同一次端点，界面不自己算。
+ *
+ * tab 的显隐（只在研究工作区出现）不在这里 —— 由 `./convfusion-tab.js` 的闸门决定
+ * 注册与否；tab 文案里的百分比同样由闸门从宿主答案里取（面板没挂载时也要有数）。
  */
-export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Element | null {
+export function ResearchProgressPanel({ sessionId, t }: PanelProps): JSX.Element {
   const [probe, setProbe] = useState<ProgressProbe>({ kind: 'loading' })
-  const [open, setOpen] = useState(false)
-  const [hover, setHover] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
   /** 当前选中的研究工作 id（空串 = 总览；宿主刷新后该工作消失则自动回到总览）。 */
   const [workId, setWorkId] = useState('')
-  const anchorRef = useRef<HTMLSpanElement | null>(null)
-  const panelRef = useRef<HTMLDivElement | null>(null)
 
   // 选中的工作可能已经不在报告里（换了工作区 / 论文被删）→ 回到总览，不留空面板。
   const shownWorkIds = (probe.kind === 'shown' ? probe.report?.works ?? [] : []).map((w) => w.id).join('\u0000')
@@ -384,22 +387,15 @@ export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Eleme
     }
   }, [sessionId])
 
-  // 挂载即问一次：非研究工作区直接不渲染按钮
+  // 挂载即问一次
   useEffect(() => {
     void load()
   }, [load])
 
-  // 每次打开都重新取一次（研究资产可能刚变）
-  useEffect(() => {
-    if (open) void load()
-  }, [open, load])
-
-  // 图标旁的百分比是"当前成熟度折算"，研究资产一变它就该变 —— 所以：
-  //   · 低频轮询（单个会话只挂一个按钮，且只在按钮可见时存在，开销可控）；
-  //   · 窗口重新可见时立刻刷新（切回 Harness 是最常见的"刚跑完一轮"时刻）。
+  // 研究资产一变读数就该变 —— 所以：低频轮询 + 窗口重新可见时立刻刷新
+  // （切回 Harness 是最常见的"刚跑完一轮"时刻）。
   // 不订阅 chat 快照是为了不镜像更多 DSH 内部契约（契约一变就会静默失效）。
   useEffect(() => {
-    if (probe.kind !== 'shown') return undefined
     const timer = window.setInterval(() => void load(), PROGRESS_REFRESH_MS)
     const onVisible = (): void => {
       if (document.visibilityState === 'visible') void load()
@@ -409,50 +405,21 @@ export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Eleme
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [probe.kind, load])
+  }, [load])
 
-  // 定位：`position: fixed` + 从按钮的视口矩形算出位置。
-  //
-  // 为什么用 fixed 而不是在按钮下面 `absolute`：header 一类的祖先常有 `overflow: hidden`
-  // （标题要省略号），absolute 会被裁掉。fixed 不受裁剪影响，随窗口滚动/缩放重算即可。
-  // （若将来壳层在某个祖先上加 `transform`，fixed 会改以该祖先为包含块 —— 那时需要
-  // 改成 portal 到 body。当前 DSH 壳层没有这种祖先。）
-  const place = useCallback((): void => {
-    const rect = anchorRef.current?.getBoundingClientRect()
-    if (!rect) return
-    setPos({ top: rect.bottom + 6, right: Math.max(8, window.innerWidth - rect.right) })
-  }, [])
-
-  useLayoutEffect(() => {
-    if (open) place()
-  }, [open, place])
-
-  useEffect(() => {
-    if (!open) return undefined
-    const onMove = (): void => place()
-    const onDown = (event: PointerEvent): void => {
-      const target = event.target as Node | null
-      if (!target) return
-      if (anchorRef.current?.contains(target) === true) return
-      if (panelRef.current?.contains(target) === true) return
-      setOpen(false)
-    }
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    window.addEventListener('resize', onMove)
-    window.addEventListener('scroll', onMove, true)
-    window.addEventListener('pointerdown', onDown, true)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('resize', onMove)
-      window.removeEventListener('scroll', onMove, true)
-      window.removeEventListener('pointerdown', onDown, true)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open, place])
-
-  if (probe.kind !== 'shown') return null
+  // 面板文字色/次要色/等宽字体都用 DSH 真实 token（每个都带兜底）
+  const muted = 'var(--dsw-alias-label-tertiary, #81858c)'
+  const mono: React.CSSProperties = {
+    fontFamily: 'var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace)',
+    fontSize: '11.5px',
+  }
+  if (probe.kind !== 'shown') {
+    return (
+      <div data-convfusion-progress-view="1" style={{ color: muted }}>
+        {probe.kind === 'loading' ? t('progress.reading') : t('progress.noReport')}
+      </div>
+    )
+  }
 
   const report = probe.report
   const lastTurn = probe.lastTurn
@@ -463,12 +430,6 @@ export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Eleme
   const works = report?.works ?? []
   const multi = works.length > 1
   const work = multi ? works.find((w) => w.id === workId) ?? null : null
-  // 面板文字色/次要色/等宽字体都用 DSH 真实 token（每个都带兜底）
-  const muted = 'var(--dsw-alias-label-tertiary, #81858c)'
-  const mono: React.CSSProperties = {
-    fontFamily: 'var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace)',
-    fontSize: '11.5px',
-  }
   /**
    * 分区卡片：A/A2/B/C 四块各自成卡（边框 + 浅底 + 圆角）。
    *
@@ -609,373 +570,319 @@ export function ResearchProgressButton({ sessionId, t }: ButtonProps): JSX.Eleme
   }
 
   return (
-    <span ref={anchorRef} style={{ display: 'inline-flex', alignItems: 'center' }} data-convfusion-progress-button="1">
-      <button
-        type="button"
-        aria-label={
-          report
-            ? t('progress.button.ariaWithPercent', { percent: pct(report.overall) })
-            : t('progress.name')
-        }
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        title={
-          report
-            ? t('progress.button.titleWithPercent', { percent: pct(report.overall) })
-            : t('progress.button.title')
-        }
-        onClick={() => setOpen((v) => !v)}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '4px',
-          minWidth: '24px',
-          height: '24px',
-          border: 'none',
-          borderRadius: '6px',
-          background: open || hover ? 'var(--dsw-alias-interactive-bg-hover, rgba(15,17,21,0.06))' : 'transparent',
-          color: 'inherit',
-          cursor: 'pointer',
-          padding: '0 6px',
-          font: 'inherit',
-          lineHeight: 1,
-        }}
-      >
-        <ProgressGlyph />
+    <div data-convfusion-progress-view="1">
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
+        <strong>{t('progress.name')}</strong>
         {report ? (
-          <span
-            data-convfusion-progress-percent="1"
-            style={{ fontSize: '12px', fontVariantNumeric: 'tabular-nums', letterSpacing: '0.02em' }}
-          >
-            {pct(report.overall)}
+          <span style={{ color: muted, ...mono }}>
+            {t('progress.summary', { percent: pct(work ? work.overall : report.overall) })}
+            {work
+              ? ` · ${t('progress.work.meta', { version: work.version, status: work.status })}`
+              : report.progress.stage
+                ? t('progress.currentStage', { stage: stageText(t, report.progress.stage) })
+                : ''}
           </span>
-        ) : null}
-      </button>
+        ) : (
+          <span style={{ color: muted }}>{t('progress.noData')}</span>
+        )}
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: '2px' }}>
+          {busy ? <span style={{ color: muted, ...mono }}>{t('progress.reading')}</span> : null}
+          <button
+            type="button"
+            style={{ ...iconButton, opacity: busy ? 0.5 : 1 }}
+            aria-label={t('progress.refresh')}
+            title={t('progress.refresh')}
+            disabled={busy}
+            onClick={() => void load()}
+          >
+            ⟳
+          </button>
+        </span>
+      </div>
+      <div style={{ color: muted, ...mono }}>
+        {shortenPath(probe.workspace)}
+        {work ? ` · ${work.id}` : ''}
+      </div>
 
-      {open ? (
-        <div
-          ref={panelRef}
-          role="dialog"
-          aria-label={t('progress.name')}
-          data-convfusion-progress-panel="1"
-          style={{
-            position: 'fixed',
-            top: pos?.top ?? 0,
-            right: pos?.right ?? 12,
-            visibility: pos ? 'visible' : 'hidden',
-            zIndex: 2147483000,
-            // 600px：成熟度/资产两栏网格每行需要 ~256px（标签 92 + 条 88 + 等级文字），
-            // 440px 时每栏只有 ~200px，等级文字会被挤到第二行（用户反馈）。
-            width: 'min(600px, calc(100vw - 24px))',
-            maxHeight: '70vh',
-            overflowY: 'auto',
-            padding: '12px 16px 14px',
-            // ⚠️ 面板是**自己画的浮层**，必须显式给出浅色底与文字色：
-            // 这两个 token 在浅色主题下分别是 #fff 与近黑；写错 token 名会静默落到兜底值。
-            background: 'var(--dsw-alias-bg-layer-2, #ffffff)',
-            color: 'var(--dsw-alias-label-primary, #0f1115)',
-            border: '1px solid var(--dsw-alias-border-l2, rgba(15,17,21,0.10))',
-            borderRadius: '10px',
-            boxShadow: '0 8px 24px rgba(15,17,21,0.12), 0 2px 6px rgba(15,17,21,0.06)',
-            fontSize: '12.5px',
-            lineHeight: 1.6,
-            textAlign: 'left',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
-            <strong>{t('progress.name')}</strong>
-            {report ? (
-              <span style={{ color: muted, ...mono }}>
-                {t('progress.summary', { percent: pct(work ? work.overall : report.overall) })}
-                {work
-                  ? ` · ${t('progress.work.meta', { version: work.version, status: work.status })}`
-                  : report.progress.stage
-                    ? t('progress.currentStage', { stage: stageText(t, report.progress.stage) })
-                    : ''}
-              </span>
-            ) : (
-              <span style={{ color: muted }}>{t('progress.noData')}</span>
-            )}
-            <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: '2px' }}>
-              {busy ? <span style={{ color: muted, ...mono }}>{t('progress.reading')}</span> : null}
-              <button
-                type="button"
-                style={{ ...iconButton, opacity: busy ? 0.5 : 1 }}
-                aria-label={t('progress.refresh')}
-                title={t('progress.refresh')}
-                disabled={busy}
-                onClick={() => void load()}
-              >
-                ⟳
-              </button>
-              <button
-                type="button"
-                style={iconButton}
-                aria-label={t('progress.close')}
-                title={t('progress.close')}
-                onClick={() => setOpen(false)}
-              >
-                ✕
-              </button>
-            </span>
-          </div>
-          <div style={{ color: muted, ...mono }}>
-            {shortenPath(probe.workspace)}
-            {work ? ` · ${work.id}` : ''}
-          </div>
+      {/* 工作 tab：只在**多于一个**工作时出现（单工作与今天完全一致） */}
+      {multi ? (
+        <div role="tablist" aria-label={t('progress.name')} style={tabStrip} data-convfusion-progress-tabs="1">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={work === null}
+            title={t('progress.works.overview')}
+            style={tab(work === null)}
+            onClick={() => setWorkId('')}
+          >
+            {t('progress.works.overview')}
+          </button>
+          {works.map((w) => (
+            <button
+              key={w.id}
+              type="button"
+              role="tab"
+              aria-selected={work?.id === w.id}
+              title={w.active ? `${w.title} · ${t('progress.works.active')}` : w.title}
+              style={tab(work?.id === w.id)}
+              onClick={() => setWorkId(w.id)}
+            >
+              {w.active ? `● ${w.short}` : w.short}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
-          {/* 工作 tab：只在**多于一个**工作时出现（单工作与今天完全一致） */}
-          {multi ? (
-            <div role="tablist" aria-label={t('progress.name')} style={tabStrip} data-convfusion-progress-tabs="1">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={work === null}
-                title={t('progress.works.overview')}
-                style={tab(work === null)}
-                onClick={() => setWorkId('')}
-              >
-                {t('progress.works.overview')}
-              </button>
-              {works.map((w) => (
-                <button
-                  key={w.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={work?.id === w.id}
-                  title={w.active ? `${w.title} · ${t('progress.works.active')}` : w.title}
-                  style={tab(work?.id === w.id)}
-                  onClick={() => setWorkId(w.id)}
-                >
-                  {w.active ? `● ${w.short}` : w.short}
-                </button>
+      {report && work ? (
+        <>
+          {/* A. 这个工作自己的成熟度（论文成熟度维度；无评估时按资产推定并标明） */}
+          <div style={section}>
+            <div style={sectionTitle}>
+              {t('progress.work.section.maturity')}
+              {work.maturitySource === 'derived' ? t('progress.work.maturityDerived') : ''}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
+              {work.maturity.map((d) => (
+                <div key={d.dimension} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ minWidth: '92px', whiteSpace: 'nowrap', ...mono }}>
+                    {translateOr(t, `maturity.paper.${d.dimension}`, d.dimension)}
+                  </span>
+                  <Bar scale={d.scale} />
+                  <span style={{ color: muted, whiteSpace: 'nowrap', ...mono }}>{maturityLevelText(t, d.level)}</span>
+                </div>
               ))}
+            </div>
+          </div>
+
+          {/* A2. 这个工作自己的可数资产（真实计数） */}
+          <div style={section}>
+            <div style={sectionTitle}>{t('progress.work.section.assets')}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
+              {workRow(
+                t('progress.work.count.sections'),
+                `${work.counts.sectionsWithContent}/${work.counts.sections}`,
+              )}
+              {workRow(
+                t('progress.work.count.claims'),
+                String(work.counts.claims),
+                work.counts.claimsWithoutEvidence > 0
+                  ? t('progress.work.count.claimsWithoutEvidence', { count: work.counts.claimsWithoutEvidence })
+                  : undefined,
+              )}
+              {workRow(
+                t('progress.work.count.evidence'),
+                String(work.counts.evidence),
+                t('progress.work.count.evidenceUsed', { count: work.counts.evidenceUsedInManuscript }),
+              )}
+              {workRow(
+                t('progress.work.count.gaps'),
+                String(work.counts.gaps),
+                work.counts.gapsHigh > 0
+                  ? t('progress.work.count.gapsHigh', { count: work.counts.gapsHigh })
+                  : undefined,
+              )}
+              {work.counts.openProposals > 0
+                ? workRow(t('progress.work.count.proposals'), String(work.counts.openProposals))
+                : null}
+            </div>
+          </div>
+
+          {/* C. 这个工作的下一步（最高优先级缺口；没有缺口就不渲染这一段） */}
+          {work.next ? (
+            <div style={section}>
+              <div style={sectionTitle}>{t('progress.work.section.next')}</div>
+              <div>{t('progress.work.nextStep', { text: workGapText(t, work.next) })}</div>
+              {work.next.skill ? (
+                <div style={{ color: muted }}>
+                  {t('progress.work.nextSkill', { skill: skillText(t, work.next.skill, work.next.skill) })}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </>
+      ) : report ? (
+        <>
+          {/* 总览（多工作）：每个工作一行 + 合计 —— 一台工作一台读数，不复述某一个工作。
+              下面的 A/A2/B/C 是**项目级**内容（Research State / 全局计数 / 回合变化），照旧保留。 */}
+          {multi && report.aggregate ? (
+            <div style={section} data-convfusion-progress-aggregate="1">
+              <div style={sectionTitle}>{t('progress.works.section.aggregate')}</div>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(84px, 1.5fr) repeat(6, minmax(42px, 0.7fr))',
+                  gap: '3px 6px',
+                  alignItems: 'baseline',
+                  ...mono,
+                }}
+              >
+                <span style={{ color: muted }}>{t('progress.works.col.work')}</span>
+                <span style={{ color: muted }}>{t('progress.works.col.maturity')}</span>
+                <span style={{ color: muted }}>{t('progress.works.col.sections')}</span>
+                <span style={{ color: muted }}>{t('progress.works.col.claims')}</span>
+                <span style={{ color: muted }}>{t('progress.works.col.evidence')}</span>
+                <span style={{ color: muted }}>{t('progress.works.col.gaps')}</span>
+                <span style={{ color: muted }}>{t('progress.works.col.proposals')}</span>
+                {report.aggregate.rows.map((row) => aggRow(row))}
+                {aggRow(null, report.aggregate.totals)}
+              </div>
             </div>
           ) : null}
 
-          {report && work ? (
-            <>
-              {/* A. 这个工作自己的成熟度（论文成熟度维度；无评估时按资产推定并标明） */}
-              <div style={section}>
-                <div style={sectionTitle}>
-                  {t('progress.work.section.maturity')}
-                  {work.maturitySource === 'derived' ? t('progress.work.maturityDerived') : ''}
+          {/* A. 研究现在到了哪里 */}
+          <div style={section}>
+            <div style={sectionTitle}>{t('progress.section.maturity')}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
+              {report.progress.dimensions.map((d) => (
+                <div key={d.dimension} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ minWidth: '92px', whiteSpace: 'nowrap', ...mono }}>{maturityDimensionText(t, d.dimension)}</span>
+                  <Bar scale={d.scale} />
+                  <span style={{ color: muted, whiteSpace: 'nowrap', ...mono }}>{maturityLevelText(t, d.level)}</span>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
-                  {work.maturity.map((d) => (
-                    <div key={d.dimension} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ minWidth: '92px', whiteSpace: 'nowrap', ...mono }}>
-                        {translateOr(t, `maturity.paper.${d.dimension}`, d.dimension)}
-                      </span>
-                      <Bar scale={d.scale} />
-                      <span style={{ color: muted, whiteSpace: 'nowrap', ...mono }}>{maturityLevelText(t, d.level)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              ))}
+            </div>
+          </div>
 
-              {/* A2. 这个工作自己的可数资产（真实计数） */}
-              <div style={section}>
-                <div style={sectionTitle}>{t('progress.work.section.assets')}</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
-                  {workRow(
-                    t('progress.work.count.sections'),
-                    `${work.counts.sectionsWithContent}/${work.counts.sections}`,
-                  )}
-                  {workRow(
-                    t('progress.work.count.claims'),
-                    String(work.counts.claims),
-                    work.counts.claimsWithoutEvidence > 0
-                      ? t('progress.work.count.claimsWithoutEvidence', { count: work.counts.claimsWithoutEvidence })
-                      : undefined,
-                  )}
-                  {workRow(
-                    t('progress.work.count.evidence'),
-                    String(work.counts.evidence),
-                    t('progress.work.count.evidenceUsed', { count: work.counts.evidenceUsedInManuscript }),
-                  )}
-                  {workRow(
-                    t('progress.work.count.gaps'),
-                    String(work.counts.gaps),
-                    work.counts.gapsHigh > 0
-                      ? t('progress.work.count.gapsHigh', { count: work.counts.gapsHigh })
-                      : undefined,
-                  )}
-                  {work.counts.openProposals > 0
-                    ? workRow(t('progress.work.count.proposals'), String(work.counts.openProposals))
-                    : null}
-                </div>
-              </div>
-
-              {/* C. 这个工作的下一步（最高优先级缺口；没有缺口就不渲染这一段） */}
-              {work.next ? (
-                <div style={section}>
-                  <div style={sectionTitle}>{t('progress.work.section.next')}</div>
-                  <div>{t('progress.work.nextStep', { text: workGapText(t, work.next) })}</div>
-                  {work.next.skill ? (
-                    <div style={{ color: muted }}>
-                      {t('progress.work.nextSkill', { skill: skillText(t, work.next.skill, work.next.skill) })}
-                    </div>
+          {/* 可数资产（真实计数，不给百分比） */}
+          <div style={section}>
+            <div style={sectionTitle}>{t('progress.section.assets')}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
+              {report.counts.map((row) => (
+                <div key={row.key} style={{ display: 'flex', gap: '8px' }}>
+                  <span style={{ minWidth: '92px', whiteSpace: 'nowrap', ...mono }}>{progressCountText(t, row.key)}</span>
+                  <span style={mono}>{row.value}</span>
+                  {row.detail ? (
+                    <span style={{ color: muted }}>
+                      {t(`progress.count.${row.detail.code}`, { count: row.detail.count })}
+                    </span>
                   ) : null}
                 </div>
-              ) : null}
-            </>
-          ) : report ? (
-            <>
-              {/* 总览（多工作）：每个工作一行 + 合计 —— 一台工作一台读数，不复述某一个工作。
-                  下面的 A/A2/B/C 是**项目级**内容（Research State / 全局计数 / 回合变化），照旧保留。 */}
-              {multi && report.aggregate ? (
-                <div style={section} data-convfusion-progress-aggregate="1">
-                  <div style={sectionTitle}>{t('progress.works.section.aggregate')}</div>
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'minmax(84px, 1.5fr) repeat(6, minmax(42px, 0.7fr))',
-                      gap: '3px 6px',
-                      alignItems: 'baseline',
-                      ...mono,
-                    }}
-                  >
-                    <span style={{ color: muted }}>{t('progress.works.col.work')}</span>
-                    <span style={{ color: muted }}>{t('progress.works.col.maturity')}</span>
-                    <span style={{ color: muted }}>{t('progress.works.col.sections')}</span>
-                    <span style={{ color: muted }}>{t('progress.works.col.claims')}</span>
-                    <span style={{ color: muted }}>{t('progress.works.col.evidence')}</span>
-                    <span style={{ color: muted }}>{t('progress.works.col.gaps')}</span>
-                    <span style={{ color: muted }}>{t('progress.works.col.proposals')}</span>
-                    {report.aggregate.rows.map((row) => aggRow(row))}
-                    {aggRow(null, report.aggregate.totals)}
-                  </div>
-                </div>
-              ) : null}
-
-              {/* A. 研究现在到了哪里 */}
-              <div style={section}>
-                <div style={sectionTitle}>{t('progress.section.maturity')}</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
-                  {report.progress.dimensions.map((d) => (
-                    <div key={d.dimension} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ minWidth: '92px', whiteSpace: 'nowrap', ...mono }}>{maturityDimensionText(t, d.dimension)}</span>
-                      <Bar scale={d.scale} />
-                      <span style={{ color: muted, whiteSpace: 'nowrap', ...mono }}>{maturityLevelText(t, d.level)}</span>
-                    </div>
-                  ))}
-                </div>
+              ))}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <span style={{ minWidth: '92px', ...mono }}>{t('progress.paper')}</span>
+                <span style={{ color: muted }}>
+                  {report.paper ? t('progress.paper.present') : t('progress.paper.absent')}
+                </span>
               </div>
+            </div>
+            <div style={{ color: muted }}>{t('progress.stateVersion', { version: report.stateVersion })}</div>
+          </div>
 
-              {/* 可数资产（真实计数，不给百分比） */}
-              <div style={section}>
-                <div style={sectionTitle}>{t('progress.section.assets')}</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '2px 16px' }}>
-                  {report.counts.map((row) => (
-                    <div key={row.key} style={{ display: 'flex', gap: '8px' }}>
-                      <span style={{ minWidth: '92px', whiteSpace: 'nowrap', ...mono }}>{progressCountText(t, row.key)}</span>
-                      <span style={mono}>{row.value}</span>
-                      {row.detail ? (
-                        <span style={{ color: muted }}>
-                          {t(`progress.count.${row.detail.code}`, { count: row.detail.count })}
-                        </span>
-                      ) : null}
-                    </div>
-                  ))}
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <span style={{ minWidth: '92px', ...mono }}>{t('progress.paper')}</span>
-                    <span style={{ color: muted }}>
-                      {report.paper ? t('progress.paper.present') : t('progress.paper.absent')}
-                    </span>
-                  </div>
+          {/* B. 最近一轮改变了什么（需要该会话跑完过至少一轮） */}
+          <div style={section}>
+            <div style={sectionTitle}>{t('progress.section.turn')}</div>
+            {lastTurn ? (
+              <div>
+                <div style={{ color: muted, ...mono }}>
+                  {t('progress.turn.summary', {
+                    turn: lastTurn.turn,
+                    before: pct(lastTurn.overall.before),
+                    after: pct(lastTurn.overall.after),
+                    assetChange:
+                      lastTurn.changes.counts.length > 0
+                        ? t('progress.turn.assetChange', { count: lastTurn.changes.counts.length })
+                        : t('progress.turn.noAssetChange'),
+                  })}
                 </div>
-                <div style={{ color: muted }}>{t('progress.stateVersion', { version: report.stateVersion })}</div>
-              </div>
-
-              {/* B. 最近一轮改变了什么（需要该会话跑完过至少一轮） */}
-              <div style={section}>
-                <div style={sectionTitle}>{t('progress.section.turn')}</div>
-                {lastTurn ? (
-                  <div>
-                    <div style={{ color: muted, ...mono }}>
-                      {t('progress.turn.summary', {
-                        turn: lastTurn.turn,
-                        before: pct(lastTurn.overall.before),
-                        after: pct(lastTurn.overall.after),
-                        assetChange:
-                          lastTurn.changes.counts.length > 0
-                            ? t('progress.turn.assetChange', { count: lastTurn.changes.counts.length })
-                            : t('progress.turn.noAssetChange'),
-                      })}
-                    </div>
-                    {lastTurn.changes.changed ? (
-                      <ul style={{ margin: '2px 0 0', paddingLeft: '18px' }}>
-                        {lastTurn.changes.maturity.map((m) => (
-                          <li key={`m-${m.dimension}`}>
-                            {t('progress.turn.maturityChange', {
-                              dimension: maturityDimensionText(t, m.dimension),
-                              from: maturityLevelText(t, m.from),
-                              to: maturityLevelText(t, m.to),
-                            })}
-                          </li>
-                        ))}
-                        {lastTurn.changes.counts.map((c) => (
-                          <li key={`c-${c.key}`}>
-                            {t('progress.turn.countChange', {
-                              label: progressCountText(t, c.key),
-                              from: c.from,
-                              to: c.to,
-                              delta: `${c.to - c.from > 0 ? '+' : ''}${c.to - c.from}`,
-                            })}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <div style={{ color: muted }}>{t('progress.turn.noChange')}</div>
-                    )}
-                  </div>
+                {lastTurn.changes.changed ? (
+                  <ul style={{ margin: '2px 0 0', paddingLeft: '18px' }}>
+                    {lastTurn.changes.maturity.map((m) => (
+                      <li key={`m-${m.dimension}`}>
+                        {t('progress.turn.maturityChange', {
+                          dimension: maturityDimensionText(t, m.dimension),
+                          from: maturityLevelText(t, m.from),
+                          to: maturityLevelText(t, m.to),
+                        })}
+                      </li>
+                    ))}
+                    {lastTurn.changes.counts.map((c) => (
+                      <li key={`c-${c.key}`}>
+                        {t('progress.turn.countChange', {
+                          label: progressCountText(t, c.key),
+                          from: c.from,
+                          to: c.to,
+                          delta: `${c.to - c.from > 0 ? '+' : ''}${c.to - c.from}`,
+                        })}
+                      </li>
+                    ))}
+                  </ul>
                 ) : (
-                  <div style={{ color: muted }}>{t('progress.turn.unavailable')}</div>
+                  <div style={{ color: muted }}>{t('progress.turn.noChange')}</div>
                 )}
               </div>
-
-              {/* C. 当前缺口与推进判定 */}
-              <div style={section}>
-                <div style={sectionTitle}>{t('progress.section.need')}</div>
-                <ul style={{ margin: '2px 0 0', paddingLeft: '18px' }}>
-                  {report.need.gaps.map((g, index) => (
-                    <li key={`${g.code}-${index}`}>{gapText(t, g)}</li>
-                  ))}
-                </ul>
-                <div style={{ marginTop: '2px' }}>
-                  <span style={{ color: muted }}>{t('progress.need.assessment')}</span>
-                  {clarityText(t, report.need.clarity)}
-                  {report.need.basis ? (
-                    <span style={{ color: muted }}>
-                      {t('progress.need.basis', { basis: basisText(t, report.need, report.progress.stage) })}
-                    </span>
-                  ) : null}
-                </div>
-                {report.need.nextStep ? (
-                  <div>
-                    {t('progress.need.nextStep', {
-                      text: nextStepText(t, report.need.nextStep, report.progress.stage),
-                    })}
-                  </div>
-                ) : null}
-                {decisionText(t, report.need) ? (
-                  <div>{t('progress.need.decision', { text: decisionText(t, report.need) })}</div>
-                ) : null}
-              </div>
-            </>
-          ) : (
-            <div style={{ marginTop: '8px', color: muted }}>{t('progress.noReport')}</div>
-          )}
-
-          <div style={{ marginTop: '10px', color: muted, fontSize: '11.5px' }}>
-            {t('progress.footnote')}
+            ) : (
+              <div style={{ color: muted }}>{t('progress.turn.unavailable')}</div>
+            )}
           </div>
-        </div>
-      ) : null}
-    </span>
+
+          {/* C. 当前缺口与推进判定 */}
+          <div style={section}>
+            <div style={sectionTitle}>{t('progress.section.need')}</div>
+            <ul style={{ margin: '2px 0 0', paddingLeft: '18px' }}>
+              {report.need.gaps.map((g, index) => (
+                <li key={`${g.code}-${index}`}>{gapText(t, g)}</li>
+              ))}
+            </ul>
+            <div style={{ marginTop: '2px' }}>
+              <span style={{ color: muted }}>{t('progress.need.assessment')}</span>
+              {clarityText(t, report.need.clarity)}
+              {report.need.basis ? (
+                <span style={{ color: muted }}>
+                  {t('progress.need.basis', { basis: basisText(t, report.need, report.progress.stage) })}
+                </span>
+              ) : null}
+            </div>
+            {report.need.nextStep ? (
+              <div>
+                {t('progress.need.nextStep', {
+                  text: nextStepText(t, report.need.nextStep, report.progress.stage),
+                })}
+              </div>
+            ) : null}
+            {decisionText(t, report.need) ? (
+              <div>{t('progress.need.decision', { text: decisionText(t, report.need) })}</div>
+            ) : null}
+          </div>
+        </>
+      ) : (
+        <div style={{ marginTop: '8px', color: muted }}>{t('progress.noReport')}</div>
+      )}
+
+      <div style={{ marginTop: '10px', color: muted, fontSize: '11.5px' }}>{t('progress.footnote')}</div>
+    </div>
+  )
+}
+
+/**
+ * 会话 Tab「研究进展」的正文（`conversation.view` 的占用者）。
+ *
+ * 整页容器：`conversation.view` 的容器是 `flex: 1; min-height: 0`，**没有 overflow**，
+ * 外层的 `.centerCol` 还是 `overflow: hidden` —— 所以滚动必须自己给，否则长内容被裁掉。
+ * 列宽用固定的居中列（会话正文那条可拖拽宽度是**对话**的排版，不适合卡片列表）。
+ */
+export function ResearchProgressView({ sessionId, t }: PanelProps): JSX.Element {
+  return (
+    <div
+      data-convfusion-progress-page="1"
+      style={{
+        flex: '1 1 auto',
+        minHeight: 0,
+        overflowY: 'auto',
+        background: 'var(--dsw-alias-bg-base, #ffffff)',
+        color: 'var(--dsw-alias-label-primary, #0f1115)',
+      }}
+    >
+      <div
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          maxWidth: '880px',
+          margin: '0 auto',
+          padding: '16px 24px 28px',
+        }}
+      >
+        <ResearchProgressPanel sessionId={sessionId} t={t} />
+      </div>
+    </div>
   )
 }

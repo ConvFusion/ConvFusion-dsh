@@ -66,7 +66,6 @@ export const zh = {
 
   'community.title': 'ConvFusion.com',
   'community.entry.label': '科V社区',
-  'community.button.title': '打开科V社区（账号 · 研究网络）',
   'community.notice.published': '{title} · 研究状态 v{version}',
   'community.notice.tokens': '{tokens} Token',
   'community.notice.files': '{count} 附件',
@@ -402,15 +401,13 @@ export const zh = {
   'system.retrieval.clearFailed': '清除失败：{detail}',
 
   'progress.name': '研究进展',
-  'progress.button.ariaWithPercent': '研究进展（成熟度折算 {percent}）',
-  'progress.button.title': '查看当前工作区的研究进展',
-  'progress.button.titleWithPercent': '查看当前工作区的研究进展（成熟度折算 {percent}）',
+  // 会话 Tab 的文案：拿得到百分比就带上（tab 条上一眼能看到进度）
+  'progress.tab.label': '研究进展 {percent}',
   'progress.summary': '成熟度折算 {percent}',
   'progress.currentStage': ' · 当前阶段 {stage}',
   'progress.noData': '尚无数据',
   'progress.reading': '读取中…',
   'progress.refresh': '刷新',
-  'progress.close': '关闭',
   'progress.section.maturity': 'A · 研究成熟度（等级折算，非测量值）',
   'progress.section.assets': 'A2 · 可数资产（真实计数）',
   'progress.paper': '论文正文',

@@ -63,7 +63,6 @@ export declare const zh: {
     'settings.editor.confirmSkill': string;
     'community.title': string;
     'community.entry.label': string;
-    'community.button.title': string;
     'community.notice.published': string;
     'community.notice.tokens': string;
     'community.notice.files': string;
@@ -360,15 +359,12 @@ export declare const zh: {
     'system.retrieval.saveFailed': string;
     'system.retrieval.clearFailed': string;
     'progress.name': string;
-    'progress.button.ariaWithPercent': string;
-    'progress.button.title': string;
-    'progress.button.titleWithPercent': string;
+    'progress.tab.label': string;
     'progress.summary': string;
     'progress.currentStage': string;
     'progress.noData': string;
     'progress.reading': string;
     'progress.refresh': string;
-    'progress.close': string;
     'progress.section.maturity': string;
     'progress.section.assets': string;
     'progress.paper': string;

@@ -12,7 +12,7 @@
  * 用法：
  *   node scripts/verify-progress.mjs .
  */
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
@@ -360,6 +360,35 @@ console.log('\n[5c] 多个研究工作：每个工作只报自己的事实')
   assert(report.counts.some((r) => r.key === 'evidence'), '聚合可数资产仍在')
   assert(typeof report.paper === 'boolean', '聚合"论文正文有/无"仍在')
 
+  // ── 回归（2026-10-05）：正文判定**不得**锚定硬编码的 `paper-main` ────────────
+  // 本夹具只有 `paper-alpha` / `paper-beta`，正是**多论文工作区**的形态（真实工作区里
+  // 论文叫 `paper-d2-method`、`paper-d-research-ir-method`）。修复前 `hasManuscript` 与
+  // `paperPresent` 都只看 `DEFAULT_PAPER_ID`，于是这类工作区被判成"尚无论文正文" ——
+  // 进度面板与阶段判定同时出错，而旧断言从没覆盖过它。
+  assertEq(report.paper, true, '有论文正文的多论文工作区：聚合"论文正文有/无"为真（不锚定 paper-main）')
+  assertEq(PROG.captureProgress(ws, baseContent).counts.paperPresent, true,
+    '项目级 paperPresent 为真（不锚定 paper-main）')
+  {
+    const assessed = PROC.assessResearchProcess(ws)
+    const writing = assessed.stages.find((x) => x.stage.id === 'writing')
+    assertEq(writing?.satisfied, true, '论文写作阶段：存在论文正文即落地（不锚定 paper-main）')
+    assertEq(assessed.missing.some((x) => x.stage.id === 'writing'), false,
+      '论文写作不应出现在 missing 里（否则"当前阶段"会被错报成写作）')
+  }
+  // ── 多论文进度汇总：逐篇一行 + 合计，且共享证据**不相加** ────────────────────
+  {
+    const works2 = PROG.captureWorkProgress(ws)
+    const agg = PROG.aggregateWorks(works2)
+    assertEq(works2.length, 2, '两个论文目录 → 两个工作')
+    assertEq(agg?.works, 2, '合计的参与工作数为 2')
+    assertEq(agg?.rows.length, 2, '合计里每个工作一行（顺序与工作 tab 一致）')
+    assertEq(agg?.rows[0].counts.sections, 2, '行内计数是该工作自己的（第一篇 2 章）')
+    assertEq(agg?.rows[1].counts.sections, 1, '行内计数是该工作自己的（第二篇 1 章）')
+    assertEq(agg?.totals.evidence, PROG.sharedEvidenceCount(works2),
+      '共享证据库只报一份，不按工作数相加（相加会与项目级读数当场矛盾）')
+    assertEq(PROG.aggregateWorks(works2.slice(0, 1)), null, '只有一个工作时不出合计（界面不出总览 tab）')
+  }
+
   rmSync(join(ws, 'papers', 'paper-beta'), { recursive: true, force: true })
   assertEq(PROG.captureProgress(ws, baseContent).works.length, 1, '删掉一篇 → 只剩一个工作（界面不出 tab）')
   rmSync(ws, { recursive: true, force: true })
@@ -550,12 +579,14 @@ console.log('\n[5d] 总览（多工作）：汇总 = 各工作逐项之和，单
   const bundleSource = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
   let capturedModule = null
   new Function('window', bundleSource)({ __ModuleLoader__: { load: (m) => { capturedModule = m } } })
-  /** 把面板"渲染"成一棵普通对象树（hooks 打桩；不做 DOM、不装 react-dom）。 */
+  /**
+   * 把面板"渲染"成一棵普通对象树（hooks 打桩；不做 DOM、不装 react-dom）。
+   *
+   * 面板本体（`ResearchProgressPanel`）现在的 state 顺序是 `probe / busy / workId`
+   * —— 它不再有"打开/关闭"（那是浮层时代的事，现在这一页就是 tab 的正文）。
+   */
   const render = (rep, workId = '') => {
-    const initial = [
-      { kind: 'shown', workspace: '/a/b/workspace', report: rep, lastTurn: null },
-      true, false, false, { top: 0, right: 0 }, workId,
-    ]
+    const initial = [{ kind: 'shown', workspace: '/a/b/workspace', report: rep, lastTurn: null }, false, workId]
     let hook = 0
     const noop = () => {}
     const ReactStub = {
@@ -576,7 +607,7 @@ console.log('\n[5d] 总览（多工作）：汇总 = 各工作逐项之和，单
       if (id === 'react/jsx-runtime') return { jsx: jsxStub, jsxs: jsxStub, Fragment: ReactStub.Fragment }
       throw new Error(`客户端 bundle 只该 require react / react/jsx-runtime，却要了 ${id}`)
     }
-    return capturedModule.factory(fakeRequire).ResearchProgressButton({ sessionId: 's-render', t: mkT(dict) })
+    return capturedModule.factory(fakeRequire).ResearchProgressPanel({ sessionId: 's-render', t: mkT(dict) })
   }
   const texts = (node, out = []) => {
     if (node === null || node === undefined || typeof node === 'boolean') return out
@@ -974,7 +1005,7 @@ const KNOWN_DSW_TOKENS = new Set([
   '--dsw-alias-label-dimmed', '--dsw-alias-label-caption',
   '--dsw-alias-state-business-primary', '--dsw-alias-state-error-primary', '--dsw-alias-tooltip-bg',
 ])
-console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会话全局状态）')
+console.log('\n[9] 客户端：研究进展 tab 只认自己会话的工作区（无跨会话全局状态）')
 {
   const src = readFileSync(join(PKG, 'src', 'client', 'progress-panel.tsx'), 'utf8')
   const bundle = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
@@ -985,7 +1016,8 @@ console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会�
     'progress-panel.tsx 的**代码**里不再有进程级"当前会话"状态',
   )
   assert(!/activeSessionId|researchSessions/.test(bundle), 'bundle 里没有任何跨会话缓存（旧故障根因已消失）')
-  assert(bundle.includes('conversation.session.header.utilities'), 'bundle 注册在**会话头部工具槽位**（session 作用域）')
+  assert(bundle.includes('conversation.view'), 'bundle 注册在**会话 tab 的 roster 槽位**（conversation.view）')
+  assert(!bundle.includes('conversation.session.header.utilities'), '顶部不再挂任何 ConvFusion 入口（只留 tab）')
   assert(!bundle.includes('conversation.chat.turnTail'), 'bundle 不再占用对话流尾部的链式槽位（不再抢 deliverables）')
   assert(!bundle.includes('conversation.input.dock'), 'bundle 不再用预热组件（判定不再依赖"先挂载过"）')
   assert(bundle.includes('progress/workspace'), 'bundle 调的是新端点 progress/workspace')
@@ -1003,13 +1035,18 @@ console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会�
   )
   assert(bundle.includes('data-convfusion-progress-aggregate'), '多工作的总览渲染汇总块（带标记属性，便于人工与离线确认）')
 
-  /* ── 图标旁的百分比（用户要求）+ 面板必须是**浅色**底 ──────────────────
+  /* ── 百分比挪到 **tab 文案**（用户 2026-10 拍板）+ 页面必须是**浅色**底 ──
    *
-   * ⚠️ 面板曾经是深色的：`--dsw-alias-bg-elevated` 这个 token **不存在**，
+   * 百分比不再在 header 的徽章上，而是写进 tab 文案（「研究进展 62%」）：数值来自闸门
+   * 对宿主的那一次探针，所以**面板没挂载时 tab 上也有数**；roster 只在槽位/语言变化时
+   * 重读 label，因此数值变化必须让闸门**重注册**（见 [9c] 的断言）。
+   *
+   * ⚠️ 这些页面曾经是深色的：`--dsw-alias-bg-elevated` 这个 token **不存在**，
    * 于是静默落到兜底值 `#1b1d22`（深色）。CSS 变量写错名字不会报错，只会用兜底 ——
    * 所以这里既检查"用的是真实 token"，也检查"兜底值是浅色"。
    */
-  assert(bundle.includes('data-convfusion-progress-percent'), '按钮在图标旁显示百分比')
+  assert(bundle.includes('progress.tab.label'), 'tab 文案带百分比（progress.tab.label）')
+  assert(/percentText/.test(bundle), '百分比由闸门从宿主答案里格式化（面板没挂载也有数）')
   assert(!/dsw-alias-bg-elevated|#1b1d22/.test(bundle), '不再使用不存在的 --dsw-alias-bg-elevated / 深色兜底')
 
   // token 名单见本节前的 KNOWN_DSW_TOKENS（与 [9b] 共用）
@@ -1018,7 +1055,10 @@ console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会�
   for (const token of usedTokens) {
     assert(KNOWN_DSW_TOKENS.has(token), `token ${token} 是 DSH 真实存在的 alias token`)
   }
-  assert(/--dsw-alias-bg-layer-2[^)]*,\s*#fff/i.test(src), '面板底色用 bg-layer-2，兜底值是**浅色**')
+  // 整页容器（tab 正文）自己给底色与滚动：会话正文容器没有 overflow，中心列还是 hidden
+  const viewSrc = readFileSync(join(PKG, 'src', 'client', 'progress-panel.tsx'), 'utf8')
+  assert(/--dsw-alias-bg-base[^)]*,\s*#fff/i.test(viewSrc), '整页容器的底色用 bg-base，兜底值是**浅色**')
+  assert(/overflowY: 'auto'/.test(viewSrc), '整页容器自己是滚动容器（viewArea 没有 overflow）')
 
   // 在 node 里求值 bundle：顶层只注册 factory，给一个 window 桩即可拿到导出
   let mod = null
@@ -1031,12 +1071,12 @@ console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会�
   }
 
   if (mod) {
-    assertEq(typeof mod.ResearchProgressButton, 'function', 'bundle 导出 ResearchProgressButton')
-    // 判定：只有宿主明确回答 research=true 才显示按钮
+    assertEq(typeof mod.ResearchProgressView, 'function', 'bundle 导出 ResearchProgressView（tab 正文）')
+    // 判定：只有宿主明确回答 research=true 才算"研究工作区"（tab 的注册条件）
     assertEq(
       mod.readProgressValue({ ok: true, value: { protocol: PROTO.HOST_PROTOCOL, research: true } }).kind,
       'shown',
-      '研究工作区 → 显示按钮',
+      '研究工作区 → 显示',
     )
     assertEq(
       mod.readProgressValue({ ok: true, value: { protocol: PROTO.HOST_PROTOCOL, research: false } }).kind,
@@ -1046,7 +1086,7 @@ console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会�
     assertEq(
       mod.readProgressValue({ ok: true, value: { protocol: PROTO.HOST_PROTOCOL - 1, research: true } }).kind,
       'hidden',
-      '旧宿主协议 → 隐藏按钮（不让新客户端按旧形状渲染崩溃）',
+      '旧宿主协议 → 隐藏（不让新客户端按旧形状渲染崩溃）',
     )
     assertEq(mod.readProgressValue({ ok: false }).kind, 'hidden', '宿主出错 → 不显示（不猜）')
     assertEq(mod.readProgressValue(undefined).kind, 'hidden', '宿主没回答 → 不显示（不猜）')
@@ -1069,62 +1109,103 @@ console.log('\n[9] 客户端：按钮只认自己会话的工作区（无跨会�
 rmSync(join(tmpdir(), 'nonexistent-cf-progress-'), { recursive: true, force: true })
 
 /* ════════════════════════════════════════════════════════════════════════
- * 9b. 客户端：顶部「ConvFusion.com」按钮 —— 内容**复用**设置页那一个 CommunityTab
+ * 9b. 客户端：**只留 tab** —— 顶部不再有 ConvFusion 入口，两个 tab 的声明正确
  *
- * 它在同一个槽位（紧挨进展按钮），区别是**不按工作区判定**：账号、Token、研究工作
- * 在任何会话里都可能要用到。这里守住三件事：
- *   ① 与设置页是同一份实现（不是抄一份 UI，改一处两处同时生效）；
- *   ② 面板是浅色浮层（token 必须真实存在，兜底值必须是浅色）；
- *   ③ 静态边界：客户端不新增外部地址、不缓存凭据。
+ * 用户 2026-10 拍板：顶部那两个按钮（研究进展 / 科V社区）全部移除，改成会话 Tab。
+ * 这里守住三件事：
+ *   ① 顶部工具槽位里**没有任何** ConvFusion 条目（残留会变成"两处入口"）；
+ *   ② 两个 tab 的声明：id / order / 文案，且**研究进展排在科V社区之前**（19 < 20）；
+ *   ③ 复用与边界：内容与设置页是同一份实现；不在浏览器里缓存凭据、不写死服务器地址。
  * ════════════════════════════════════════════════════════════════════════ */
-console.log('\n[9b] 客户端：顶部 ConvFusion.com 按钮（复用设置页的 CommunityTab）')
+console.log('\n[9b] 客户端：只留 tab（顶部无入口；两个 tab 的声明与顺序）')
 {
-  const panelSrc = readFileSync(join(PKG, 'src', 'client', 'community-panel.tsx'), 'utf8')
   const settingsSrc = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+  const indexSrc = readFileSync(join(PKG, 'src', 'client', 'index.tsx'), 'utf8')
+  const gateSrc = readFileSync(join(PKG, 'src', 'client', 'convfusion-tab.ts'), 'utf8')
   const bundle = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
 
-  assert(/export function CommunityTab\(/.test(settingsSrc), '设置页把 CommunityTab 导出（可被顶部浮层复用）')
-  assert(
-    /import \{ CommunityTab[^}]*\} from '\.\/settings\.js'/.test(panelSrc),
-    'ConvFusion.com 按钮 import 的是设置页那一个 CommunityTab（不是另写一份）',
-  )
-  assert(/<CommunityTab\s/.test(panelSrc), '浮层真的渲染 CommunityTab')
-  assert(!/settings\.tab\.local|settings\.editor/.test(panelSrc), '浮层没有抄设置页的其它内容（只承载这一页）')
-  assert(bundle.includes('id: "convfusion-community"') || bundle.includes("id: 'convfusion-community'"), '注册进同一个会话头部槽位（id = convfusion-community）')
-  assert(bundle.includes('data-convfusion-community-button'), '按钮带自己的标记属性（便于人工与离线确认）')
-  assert(bundle.includes('data-convfusion-community-panel'), '浮层带自己的标记属性')
+  // ① 顶部不再挂任何 ConvFusion 入口，浮层实现文件也不在（残留 = 两处入口）
+  assert(!bundle.includes('conversation.session.header.utilities'), '顶部工具槽位里没有 ConvFusion 条目')
+  assert(!existsSync(join(PKG, 'src', 'client', 'community-panel.tsx')), '浮层实现文件已删除')
 
-  /* ── 入口名与设置页标题**必须是两个 key**（用户 2026-09 拍板）────────────
-   *
-   * 顶部入口叫「科V社区」（英文界面仍是 ConvFusion.com），而设置页那一页的名字不动。
-   * 若两处共用 `community.title`，改入口名就会连带改掉设置页里那张卡片的标题 ——
-   * 那是没被要求的改动。这条断言就是防止将来"顺手合并 key"。
-   */
+  // ② 两个 tab 的声明与顺序（顺序即用户要求的「研究进展在科V社区之前」）
+  assert(bundle.includes('convfusion-progress'), '注册了研究进展 tab（id = convfusion-progress）')
+  assert(bundle.includes('convfusion-community'), '注册了科V社区 tab（id = convfusion-community）')
+  assert(/PROGRESS_VIEW_ORDER = 19/.test(gateSrc), '研究进展 order = 19')
+  assert(/COMMUNITY_VIEW_ORDER = 20/.test(gateSrc), '科V社区 order = 20')
+  const specsSrc = gateSrc.slice(gateSrc.indexOf('export function convfusionTabSpecs'))
+  assert(
+    specsSrc.indexOf('PROGRESS_VIEW_ID') < specsSrc.indexOf('COMMUNITY_VIEW_ID'),
+    '声明顺序 = 研究进展在前（与 order 一致，谁先谁后一眼可读）',
+  )
+  assert(/ResearchProgressView as unknown as React\.ComponentType/.test(gateSrc), '研究进展 tab 的正文是 ResearchProgressView')
+  assert(
+    /CommunityView as unknown as React\.ComponentType/.test(gateSrc),
+    '科V社区 tab 的正文是 CommunityView',
+  )
+
+  // ③ 复用与静态边界
+  assert(/export function CommunityTab\(/.test(settingsSrc), '设置页把 CommunityTab 导出（可被 tab 复用）')
+  const viewSrc = readFileSync(join(PKG, 'src', 'client', 'community-view.tsx'), 'utf8')
+  assert(
+    /import \{ CommunityTab[^}]*\} from '\.\/settings\.js'/.test(viewSrc),
+    '科V社区 tab 正文 import 的是设置页那一个 CommunityTab（不是另写一份）',
+  )
+  assert(!/https?:\/\//.test(viewSrc + gateSrc), 'tab 与闸门都不写死服务器地址（全部经宿主 account/*）')
+  assert(!/localStorage|sessionStorage/.test(viewSrc + gateSrc + indexSrc), '不在浏览器里缓存凭据')
+
+  // 入口名与设置页标题**必须是两个 key**（用户 2026-09 拍板，仍然有效）
   const zh = (await import(join(PKG, 'src', 'client', 'i18n', 'zh.ts'))).zh
   const en = (await import(join(PKG, 'src', 'client', 'i18n', 'en.ts'))).en
-  assert(/community\.entry\.label/.test(panelSrc), '顶部入口用独立 key community.entry.label（不复用 community.title）')
-  assert(!/t\('community\.title'\)/.test(panelSrc), '浮层里不出现 community.title（设置页的名字不受影响）')
-  assertEq(zh['community.entry.label'], '科V社区', '中文界面顶部入口叫「科V社区」')
-  assertEq(en['community.entry.label'], 'ConvFusion.com', '英文界面顶部入口仍是 ConvFusion.com')
+  assertEq(zh['community.entry.label'], '科V社区', '中文界面 tab 叫「科V社区」')
+  assertEq(en['community.entry.label'], 'ConvFusion.com', '英文界面 tab 仍是 ConvFusion.com')
   assertEq(zh['community.title'], 'ConvFusion.com', '设置页那一页的名字未被改动')
+  assertEq(zh['progress.tab.label'], '研究进展 {percent}', '研究进展 tab 的文案带百分比')
+  assertEq(en['progress.tab.label'], 'Progress {percent}', '英文同样带百分比')
 
-  // 面板 = 自己画的浮层：底色/文字色必须用真实 token，兜底值必须是浅色
-  const usedTokens = [...new Set([...panelSrc.matchAll(/var\((--dsw-[a-z0-9-]+)/g)].map((m) => m[1]))]
-  assert(usedTokens.length > 0, '浮层确实使用 DSH 主题 token')
-  for (const token of usedTokens) {
-    assert(KNOWN_DSW_TOKENS.has(token), `token ${token} 是 DSH 真实存在的 alias token`)
-  }
-  assert(/--dsw-alias-bg-layer-2[^)]*,\s*#fff/i.test(panelSrc), '浮层底色用 bg-layer-2，兜底值是**浅色**')
-
-  // 静态边界：同源、无外部地址、不在浏览器里存凭据
-  assert(!/https?:\/\//.test(panelSrc), '浮层不写死任何服务器地址（内容全部经宿主 account/*）')
-  assert(!/localStorage|sessionStorage/.test(panelSrc), '浮层不在浏览器里缓存凭据')
-
-  // 复用是**结构上的**：bundle 只有一个 CommunityTab 定义（重复实现会各带一份）
+  // 只有一份 CommunityTab 实现（重复实现会各带一份）
   const communityTabDefs = bundle.split('function CommunityTab(').length - 1
-  assertEq(communityTabDefs, 1, 'bundle 里只有一份 CommunityTab 实现（顶部浮层没有另造一份）')
+  assertEq(communityTabDefs, 1, 'bundle 里只有一份 CommunityTab 实现')
+}
 
-  // 导出面：离线测试与 HMR 都靠它拿到按钮
+/* ════════════════════════════════════════════════════════════════════════
+ * 9c. 客户端：两个会话 Tab（研究进展 19 / 科V社区 20）—— 只在研究工作区出现
+ *
+ * `conversation.view` 的 roster 是**全局**的（所有会话共用；唯一的按会话过滤是官方硬编码的
+ * trajectory + 开发者工具开关），所以"只在研究工作区显示"只能靠**随当前显示的会话注册 / 注销
+ * **实现。这里用桩 ctx（录注册项）+ 桩会话服务 + 桩 fetch 求值真 bundle，钉住六件事：
+ *   ① 只有宿主明确回答 research=true 才注册，而且**两个 tab 一起注册 / 一起注销**；
+ *   ② id 与 order 正确（研究进展 19 → 科V社区 20；> trajectory 10 ⇒ 两个一起在最右）；
+ *   ③ 研究进展的**文案带百分比**（面板没挂载时 tab 上也有数），且数值变化会重注册刷文案、
+ *      没变化则不抖 roster；
+ *   ④ 会话切换会跟着注册/注销；**再次进入已知研究会话是同步注册**（不等探针，避免闪一下对话）；
+ *   ⑤ 失败即隐藏：无会话服务 / 端点报错 / 协议过旧 → 一条都不注册；
+ *   ⑥ 纯函数：当前显示会话的判据、百分比格式化。
+ * 另外钉住"内容复用"：科V社区 tab 的正文 import 的是设置页那一个 CommunityTab（不是另写一份）。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[9c] 客户端：两个会话 Tab（研究进展 19 / 科V社区 20，条件注册：只在研究工作区）')
+{
+  const indexSrc = readFileSync(join(PKG, 'src', 'client', 'index.tsx'), 'utf8')
+  const viewSrc = readFileSync(join(PKG, 'src', 'client', 'community-view.tsx'), 'utf8')
+  const gateSrc = readFileSync(join(PKG, 'src', 'client', 'convfusion-tab.ts'), 'utf8')
+  const bundle = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
+
+  /* ── 静态边界：复用、最右、不碰别人的槽位 ───────────────────────────── */
+  assert(
+    /import \{ CommunityTab[^}]*\} from '\.\/settings\.js'/.test(viewSrc),
+    'tab 正文 import 的是设置页那一个 CommunityTab（不是另写一份）',
+  )
+  assert(/<CommunityTab\s/.test(viewSrc), 'tab 正文真的渲染 CommunityTab')
+  assert(bundle.includes('data-convfusion-community-view'), 'tab 正文带自己的标记属性')
+  assert(/overflowY: 'auto'/.test(viewSrc), 'tab 正文自己是滚动容器（viewArea 没有 overflow）')
+  // roster 是全局的：所以显隐只能靠注册/注销，而且判据不能是"猜一个研究工作区出来"
+  assert(/conversation\.view/.test(gateSrc), '闸门注册的是 conversation.view（会话 tab 的 roster 槽位）')
+  assert(/retainedBy\?\.mainView|retainedBy\.mainView/.test(gateSrc), '「当前显示的会话」用 DSH 自己的判据：retainedBy.mainView')
+  assert(!/activeSessionId|researchSessions/.test(gateSrc), '没有进程级的"当前会话"缓存（旧故障根因）')
+  assert(/progress\/workspace/.test(gateSrc), '判据复用宿主 progress/workspace（与「研究进展」按钮同一个）')
+  assert(/registry|localStorage/.test(viewSrc + gateSrc) === false, 'tab 与闸门都不在浏览器里缓存状态')
+
+  /* ── 求值真 bundle：桩 ctx + 桩会话服务 + 桩 fetch ───────────────────── */
   let mod = null
   try {
     let captured = null
@@ -1133,9 +1214,359 @@ console.log('\n[9b] 客户端：顶部 ConvFusion.com 按钮（复用设置页�
   } catch (e) {
     assert(false, `bundle 可在 node 求值：${e instanceof Error ? e.message : String(e)}`)
   }
-  if (mod) {
-    assertEq(typeof mod.ConvFusionComButton, 'function', 'bundle 导出 ConvFusionComButton')
-    assertEq(typeof mod.CommunityTab, 'function', 'bundle 导出 CommunityTab（两处共用同一个实现）')
+
+  const tick = () => new Promise((r) => setTimeout(r, 0))
+
+  /** 假会话服务：`select(id)` 模拟"保留态转移到该会话"并推送新快照。 */
+  const createSessions = (ids) => {
+    const byId = {}
+    for (const id of ids) byId[id] = { id, retainedBy: {} }
+    const listeners = new Set()
+    return {
+      service: {
+        list: {
+          getSnapshot: () => ({ byId }),
+          subscribe: (l) => {
+            listeners.add(l)
+            return () => listeners.delete(l)
+          },
+        },
+      },
+      select(id) {
+        for (const key of Object.keys(byId)) byId[key] = { ...byId[key], retainedBy: key === id ? { mainView: 1 } : {} }
+        for (const l of [...listeners]) l()
+      },
+      clear() {
+        for (const key of Object.keys(byId)) byId[key] = { ...byId[key], retainedBy: {} }
+        for (const l of [...listeners]) l()
+      },
+    }
+  }
+
+  /** 桩 ctx：录注册项（按槽位分组）、桩 locale、可用 `get('sessions')` 注入会话服务。 */
+  const createCtx = (sessions) => {
+    const registered = []
+    const injects = []
+    const disposers = []
+    const ctx = {
+      locale: {
+        register: () => () => {},
+        bind: () => (key, params) =>
+          params === undefined
+            ? key
+            : `${key}:${Object.entries(params)
+                .map(([k, v]) => `${k}=${String(v)}`)
+                .join(',')}`,
+      },
+      configForms: {
+        get: () => ({
+          getSnapshot: () => ({ status: 'ready' }),
+          subscribe: () => () => {},
+          set: async () => true,
+          unset: async () => true,
+        }),
+      },
+      slots: {
+        inject: (key, callback) => {
+          injects.push(key)
+          const dispose = callback()
+          if (typeof dispose === 'function') disposers.push(dispose)
+          return () => {}
+        },
+        register: (options, component) => {
+          const record = { options, component }
+          registered.push(record)
+          return () => {
+            const at = registered.indexOf(record)
+            if (at >= 0) registered.splice(at, 1)
+          }
+        },
+      },
+      effect: (callback) => callback(),
+      get: (name) => (name === 'sessions' ? sessions : undefined),
+    }
+    return {
+      ctx,
+      registered,
+      injects,
+      list: () => registered.filter((r) => r.options.name === 'conversation.view'),
+      /**
+       * 卸载：跑一遍 `slots.inject` 回调返回的 disposer。
+       *
+       * ⚠️ 必须做：闸门注册期间挂了一个低频轮询（`setInterval`），不清理的话 node 的事件
+       * 循环永远不空，脚本会一直挂着（实测踩过）。真宿主在插件卸载时就会调用它。
+       */
+      disposeAll: () => {
+        for (const dispose of disposers.splice(0)) dispose()
+      },
+    }
+  }
+
+  const originals = {
+    fetch: globalThis.fetch,
+    document: globalThis.document,
+  }
+  /**
+   * 假 document：只为让闸门挂上 visibilitychange（离线覆盖"工作区变了"那条路）。
+   *
+   * ⚠️ 必须**每个 apply 一份**：桩 ctx 不会卸载上一次的闸门，共用一个 document 会让
+   * `fireVisible()` 同时叫醒前面所有子用例的处理器（实测踩过：调用次数 2 ≠ 1）。
+   */
+  const makeDoc = () => {
+    const handlers = new Set()
+    const doc = {
+      visibilityState: 'visible',
+      addEventListener: (type, handler) => {
+        if (type === 'visibilitychange') handlers.add(handler)
+      },
+      removeEventListener: (type, handler) => {
+        if (type === 'visibilitychange') handlers.delete(handler)
+      },
+    }
+    return {
+      doc,
+      fireVisible: () => {
+        for (const handler of [...handlers]) handler()
+      },
+    }
+  }
+  globalThis.document = makeDoc().doc
+
+  /** 桩宿主：`answer` 是 progress/workspace 的返回值（null = 抛错）。 */
+  let answer = null
+  const calls = []
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), payload: JSON.parse(init.body).payload })
+    if (answer === null) throw new Error('host unreachable')
+    return { ok: true, json: async () => answer }
+  }
+  const research = (isResearch, overall = 0.62) => ({
+    ok: true,
+    value: {
+      protocol: PROTO.HOST_PROTOCOL,
+      sessionId: 'A',
+      workspace: isResearch ? '/w/workspace' : null,
+      research: isResearch,
+      report: isResearch ? { overall } : null,
+      lastTurn: null,
+    },
+  })
+
+  /** 已建过的桩 ctx：退出前必须卸载（闸门注册期间挂着低频轮询定时器）。 */
+  const created = []
+  const newCtx = (sessions) => {
+    const fake = createCtx(sessions)
+    created.push(fake)
+    return fake
+  }
+  /** 按 tab id 取一条注册项。 */
+  const byId = (fake, id) => fake.list().find((r) => r.options.id === id)
+
+  try {
+    /* ── ① 没有会话被显示 → 不注册；也没有会话服务 → 不注册（fail closed）── */
+    {
+      const s = createSessions(['A', 'B'])
+      const fake = newCtx(s.service)
+      mod.apply(fake.ctx)
+      await tick()
+      assertEq(fake.list().length, 0, '没有会话被显示 → 不注册 tab')
+      assert(fake.injects.includes('conversation.view'), '闸门等在 conversation.view 声明上')
+
+      const noSessions = newCtx(undefined)
+      mod.apply(noSessions.ctx)
+      await tick()
+      assertEq(noSessions.list().length, 0, '没有会话服务（老宿主）→ 不注册 tab（不猜）')
+    }
+
+    /* ── ② 会话 A = 研究 → 两个 tab 一起注册，id / order / 文案正确 ─────── */
+    {
+      const s = createSessions(['A', 'B'])
+      const fake = newCtx(s.service)
+      mod.apply(fake.ctx)
+      await tick()
+
+      answer = research(true, 0.62)
+      s.select('A')
+      await tick()
+      assertEq(fake.list().length, 2, '研究工作区的会话 → 一次注册**两个** tab')
+
+      const progress = byId(fake, 'convfusion-progress')
+      const community = byId(fake, 'convfusion-community')
+      assert(progress !== undefined && community !== undefined, '两个 tab 都在 roster 里')
+
+      // 顺序：研究进展 19 → 科V社区 20（用户 2026-10 指定"研究进展在科V社区之前"）
+      assertEq(progress.options.order, mod.PROGRESS_VIEW_ORDER, `研究进展 order = ${mod.PROGRESS_VIEW_ORDER}`)
+      assertEq(community.options.order, mod.COMMUNITY_VIEW_ORDER, `科V社区 order = ${mod.COMMUNITY_VIEW_ORDER}`)
+      assert(progress.options.order < community.options.order, '研究进展排在科V社区之前')
+      assertEq(progress.options.order, 19, '研究进展 order 字面量 = 19')
+      assertEq(community.options.order, 20, '科V社区 order 字面量 = 20（> trajectory 10，一起在最右）')
+
+      assertEq(progress.options.name, 'conversation.view', '注册进会话 tab 的 roster 槽位')
+      assertEq(progress.options.locale, 'convfusion', '声明自己的 locale（tab 文案跟随语言）')
+      assertEq(progress.options.id, 'convfusion-progress', 'id = convfusion-progress')
+      assertEq(community.options.id, 'convfusion-community', 'id = convfusion-community')
+      assertEq(progress.component, mod.ResearchProgressView, '研究进展 tab 的正文是导出的 ResearchProgressView')
+      assertEq(community.component, mod.CommunityView, '科V社区 tab 的正文是导出的 CommunityView')
+
+      // 文案：研究进展**带百分比**（面板没挂载时 tab 上也有数），科V社区是固定名
+      assert(progress.options.label().startsWith('progress.tab.label'), '研究进展 tab 文案走 progress.tab.label')
+      assert(progress.options.label().includes('percent=62%'), '研究进展 tab 文案里带上了百分比（62%）')
+      assertEq(community.options.label(), 'community.entry.label', '科V社区 tab 文案取 community.entry.label')
+
+      assertEq(calls.length, 1, '一次会话切换只问一次宿主（两个 tab 共用同一次判定）')
+      assertEq(calls[0].url, '/dsh-convfusion/progress/workspace', '问的是宿主 progress/workspace')
+      assertEq(calls[0].payload.sessionId, 'A', '带上被显示会话的 id（判定按会话，不靠猜）')
+    }
+
+    /* ── ③ 会话切换：B 非研究 → 两个一起注销；切回 A（缓存命中）→ **同步**注册 ── */
+    {
+      const s = createSessions(['A', 'B'])
+      const fake = newCtx(s.service)
+      mod.apply(fake.ctx)
+      await tick()
+
+      answer = research(true)
+      s.select('A')
+      await tick()
+      assertEq(fake.list().length, 2, 'A（研究）→ 两个 tab 一起注册')
+
+      calls.length = 0
+      answer = research(false)
+      s.select('B')
+      await tick()
+      assertEq(fake.list().length, 0, 'B（非研究）→ 两个一起注销')
+      assertEq(calls.length, 1, 'B 也判一次（每个会话各自判定）')
+
+      calls.length = 0
+      s.select('A')
+      assertEq(fake.list().length, 2, '切回 A：已知研究 → **同步**注册（不等探针，不闪对话）')
+      assertEq(calls.length, 0, '缓存命中时不再调用宿主')
+
+      // 没有会话被显示（例如归档了当前会话）→ 注销
+      s.clear()
+      await tick()
+      assertEq(fake.list().length, 0, '没有会话被显示 → 注销 tab')
+    }
+
+    /* ── ④ 工作区变了：窗口重新可见时重判（force）→ 注销 ───────────────── */
+    {
+      const visibility = makeDoc()
+      globalThis.document = visibility.doc
+      const s = createSessions(['A'])
+      const fake = newCtx(s.service)
+      mod.apply(fake.ctx)
+      await tick()
+      answer = research(true)
+      s.select('A')
+      await tick()
+      assertEq(fake.list().length, 2, 'A（研究）→ 两个 tab 一起注册')
+
+      calls.length = 0
+      answer = research(false)
+      visibility.fireVisible()
+      await tick()
+      assertEq(calls.length, 1, '窗口重新可见 → 忽略缓存重问一次（工作区可能刚被改动）')
+      assertEq(fake.list().length, 0, '工作区不再是研究工作区 → 两个一起注销')
+    }
+
+    /* ── ⑤ 百分比变了 → 重注册一次，让 roster 重读 label（tab 文案跟着变）── */
+    {
+      const visibility = makeDoc()
+      globalThis.document = visibility.doc
+      const s = createSessions(['A'])
+      const fake = newCtx(s.service)
+      mod.apply(fake.ctx)
+      await tick()
+      answer = research(true, 0.62)
+      s.select('A')
+      await tick()
+      assert(byId(fake, 'convfusion-progress').options.label().includes('percent=62%'), '（前提）tab 文案是 62%')
+
+      calls.length = 0
+      answer = research(true, 0.71)
+      visibility.fireVisible()
+      await tick()
+      assertEq(fake.list().length, 2, '百分比变化后仍然是两个 tab（重注册，不是消失）')
+      assertEq(calls.length, 1, '重判一次（百分比的新值只能从宿主拿）')
+      const label = byId(fake, 'convfusion-progress').options.label()
+      assert(label.includes('percent=71%'), 'tab 文案跟到新值（71%）')
+      assert(!label.includes('62%'), '旧值不再留在文案里')
+
+      // 百分比没变时不重注册（否则每次轮询都会抖一次 roster）
+      const before = byId(fake, 'convfusion-progress')
+      visibility.fireVisible()
+      await tick()
+      assertEq(byId(fake, 'convfusion-progress'), before, '百分比没变 → 注册项不动（不抖 roster）')
+    }
+
+    /* ── ⑥ 失败即隐藏：端点报错 / 协议过旧 都不注册 ─────────────────────── */
+    {
+      const s = createSessions(['A'])
+      const fake = newCtx(s.service)
+      mod.apply(fake.ctx)
+      await tick()
+      answer = null // 抛错
+      s.select('A')
+      await tick()
+      assertEq(fake.list().length, 0, '宿主不可达 → 不注册 tab')
+
+      const s2 = createSessions(['A'])
+      const fake2 = newCtx(s2.service)
+      mod.apply(fake2.ctx)
+      await tick()
+      answer = { ok: true, value: { protocol: PROTO.HOST_PROTOCOL - 1, research: true } }
+      s2.select('A')
+      await tick()
+      assertEq(fake2.list().length, 0, '旧宿主协议（形状不可信）→ 不注册 tab')
+    }
+
+    /* ── ⑦ research=true 但宿主没给报告 → 注册，文案退回不带百分比 ──────── */
+    {
+      const s = createSessions(['A'])
+      const fake = newCtx(s.service)
+      mod.apply(fake.ctx)
+      await tick()
+      answer = { ok: true, value: { protocol: PROTO.HOST_PROTOCOL, research: true, report: null } }
+      s.select('A')
+      await tick()
+      assertEq(fake.list().length, 2, 'research=true 就算没有报告也注册（会话确实是研究工作区）')
+      assertEq(
+        byId(fake, 'convfusion-progress').options.label(),
+        'progress.name',
+        '没有报告 → 文案退回不带百分比的 progress.name（不编一个数）',
+      )
+    }
+
+    /* ── ⑧ 纯函数 ───────────────────────────────────────────────────────── */
+    assertEq(
+      mod.currentMainSessionId({ byId: { A: { id: 'A', retainedBy: {} }, B: { id: 'B', retainedBy: { other: 2 } } } }),
+      undefined,
+      '没有任何会话带 mainView 保留 → undefined（不猜一个）',
+    )
+    assertEq(
+      mod.currentMainSessionId({ byId: { A: { id: 'A', retainedBy: {} }, B: { id: 'B', retainedBy: { mainView: 1 } } } }),
+      'B',
+      'retainedBy.mainView > 0 的那个就是当前显示的会话',
+    )
+    assertEq(mod.currentMainSessionId(undefined), undefined, '拿不到会话列表 → undefined')
+    assertEq(mod.percentText(0.623), '62%', '百分比文本四舍五入到整数（与面板同一个口径）')
+    assertEq(mod.percentText(1), '100%', '1 → 100%')
+    assertEq(mod.percentText(undefined), undefined, '没有值 → undefined（tab 文案退回名字）')
+    assertEq(mod.percentText(Number.NaN), undefined, 'NaN → undefined（不编一个数）')
+
+    // 两个 tab 的声明（顺序即 order）：直接调纯函数核对一遍
+    const specs = mod.convfusionTabSpecs((key, params) => (params ? `${key} ${JSON.stringify(params)}` : key))
+    assertEq(specs.length, 2, 'convfusionTabSpecs 声明两个 tab')
+    assertEq(specs[0].id, 'convfusion-progress', '声明顺序：第一个是研究进展')
+    assertEq(specs[1].id, 'convfusion-community', '声明顺序：第二个是科V社区')
+    assertEq(specs[0].order, 19, '研究进展 order = 19')
+    assertEq(specs[1].order, 20, '科V社区 order = 20')
+  } finally {
+    globalThis.fetch = originals.fetch
+    if (originals.document === undefined) delete globalThis.document
+    else globalThis.document = originals.document
+    // 卸载所有桩 ctx：闸门的低频轮询不清掉，node 的事件循环永远不空（脚本会挂住）
+    for (const fake of created) fake.disposeAll()
   }
 }
 

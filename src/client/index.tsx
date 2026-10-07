@@ -1,12 +1,15 @@
 /**
- * ConvFusion 2.0 — browser half（设置页 + 会话头部的研究进展按钮）
+ * ConvFusion 2.0 — browser half（设置页 + 两个会话 Tab）
  *
  * 这个文件只做装配：
  *
  * ```text
- * settings.section                       ← 【设置】-【ConvFusion】（本体在 ./settings.js）
- * conversation.session.header.utilities  ← 顶部「研究进展」按钮（本体在 ./progress-panel.js）
- *                                        ← 顶部「ConvFusion.com」按钮（本体在 ./community-panel.js）
+ * settings.section      ← 【设置】-【ConvFusion】（本体在 ./settings.js）
+ * conversation.view     ← 会话 Tab「研究进展」（order 19，本体在 ./progress-panel.js）
+ *                       ← 会话 Tab「科V社区」（order 20，本体在 ./community-view.js）
+ *
+ * 会话 Tab 是**条件注册**的（只在研究工作区出现），闸门在 ./convfusion-tab.js。
+ * 顶部的两个按钮（研究进展 / 科V社区）已按用户 2026-10 要求移除 —— 只留 tab。
  * ```
  *
  * ## 两个容易踩的坑（重建时必看，来自 v0.1.5 的实测记录）
@@ -23,9 +26,22 @@ import logoUrl from '../../assets/favicon.svg'
 import { CONVFUSION_LOCALE_NS, dictionaries, type Translate } from './i18n/index.js'
 import { ConvFusionProjectSettings, loadSettingsState } from './settings.js'
 import { applyNavIcon, installNavIcon } from './nav-icon.js'
-import { ConvFusionComButton } from './community-panel.js'
+import { CommunityView } from './community-view.js'
 import {
-  ResearchProgressButton,
+  COMMUNITY_VIEW_ID,
+  COMMUNITY_VIEW_ORDER,
+  CONVFUSION_VIEW_SLOT,
+  PROGRESS_VIEW_ID,
+  PROGRESS_VIEW_ORDER,
+  convfusionTabSpecs,
+  currentMainSessionId,
+  installConvFusionTabs,
+  percentText,
+  type SessionsLike,
+} from './convfusion-tab.js'
+import {
+  ResearchProgressPanel,
+  ResearchProgressView,
   readProgressValue,
   shortenPath,
 } from './progress-panel.js'
@@ -33,10 +49,25 @@ import {
 /** 供离线测试直接调用（bundle 的 `apply`/`inject` 之外再导出这些）。 */
 export { loadSettingsState, applyNavIcon, installNavIcon, logoUrl }
 export { preferredCategory, preferredSection, preferredSkill } from './settings.js'
-/** 【ConvFusion.com】这一页的正文：设置页与顶部浮层共用同一份（离线验证也要能拿到）。 */
+/** 【ConvFusion.com】这一页的正文：设置页与会话 Tab 两处共用同一份（离线验证也要能拿到）。 */
 export { CommunityTab } from './settings.js'
-export { ResearchProgressButton, readProgressValue, shortenPath }
-export { ConvFusionComButton }
+export { readProgressValue, shortenPath }
+/** 两个会话 Tab 的正文（面板本体单独导出：离线验证直接渲染它，不必穿透整页容器）。 */
+export { ResearchProgressPanel }
+export { ResearchProgressView }
+export { CommunityView }
+/** 闸门（按会话条件注册 / 注销）与它的常量。 */
+export {
+  COMMUNITY_VIEW_ID,
+  COMMUNITY_VIEW_ORDER,
+  CONVFUSION_VIEW_SLOT,
+  PROGRESS_VIEW_ID,
+  PROGRESS_VIEW_ORDER,
+  convfusionTabSpecs,
+  currentMainSessionId,
+  installConvFusionTabs,
+  percentText,
+}
 
 /* ════════════════════════════════════════════════════════════════════════
  * 服务的结构化契约（镜像，不 import：见文件头第 2 条）
@@ -147,40 +178,16 @@ export function apply(ctx: ClientContext): void {
     ),
   )
 
-  // ── 研究进展（`v2-Progress.md`：顶部按钮 → 展开面板）──────────────────
-  // 为什么不再注入对话流：回合尾部的 `conversation.chat.turnTail` 是**链式**槽位，
-  // 它的 selector 只拿得到 `{turn, seq, openFile}` —— **没有会话身份**，于是"这个会话
-  // 是不是研究项目"只能靠进程级全局变量猜，结果会命中所有会话（旧实现的实际故障）。
-  // `conversation.session.header.utilities` 是 **session 作用域的 list 槽位**：
-  // 追加式（不动官方条目），组件拿得到自己会话的 `sessionId`，判定天然按会话正确。
-  // 非研究工作区连按钮都不渲染；点击后才由宿主（`/dsh-convfusion/progress/workspace`）
-  // 按磁盘真实资产算一份当前进展。
-  ctx.slots.inject('conversation.session.header.utilities', () =>
-    ctx.slots.register(
-      {
-        name: 'conversation.session.header.utilities',
-        id: 'convfusion-progress',
-        order: 20,
-        locale: CONVFUSION_LOCALE_NS,
-      },
-      ResearchProgressButton as unknown as React.ComponentType<unknown>,
-    ),
-  )
-
-  // ── ConvFusion.com（顶部按钮 → 展开【设置】-【ConvFusion】-【ConvFusion.com】）──
-  // 与进展按钮同一个槽位、紧挨其后（order 21）。区别只有一条：**不按工作区判定** ——
-  // 账号、Token、研究工作/指导关系在任何会话里都可能要用到。
-  // 内容直接复用设置页那一个 `CommunityTab`（见 ./community-panel.js 的文件头）。
-  ctx.slots.inject('conversation.session.header.utilities', () =>
-    ctx.slots.register(
-      {
-        name: 'conversation.session.header.utilities',
-        id: 'convfusion-community',
-        order: 21,
-        locale: CONVFUSION_LOCALE_NS,
-      },
-      ConvFusionComButton as unknown as React.ComponentType<unknown>,
-    ),
+  // ── 两个会话 Tab（研究进展 19 → 科V社区 20；**只在研究工作区出现**）────────
+  // 为什么要一整套闸门：`conversation.view` 的 roster 是**全局**的（所有会话共用，
+  // 唯一的按会话过滤是官方硬编码的 trajectory + 开发者工具开关），所以"只在研究工作区
+  // 显示"只能靠**随当前显示的会话注册 / 注销**实现。判据用宿主 `progress/workspace`
+  // 的 `research`（主机按会话自己的 cwd 判定）；tab 文案里的百分比也取自同一次探针，
+  // 因此面板没挂载时 tab 上也有数。会话服务缺失（老宿主）→ 一条都不注册：宁可不显示，也不猜。
+  // 顶部那两个按钮（研究进展 / 科V社区）已按用户 2026-10 要求移除 —— 只留 tab。
+  installConvFusionTabs(
+    { slots: ctx.slots },
+    { t, sessions: ctx.get('sessions') as SessionsLike | undefined },
   )
 
   // ── 导航图标 ────────────────────────────────────────────────────────

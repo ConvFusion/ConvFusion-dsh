@@ -62,10 +62,16 @@ for (const dimension of ['Problem', 'Knowledge', 'Innovation', 'Method', 'Experi
 console.log('\n[2] DSH 原生 locale 接入')
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 const index = readFileSync(join(ROOT, 'src/client/index.tsx'), 'utf8')
+// 会话 Tab 的注册项写在 ./convfusion-tab.ts（条件注册，见 verify-progress [9c]），一并统计
+const convfusionTab = readFileSync(join(ROOT, 'src/client/convfusion-tab.ts'), 'utf8')
+const slotSources = index + convfusionTab
 assert(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'), 'package 注入 dsh-client-locale')
 assert(/\['slots', 'configForms', 'locale'\]/.test(index), '浏览器插件硬依赖 locale 服务')
 assert(/ctx\.locale\.register\(CONVFUSION_LOCALE_NS, dictionaries\)/.test(index), '字典注册到独立 namespace')
-assert((index.match(/locale: CONVFUSION_LOCALE_NS/g) ?? []).length === 3, '设置页、进展按钮、ConvFusion.com 按钮都声明 Slot locale')
+assert(
+  (slotSources.match(/locale: CONVFUSION_LOCALE_NS/g) ?? []).length === 2,
+  '设置页与（两个）会话 Tab 的注册项都声明 Slot locale',
+)
 assert(!/navigator\.language|localStorage/.test(index), '没有自建浏览器语言状态')
 
 console.log('\n[3] 客户端 bundle 原生装配')
@@ -112,15 +118,19 @@ const ctx = {
 client.apply(ctx)
 assert(registeredNamespace === 'convfusion', 'apply() 实际注册 convfusion namespace')
 assert(registeredDictionaries?.zh && registeredDictionaries?.en, 'apply() 实际注册中英字典')
-assert(registrations.length === 3, 'apply() 实际注册设置页 + 进展按钮 + ConvFusion.com 按钮三个 Slot')
-assert(registrations.every((entry) => entry.locale === 'convfusion'), '三个 Slot 实际绑定 convfusion locale')
+assert(
+  registrations.length === 1,
+  'apply() 直接注册的只有设置页（两个会话 Tab 是条件注册：桩 ctx 没有会话服务 → 不注册，见 verify-progress [9c]）',
+)
+assert(registrations.every((entry) => entry.locale === 'convfusion'), '直接注册的 Slot 绑定 convfusion locale')
 
 console.log('\n[4] UI 文案边界')
 for (const rel of [
   'src/client/index.tsx',
   'src/client/settings.tsx',
   'src/client/progress-panel.tsx',
-  'src/client/community-panel.tsx',
+  'src/client/community-view.tsx',
+  'src/client/convfusion-tab.ts',
 ]) {
   const source = readFileSync(join(ROOT, rel), 'utf8')
   const sf = ts.createSourceFile(rel, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)

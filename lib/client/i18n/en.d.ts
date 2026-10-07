@@ -63,7 +63,6 @@ export declare const en: {
     readonly 'settings.editor.confirmSkill': "Restore all sections of “{skill}”? This capability’s customizations will be deleted.";
     readonly 'community.title': "ConvFusion.com";
     readonly 'community.entry.label': "ConvFusion.com";
-    readonly 'community.button.title': "Open ConvFusion.com (account · research network)";
     readonly 'community.notice.published': "{title} · state v{version}";
     readonly 'community.notice.tokens': "{tokens} Token";
     readonly 'community.notice.files': "{count} attachment(s)";
@@ -360,15 +359,12 @@ export declare const en: {
     readonly 'system.retrieval.saveFailed': "Save failed: {detail}";
     readonly 'system.retrieval.clearFailed': "Clear failed: {detail}";
     readonly 'progress.name': "Research progress";
-    readonly 'progress.button.ariaWithPercent': "Research progress (maturity conversion {percent})";
-    readonly 'progress.button.title': "View research progress for this workspace";
-    readonly 'progress.button.titleWithPercent': "View research progress for this workspace (maturity conversion {percent})";
+    readonly 'progress.tab.label': "Progress {percent}";
     readonly 'progress.summary': "Maturity conversion {percent}";
     readonly 'progress.currentStage': " · Current stage: {stage}";
     readonly 'progress.noData': "No data yet";
     readonly 'progress.reading': "Reading…";
     readonly 'progress.refresh': "Refresh";
-    readonly 'progress.close': "Close";
     readonly 'progress.section.maturity': "A · Research maturity (level conversion, not a measurement)";
     readonly 'progress.section.assets': "A2 · Countable assets (actual counts)";
     readonly 'progress.paper': "Paper body";
