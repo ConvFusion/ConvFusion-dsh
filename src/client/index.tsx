@@ -37,7 +37,6 @@ import {
   currentMainSessionId,
   installConvFusionTabs,
   percentText,
-  type SessionsLike,
 } from './convfusion-tab.js'
 import {
   ResearchProgressPanel,
@@ -134,18 +133,39 @@ interface ClientContext {
   }
   effect(callback: () => void | (() => void), label?: string): void
   /**
-   * 读一个服务**不触发 inject 检查**（本插件目前不用可选服务，保留以便将来扩展）。
+   * 读一个服务而**不**声明依赖。
    *
-   * ⚠️ 若要用可选服务，必须写成 `ctx.get('X')` 而**不是** `ctx.X`：
-   * Cordis 的 get 代理会把「未 inject 的属性访问」直接抛成
+   * ⚠️ cordis 的这个方法默认 `strict = true`：提供者 fiber 不是 ACTIVE 时返回
+   * `undefined`（源码 `_getImpl`）。所以**不能**用它做"启动时读一次"的判定 ——
+   * 2026-10 实测：闸门这样读 `sessions`，冷启动时读不到，两个 tab 静默消失
+   * （HMR 重载时其它插件已 ACTIVE，所以只在那里正常）。要用的服务请写进 `inject`。
+   *
+   * ⚠️ 也**不要**写成 `ctx.X`：Cordis 的 get 代理会把「未 inject 的属性访问」抛成
    * `cannot get property "X" without inject`，而客户端条目 apply 抛错 = 整页加载失败
    * （2026-09-12 实际发生：DSH 里报 `Failed to load plugins / dsh-convfusion`）。
    */
   get(name: string): unknown
+  /**
+   * cordis 的**作用域注入**：等服务到位（ACTIVE）后在子作用域里回调。
+   *
+   * 本插件用它兜住"服务还没就绪"的窗口 —— 而不是读一次就放弃。失败只影响这个回调，
+   * 不像 `inject` 数组那样会把整个客户端条目卡在 `pending`。
+   */
+  inject(deps: string[], callback: (scope: ClientContext) => void): unknown
+  /** 可选日志（诊断用；缺省静默）。 */
+  logger?: { warn?(message: unknown): void } | undefined
 }
 
-/** 只有这些服务是硬依赖（缺一个，这一页就无从渲染）。 */
-export const inject = ['slots', 'configForms', 'locale']
+/**
+ * 硬依赖。
+ *
+ * ⚠️ `sessions` 是**必须**列在这里的（2026-10 实测踩过）：cordis 的 `ctx.get(name)`
+ * 默认 `strict = true` —— 提供者 fiber 不是 ACTIVE 时返回 `undefined`。全新启动时
+ * 我们的 apply 可能早于会话控制器激活，于是"读一次就放弃"会让两个 tab **静默消失**
+ * （HMR 重载时其它插件早已 ACTIVE，所以那时是好的）。声明成依赖 = 等它就绪。
+ * 这也是 DSH 自己的写法：`dsh-client-ui-workspace` 的 inject 里就有 `"sessions"`。
+ */
+export const inject = ['slots', 'configForms', 'locale', 'sessions']
 
 /**
  * 【设置】导航里的位置。
@@ -185,10 +205,8 @@ export function apply(ctx: ClientContext): void {
   // 的 `research`（主机按会话自己的 cwd 判定）；tab 文案里的百分比也取自同一次探针，
   // 因此面板没挂载时 tab 上也有数。会话服务缺失（老宿主）→ 一条都不注册：宁可不显示，也不猜。
   // 顶部那两个按钮（研究进展 / 科V社区）已按用户 2026-10 要求移除 —— 只留 tab。
-  installConvFusionTabs(
-    { slots: ctx.slots },
-    { t, sessions: ctx.get('sessions') as SessionsLike | undefined },
-  )
+  // `sessions` 走 inject 依赖（见上面的说明），闸门内部仍会"读不到就等服务"再兜一层。
+  installConvFusionTabs(ctx, { t })
 
   // ── 导航图标 ────────────────────────────────────────────────────────
   // 壳层的导航图标是硬编码的（只有 models / agent-presets / plugins 有专属图标），

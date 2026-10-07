@@ -66,7 +66,8 @@ const index = readFileSync(join(ROOT, 'src/client/index.tsx'), 'utf8')
 const convfusionTab = readFileSync(join(ROOT, 'src/client/convfusion-tab.ts'), 'utf8')
 const slotSources = index + convfusionTab
 assert(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'), 'package 注入 dsh-client-locale')
-assert(/\['slots', 'configForms', 'locale'\]/.test(index), '浏览器插件硬依赖 locale 服务')
+// `locale` 必须留在硬依赖里（文案跟随语言）；`sessions` 是 2026-10 为会话 Tab 加的（见 verify-progress [9c]）
+assert(/export const inject = \[[^\]]*'locale'[^\]]*\]/.test(index), '浏览器插件硬依赖 locale 服务')
 assert(/ctx\.locale\.register\(CONVFUSION_LOCALE_NS, dictionaries\)/.test(index), '字典注册到独立 namespace')
 assert(
   (slotSources.match(/locale: CONVFUSION_LOCALE_NS/g) ?? []).length === 2,

@@ -1200,6 +1200,16 @@ console.log('\n[9c] 客户端：两个会话 Tab（研究进展 19 / 科V社区 
   assert(/overflowY: 'auto'/.test(viewSrc), 'tab 正文自己是滚动容器（viewArea 没有 overflow）')
   // roster 是全局的：所以显隐只能靠注册/注销，而且判据不能是"猜一个研究工作区出来"
   assert(/conversation\.view/.test(gateSrc), '闸门注册的是 conversation.view（会话 tab 的 roster 槽位）')
+  // 冷启动回归（2026-10 实测：两个 tab 静默消失）：cordis 的 `ctx.get` 默认 strict，
+  // 提供者 fiber 未 ACTIVE 时返回 undefined —— 所以必须①写成 inject 依赖，②读不到要"等"。
+  assert(
+    /export const inject = \[[^\]]*'sessions'/.test(indexSrc),
+    'index.tsx 把 sessions 写成 inject 依赖（不是 get 一次就放弃）',
+  )
+  assert(
+    /host\.inject\(\['sessions'\]/.test(gateSrc),
+    '闸门读不到会话服务时用 ctx.inject 等它就绪（而不是直接 return）',
+  )
   assert(/retainedBy\?\.mainView|retainedBy\.mainView/.test(gateSrc), '「当前显示的会话」用 DSH 自己的判据：retainedBy.mainView')
   assert(!/activeSessionId|researchSessions/.test(gateSrc), '没有进程级的"当前会话"缓存（旧故障根因）')
   assert(/progress\/workspace/.test(gateSrc), '判据复用宿主 progress/workspace（与「研究进展」按钮同一个）')
@@ -1243,10 +1253,16 @@ console.log('\n[9c] 客户端：两个会话 Tab（研究进展 19 / 科V社区 
     }
   }
 
-  /** 桩 ctx：录注册项（按槽位分组）、桩 locale、可用 `get('sessions')` 注入会话服务。 */
+  /**
+   * 桩 ctx：录注册项（按槽位分组）、桩 locale、可用 `get('sessions')` 注入会话服务。
+   *
+   * 还录下 `ctx.inject(deps, cb)`（cordis 的**作用域注入**）——冷启动时服务可能还没 ACTIVE，
+   * 闸门要靠它等服务（见 createCtx 返回的 `fireServiceInject`）。
+   */
   const createCtx = (sessions) => {
     const registered = []
     const injects = []
+    const serviceInjects = []
     const disposers = []
     const ctx = {
       locale: {
@@ -1284,11 +1300,26 @@ console.log('\n[9c] 客户端：两个会话 Tab（研究进展 19 / 科V社区 
       },
       effect: (callback) => callback(),
       get: (name) => (name === 'sessions' ? sessions : undefined),
+      inject: (deps, callback) => {
+        serviceInjects.push({ deps, callback })
+        return () => {}
+      },
     }
     return {
       ctx,
       registered,
       injects,
+      serviceInjects,
+      /**
+       * 触发 cordis 作用域注入的回调：模拟"服务终于 ACTIVE 了"。
+       *
+       * @param service - 该作用域里 `get('sessions')` 会返回的东西。
+       */
+      fireServiceInject: (service) => {
+        for (const { callback } of serviceInjects.splice(0)) {
+          callback({ slots: ctx.slots, inject: ctx.inject, get: (name) => (name === 'sessions' ? service : undefined) })
+        }
+      },
       list: () => registered.filter((r) => r.options.name === 'conversation.view'),
       /**
        * 卸载：跑一遍 `slots.inject` 回调返回的 disposer。
@@ -1372,10 +1403,32 @@ console.log('\n[9c] 客户端：两个会话 Tab（研究进展 19 / 科V社区 
       assertEq(fake.list().length, 0, '没有会话被显示 → 不注册 tab')
       assert(fake.injects.includes('conversation.view'), '闸门等在 conversation.view 声明上')
 
+      // 服务还没就绪（冷启动的真实情形：`ctx.get` 默认 strict，提供者未 ACTIVE 就是 undefined）
       const noSessions = newCtx(undefined)
       mod.apply(noSessions.ctx)
       await tick()
-      assertEq(noSessions.list().length, 0, '没有会话服务（老宿主）→ 不注册 tab（不猜）')
+      assertEq(noSessions.list().length, 0, '服务还没就绪 → 先不注册（不猜）')
+      assertEq(noSessions.serviceInjects.length, 1, '也不放弃：改成**等**会话服务（ctx.inject）')
+      assertEq(noSessions.serviceInjects[0].deps[0], 'sessions', '等的是 sessions 服务')
+    }
+
+    /* ── ①b 冷启动路径：服务稍后才就绪 → 一等它就装上（tab 不再静默消失）── */
+    {
+      const s = createSessions(['A'])
+      const fake = newCtx(undefined)
+      mod.apply(fake.ctx)
+      await tick()
+      assertEq(fake.list().length, 0, '（前提）服务未就绪时没有 tab')
+
+      answer = research(true, 0.5)
+      s.select('A')
+      await tick()
+      assertEq(fake.list().length, 0, '服务没就绪期间，会话切换也不会凭空出现 tab')
+
+      fake.fireServiceInject(s.service)
+      await tick()
+      assertEq(fake.list().length, 2, '服务就绪 → 两个 tab 装上（这是 2026-10 那次冷启动丢 tab 的回归点）')
+      assertEq(fake.serviceInjects.length, 0, '就绪后不再重复等')
     }
 
     /* ── ② 会话 A = 研究 → 两个 tab 一起注册，id / order / 文案正确 ─────── */
@@ -1385,6 +1438,7 @@ console.log('\n[9c] 客户端：两个会话 Tab（研究进展 19 / 科V社区 
       mod.apply(fake.ctx)
       await tick()
 
+      calls.length = 0
       answer = research(true, 0.62)
       s.select('A')
       await tick()

@@ -124,6 +124,18 @@ interface SlotsLike {
      */
     register(options: ConvFusionViewRegistration, component: unknown): () => void;
 }
+/** 闸门用得上的那部分客户端上下文（镜像，不 import DSH 包）。 */
+export interface ConvFusionHost {
+    slots: SlotsLike;
+    /** 读服务（不声明依赖）。⚠️ 默认 strict：提供者未 ACTIVE 时返回 undefined。 */
+    get?(name: string): unknown;
+    /** cordis 作用域注入：服务 ACTIVE 后回调。闸门用它等服务，而不是读一次就放弃。 */
+    inject?(deps: string[], callback: (scope: ConvFusionHost) => void): unknown;
+    /** 可选日志（诊断用；缺省静默）。 */
+    logger?: {
+        warn?(message: unknown): void;
+    } | undefined;
+}
 /**
  * 「当前显示在中央列的那个会话」。
  *
@@ -136,8 +148,8 @@ export declare function currentMainSessionId(list: {
 export interface ConvFusionGateOptions {
     /** DSH Slot 标准注入（`ctx.locale.bind(CONVFUSION_LOCALE_NS)`）。 */
     t: Translate;
-    /** 会话服务；缺失（老宿主 / 服务不可用）→ 不注册。 */
-    sessions: SessionsLike | undefined;
+    /** 会话服务（**显式覆盖**：正常路径由闸门自己从宿主读/等）。 */
+    sessions?: SessionsLike | undefined;
     /** 判定实现（缺省 = 问宿主 `progress/workspace`）。可注入以便离线测试。 */
     probe?: ((sessionId: string) => Promise<GateAnswer>) | undefined;
     /** 要一起注册/注销的 tab（缺省 = 研究进展 + 科V社区）。 */
@@ -154,10 +166,8 @@ export declare function convfusionTabSpecs(t: Translate): readonly ConvFusionTab
 /**
  * 装上闸门：跟随当前显示的会话，决定 `conversation.view` 里我们这几条在不在。
  *
- * @param ctx - 客户端上下文（只需 `slots`）。
- * @param options - 文案注入、会话服务、判定实现、tab 列表。
+ * @param host - 客户端上下文（用到 `slots`；`get`/`inject`/`logger` 可选：读不到会话服务时靠它们等/报）。
+ * @param options - 文案注入、（可选的）会话服务覆盖、判定实现、tab 列表。
  */
-export declare function installConvFusionTabs(ctx: {
-    slots: SlotsLike;
-}, options: ConvFusionGateOptions): void;
+export declare function installConvFusionTabs(host: ConvFusionHost, options: ConvFusionGateOptions): void;
 export {};

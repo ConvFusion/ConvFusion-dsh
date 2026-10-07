@@ -1226,9 +1226,12 @@ console.log('\n[6] 客户端 bundle 格式与注册点')
   // DSH 0.2.0：设置服务由 `settingsScope` 改为 `configForms`（服务名写错会让客户端
   // fiber 永停 INACTIVE、整页静默消失，所以这里必须钉住）。
   const clientSrc = readFileSync(join(PKG, 'src', 'client', 'index.tsx'), 'utf8')
+  // `sessions` 是 2026-10 新增的硬依赖：会话 Tab 的闸门要按"当前显示的会话"判定。
+  // 不能改用 `ctx.get('sessions')` —— cordis 的 get 默认 strict，提供者未 ACTIVE 时返回
+  // undefined，冷启动会让两个 tab 静默消失（实测踩过）。
   assert(
-    /export const inject = \['slots', 'configForms', 'locale'\]/.test(clientSrc),
-    '客户端 inject = slots + configForms + locale',
+    /export const inject = \['slots', 'configForms', 'locale', 'sessions'\]/.test(clientSrc),
+    '客户端 inject = slots + configForms + locale + sessions',
   )
   assert(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'), 'package 注入 DSH 原生 locale 包')
   assert(!/export const inject = \[[^\]]*connection/.test(clientSrc), 'connection 不在硬 inject 里（已不再需要）')

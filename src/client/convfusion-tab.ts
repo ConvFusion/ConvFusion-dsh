@@ -143,6 +143,35 @@ interface SlotsLike {
   register(options: ConvFusionViewRegistration, component: unknown): () => void
 }
 
+/** 闸门用得上的那部分客户端上下文（镜像，不 import DSH 包）。 */
+export interface ConvFusionHost {
+  slots: SlotsLike
+  /** 读服务（不声明依赖）。⚠️ 默认 strict：提供者未 ACTIVE 时返回 undefined。 */
+  get?(name: string): unknown
+  /** cordis 作用域注入：服务 ACTIVE 后回调。闸门用它等服务，而不是读一次就放弃。 */
+  inject?(deps: string[], callback: (scope: ConvFusionHost) => void): unknown
+  /** 可选日志（诊断用；缺省静默）。 */
+  logger?: { warn?(message: unknown): void } | undefined
+}
+
+/**
+ * 一个真的会话服务长什么样。
+ *
+ * 形状不对就当作"没有"：宁可不显示 tab，也不要让闸门在半路上抛出一个异步异常
+ * （那种失败是静默的 —— 不注册、不报错、也没有 tab）。
+ */
+function asSessions(value: unknown): SessionsLike | undefined {
+  const candidate = value as SessionsLike | undefined
+  const list = candidate?.list
+  if (typeof list?.getSnapshot !== 'function' || typeof list.subscribe !== 'function') return undefined
+  return candidate
+}
+
+/** 从宿主读会话服务（严格：提供者未 ACTIVE 就是 undefined）。 */
+function readSessions(host: ConvFusionHost): SessionsLike | undefined {
+  return asSessions(host.get?.('sessions'))
+}
+
 /* ════════════════════════════════════════════════════════════════════════
  * 纯函数（可离线测试）
  * ════════════════════════════════════════════════════════════════════════ */
@@ -173,8 +202,8 @@ export function currentMainSessionId(list: { byId?: Record<string, SessionRowLik
 export interface ConvFusionGateOptions {
   /** DSH Slot 标准注入（`ctx.locale.bind(CONVFUSION_LOCALE_NS)`）。 */
   t: Translate
-  /** 会话服务；缺失（老宿主 / 服务不可用）→ 不注册。 */
-  sessions: SessionsLike | undefined
+  /** 会话服务（**显式覆盖**：正常路径由闸门自己从宿主读/等）。 */
+  sessions?: SessionsLike | undefined
   /** 判定实现（缺省 = 问宿主 `progress/workspace`）。可注入以便离线测试。 */
   probe?: ((sessionId: string) => Promise<GateAnswer>) | undefined
   /** 要一起注册/注销的 tab（缺省 = 研究进展 + 科V社区）。 */
@@ -250,24 +279,44 @@ function visibilitySource(): {
 /**
  * 装上闸门：跟随当前显示的会话，决定 `conversation.view` 里我们这几条在不在。
  *
- * @param ctx - 客户端上下文（只需 `slots`）。
- * @param options - 文案注入、会话服务、判定实现、tab 列表。
+ * @param host - 客户端上下文（用到 `slots`；`get`/`inject`/`logger` 可选：读不到会话服务时靠它们等/报）。
+ * @param options - 文案注入、（可选的）会话服务覆盖、判定实现、tab 列表。
  */
-export function installConvFusionTabs(
-  ctx: { slots: SlotsLike },
+export function installConvFusionTabs(host: ConvFusionHost, options: ConvFusionGateOptions): void {
+  // ① 服务已在（apply 依赖了 sessions；HMR 重载时也一定在）→ 直接装上。
+  const immediate = options.sessions ?? readSessions(host)
+  if (immediate !== undefined) {
+    attach(host, immediate, options)
+    return
+  }
+  // ② 还没就绪（例如调用方没有把 sessions 写进 inject）→ **等服务**，而不是读一次就放弃。
+  //    这是 2026-10 那次"冷启动后两个 tab 静默消失"的根因修复：cordis 的 `ctx.get` 默认
+  //    strict，提供者 fiber 未 ACTIVE 时返回 undefined；`ctx.inject` 才会等到它就绪。
+  if (typeof host.inject === 'function') {
+    host.inject(['sessions'], (scope) => {
+      const late = readSessions(scope)
+      if (late !== undefined) attach(host, late, options)
+      else host.logger?.warn?.('[convfusion] sessions service has an unexpected shape: session tabs not registered.')
+    })
+    return
+  }
+  // ③ 既读不到、又不会等 → 不注册（不猜），但留一条诊断，免得下次又是静默消失。
+  host.logger?.warn?.('[convfusion] sessions service unavailable: session tabs not registered.')
+}
+
+/** 真正装上闸门（拿到会话服务之后）。 */
+function attach(
+  host: ConvFusionHost,
+  sessions: SessionsLike,
   options: ConvFusionGateOptions,
 ): void {
-  const { sessions } = options
   const probe = options.probe ?? defaultProbe
   const tabs = options.tabs ?? convfusionTabSpecs(options.t)
   // 会话 → 答案（本页生命周期内）。缓存让"再次进入已知会话"**同步**注册。
   const cache = new Map<string, GateAnswer>()
   const { onVisible } = visibilitySource()
 
-  // 服务不在（老宿主 / 未提供）→ 一条都不注册：宁可不显示，也不猜。
-  if (!sessions) return
-
-  ctx.slots.inject(CONVFUSION_VIEW_SLOT, () => {
+  host.slots.inject(CONVFUSION_VIEW_SLOT, () => {
     /** 当前已注册条目的注销函数（空 = 没注册）。 */
     let disposeEntries: Array<() => void> = []
     /** 已注册时用的百分比 —— 变了就重注册，让 roster 重读 label。 */
@@ -283,7 +332,7 @@ export function installConvFusionTabs(
       registeredPercent = percent
       for (const spec of tabs) {
         disposeEntries.push(
-          ctx.slots.register(
+          host.slots.register(
             {
               name: CONVFUSION_VIEW_SLOT,
               id: spec.id,
@@ -323,23 +372,30 @@ export function installConvFusionTabs(
      */
     const decide = async (force = false): Promise<void> => {
       const generationAt = ++generation
-      const sessionId = currentMainSessionId(sessions.list.getSnapshot())
-      if (sessionId === undefined) {
+      try {
+        const sessionId = currentMainSessionId(sessions.list.getSnapshot())
+        if (sessionId === undefined) {
+          hide()
+          return
+        }
+        const known = force ? undefined : cache.get(sessionId)
+        if (known !== undefined) {
+          // 已知答案 → 同步落定（进入会话时不等探针，避免闪一下对话）
+          applyAnswer(known)
+          return
+        }
+        // 未知会话：先不显示（宁可晚出现一次，也不在非研究会话里闪出一个 tab），等探针
         hide()
-        return
+        const answer = await probe(sessionId)
+        if (disposed || generationAt !== generation) return
+        cache.set(sessionId, answer)
+        applyAnswer(answer)
+      } catch (error) {
+        // 判定失败 → 摘掉这一轮的 tab（fail closed），并留一条诊断。
+        // 不这样做的话，异常会变成**未处理的 rejection**：界面无提示、tab 状态还可能停在错的答案上。
+        hide()
+        host.logger?.warn?.(`[convfusion] session tab decision failed: ${String(error)}`)
       }
-      const known = force ? undefined : cache.get(sessionId)
-      if (known !== undefined) {
-        // 已知答案 → 同步落定（进入会话时不等探针，避免闪一下对话）
-        applyAnswer(known)
-        return
-      }
-      // 未知会话：先不显示（宁可晚出现一次，也不在非研究会话里闪出一个 tab），等探针
-      hide()
-      const answer = await probe(sessionId)
-      if (disposed || generationAt !== generation) return
-      cache.set(sessionId, answer)
-      applyAnswer(answer)
     }
 
     const offList = sessions.list.subscribe(() => {
