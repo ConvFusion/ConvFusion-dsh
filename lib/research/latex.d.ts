@@ -75,6 +75,21 @@ export declare function safeText(text: string | undefined): string;
  * 同时清掉 v2 论文里常见的占位注释与统计行。
  */
 /**
+ * 行内强调**只匹配单行**（`([^*\n]+)`）。这是刻意的，并有一次失败尝试的记录。
+ *
+ * 已知缺陷：Markdown 里**跨行**的 `**bold**` 不匹配，会以字面 `**` 落进 PDF
+ * （LaTeX 不报错，属静默版面缺陷；实测 paper-d2 曾出现 5 处、纸面 10 个星号）。
+ *
+ * 2026-10-04 曾改成允许跨单个换行（`([^*\n]+(?:\n(?!\s*\n)[^*\n]*)*)` + 斜体加
+ * lookaround），自检 114 条全过，但**在真实论文上过度配对**：斜体分隔符错位到别的跨度上
+ * （`\textit{what}` 变成 `}what\textit{`），并让 `\subsection{...}` 变成
+ * `\subsection\textit{{...}`，导致 paper-d2 **编译失败**（`Missing \endcsname`）。
+ * 因为正文已把所有跨行粗体改写成单行，回退到单行版本没有代价，故回退。
+ *
+ * 若将来要再修：**判据必须是在真实 paper.md 上 compose 后逐字节 diff + 编译通过**，
+ * 只用构造用例的自检不足以拦住这类过度配对。
+ */
+/**
  * 把**行内** Markdown 强调转成 LaTeX 命令（旧版靠上游 sanitizer 做，v2 的 paper.md 里内联强调很多）。
  *
  * `**x**` → `\textbf{x}`，`*x*` → `\textit{x}`。
@@ -83,6 +98,18 @@ export declare function safeText(text: string | undefined): string;
  * 行首的 `* 列表项` 因为不闭合，天然不会被匹配。
  */
 export declare function convertInlineEmphasis(text: string): string;
+/**
+ * 覆盖前检查：`compose` 会用 `paper.md` **重新生成** `main.tex`。若旧 `main.tex` 里含有新产物
+ * 不会再出现的**实质内容**，就把它列出来（调用方据此拒绝写盘）。
+ *
+ * 事故背景（2026-10-04）：paper-d2 的 44 条 `\bibitem` 只写在 `main.tex` 里、`paper.md` 里没有
+ * References 节，首次 compose 把书目整段抹掉；那次靠自动备份 `main_bak_*.tex` 才恢复。此检查把
+ * 「静默丢失」变成「响亮拒绝」。
+ *
+ * 只比较**名字/键**（书目键、自定义宏名、宏包名），不比较正文与逐字文本：正常重排、样板改写、
+ * 引用编号变化都不该触发，避免把检查做成噪音而被人习惯性绕过。
+ */
+export declare function detectComposeLoss(oldTex: string, newTex: string): string[];
 export declare function stripMarkdownHeaders(text: string | undefined): string;
 /**
  * 保护数学区、转义其余文本中的 LaTeX 特殊字符。

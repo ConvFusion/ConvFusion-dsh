@@ -26,6 +26,15 @@ export declare function paperRelDir(paperId?: string): string;
 /** 序列化 metadata.md（frontmatter + 人类可读摘要）。 */
 export declare function serializeMetadata(meta: PaperMetadata): string;
 /** 列出全部 Paper id。 */
+/**
+ * 工作区里**是否已存在论文正文**（`papers/<id>/paper.md`）。
+ *
+ * 为什么单独一个函数：进度/阶段判定原先只看硬编码的 `DEFAULT_PAPER_ID`（`paper-main`），
+ * 于是**任何没有 `paper-main` 的工作区**（例如多论文工作区，论文叫 `paper-d2-method`、
+ * `paper-d-research-ir-method`）都会被判成"尚无论文正文"，进度面板与阶段判定同时出错。
+ * 语义：**先看当前激活的论文**，再看**任一**论文 —— 项目有了正文就是有了。
+ */
+export declare function hasManuscript(workspace: string): boolean;
 export declare function listPaperIds(workspace: string): string[];
 /** 列出全部 Paper 文档（含元数据）。 */
 export declare function listPapers(workspace: string): PaperDocument[];

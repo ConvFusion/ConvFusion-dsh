@@ -3,7 +3,7 @@ name: Section Drafting from Evidence
 category: academic-writing/section-drafting
 type: system
 status: active
-version: 1.0
+version: 1.1
 origin: paper/writing (title, abstract, intro, method, experiment, conclusion)
 ---
 
@@ -17,9 +17,11 @@ Turn the research state into complete section prose that respects each section's
 
 Use this skill when:
 
+- A section must be turned into prose — and the paper's outline file (`papers/<paperId>/paper-outlines.md`) exists, or is created first (see step 1).
 - The outline and narrative exist and a specific section must now be produced as prose.
 - A section note, method sketch or results table must become publishable text.
 - A section is outside its length budget or repeats another section.
+- The outline has changed, or the manuscript has drifted from it, and the affected sections must be re-derived.
 
 ## Prerequisites
 
@@ -27,17 +29,24 @@ Each line is a precondition judged by an artifact signal — this skill is only 
 
 ```text
 requires: experiments/simulation-result | 起草前要有真实实验结果，或有仿真结果（草稿可基于仿真先行）
+requires: paper-outline | 起草前必须有论文大纲（`papers/<paperId>/paper-outlines.md`），且大纲不早于正文；正文比大纲新即为结构漂移，先改大纲
 ```
 
 ## Research Method
 
-1. **Fix the section contract first**: the reader question it answers, the evidence it may use, its length budget, and whether citations are allowed — the abstract and conclusion introduce no new citations, the introduction and related work are citation-dense.
-2. **Title and abstract are compression, not summary.** The title names the method and the problem in 10-15 words; the abstract states problem, method, one quantitative result and its significance, defines acronyms at first use, and carries no citations.
-3. **The introduction follows the narrative arc and commits early**: state the problem quickly, place the gap within the first paragraphs, introduce the method before the contributions, then close with the contributions and a short paper-organisation paragraph that matches the real outline.
-4. **Method explains why before what.** Describe the architecture, then each component, then the formulation and design rationale; every design choice needs a justification and enough implementation detail to reproduce it. Keep simple symbols inline in the prose and whole formulas as named equation placeholders — never emit raw display math.
-5. **Experiments report claim, number, interpretation.** Give a reproducible setup (data, metrics, hardware, hyperparameters), compare fairly against baselines, explain why the method wins rather than only by how much, and include an ablation that isolates each component.
-6. **The conclusion answers the question the introduction posed**, restates what was demonstrated, and gives concrete next steps; it introduces no new result and no new analysis.
-7. **Self-check before emitting**: length inside budget, every citation key present in the curated corpus, no number that contradicts the result artefacts, and no paragraph that duplicates another section.
+1. **The outline file is the authority — settle it before drafting prose.** Keep one outline per paper at `papers/<paperId>/paper-outlines.md` and treat it as the single source of truth for structure: a chapter/subsection skeleton, each subsection's argument in one line, and **the role each subsection plays in the paper's argument** (what claim it carries, what evidence supports it, and how it hands off to the next). Fix the outline first, because a section written before its skeleton exists is a section that has to be rewritten — prose is easy to patch, a wrong skeleton is not.
+2. **Derive the outline from the research results, not from the existing draft.** The outline is a forward design: start from what has actually been measured and which claims the evidence carries, then choose the section order that argues it. Never build the outline by summarising prose that already exists — that only reproduces the draft's mistakes. If the outline does differ from the draft, the draft is what changes.
+3. **Give every subsection one job and record the boundaries between neighbours.** State, for adjacent subsections, which one owns a given piece of content, so setup, results and interpretation cannot drift into each other. Where a subsection is dedicated to one experiment, it reports the result and points at the design; the design itself belongs to the section that fixes how the work was done.
+4. **Keep the outline free of experiment bookkeeping.** Environments, seeds, conditions, thresholds and pre-declared readings belong to the setup section of the manuscript, and a running log of what was run is not an outline entry. An outline entry says what a subsection argues, not what was executed.
+5. **Freeze the term set in the outline** — method name, dataset and benchmark names, metric names, symbols, and the capitalisation of each — and let the manuscript, tables and figure captions follow it. Fixing terminology after the prose exists means doing the work twice.
+6. **Fix the section contract**: the reader question it answers, the evidence it may use, its length budget, and whether citations are allowed — the abstract and conclusion introduce no new citations, the introduction and related work are citation-dense.
+7. **Title and abstract are compression, not summary.** The title names the method and the problem in 10-15 words; the abstract states problem, method, one quantitative result and its significance, defines acronyms at first use, and carries no citations.
+8. **The introduction follows the narrative arc and commits early**: state the problem quickly, place the gap within the first paragraphs, introduce the method before the contributions, then close with the contributions and a short paper-organisation paragraph that matches the real outline.
+9. **Method explains why before what.** Describe the architecture, then each component, then the formulation and design rationale; every design choice needs a justification and enough implementation detail to reproduce it. Keep simple symbols inline in the prose and whole formulas as named equation placeholders — never emit raw display math.
+10. **Experiments report claim, number, interpretation.** Give a reproducible setup (data, metrics, hardware, hyperparameters), compare fairly against baselines, explain why the method wins rather than only by how much, and include an ablation that isolates each component.
+11. **The conclusion answers the question the introduction posed**, restates what was demonstrated, and gives concrete next steps; it introduces no new result and no new analysis.
+12. **Self-check against the outline before emitting**: the subsection exists in the outline and still does its assigned job, no content has crossed a neighbour boundary, every term matches the frozen term set, and no paragraph has been imported into a section that does not own it.
+13. **Self-check the prose before emitting**: length inside budget, every citation key present in the curated corpus, no number that contradicts the result artefacts, and no paragraph that duplicates another section.
 
 ## Reasoning Guidance
 
@@ -47,14 +56,17 @@ requires: experiments/simulation-result | 起草前要有真实实验结果，�
 
 Every quantitative statement must trace to a result artefact (table, figure, run log) and every citation to a curated work. Claims about design choices must trace to a decision actually taken or an experiment actually run. Numbers in the abstract must appear in the body with the same value. Anything the section needed but the research state lacked is reported as a gap rather than filled in.
 
+The outline file is the structural evidence: a subsection that is not in the outline is not drafted, and a subsection whose assigned job has changed is re-derived rather than patched. Report outline-to-manuscript drift (a manuscript section that the outline no longer justifies) as a gap instead of silently keeping the prose.
+
 ## Expected Output
 
 Produce:
 
-- section prose at the target length, depth and paragraph granularity
+- the subsection prose at the target length, depth and paragraph granularity, drafted against the outline entry that owns it
 - inline citations on exact curated cite_keys, at logically correct locations
 - equation placeholders and figure cross-references for the apparatus step
 - a note of any evidence the section required but the research state did not contain
+- a note of any outline-to-manuscript drift found (a section the outline no longer justifies, or an outline entry with no manuscript text)
 
 ## Source Prompts (verbatim from ConvFusion)
 

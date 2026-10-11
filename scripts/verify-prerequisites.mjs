@@ -60,6 +60,10 @@ console.log('\n[1] 新信号有判定（不走 default）')
   assert(!r.satisfied && !r.evidence.includes('该阶段未声明判定信号'), 'resource-estimate 空 ws 下未落地，且非 default 文案')
   const s = SIG.judgeSignal(ctx, 'simulation-result')
   assert(!s.satisfied && !s.evidence.includes('该阶段未声明判定信号'), 'simulation-result 空 ws 下未落地，且非 default 文案')
+  // paper-outline：章节起草（C08P04）的结构契约 —— 无大纲即未落地，且非 default 文案
+  assert(SIG.STAGE_SIGNALS.includes('paper-outline'), 'paper-outline 在词表内')
+  const o = SIG.judgeSignal(ctx, 'paper-outline')
+  assert(!o.satisfied && !o.evidence.includes('该阶段未声明判定信号'), 'paper-outline 空 ws 下未落地，且非 default 文案')
   // 原有 8 信号仍由 research-process 暴露（向后兼容）
   assert(PROC.STAGE_SIGNALS.includes('resource-estimate'), 'research-process 仍导出 STAGE_SIGNALS（含新信号）')
 }

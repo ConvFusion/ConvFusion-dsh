@@ -135,14 +135,14 @@ const flow = await (async () => {
     const steps = []
     steps.push({ label: '① 工作区还没有动作状态', satisfied: gate().satisfied, evidence: gate().evidence })
     await tool.execute({ action: 'set_state', state: STATES[0] }, {})
-    steps.push({ label: '② set_state 写下状态（机制集 / 臂 / 信念 / 预算）', satisfied: gate().satisfied, evidence: gate().evidence })
+    steps.push({ label: '② set_state 写下状态（机制集 / 组 / 信念 / 预算）', satisfied: gate().satisfied, evidence: gate().evidence })
     const over = await tool.execute(
-      { action: 'record', level: 'L3', answer: ANSWERS[2][1], note: '六臂全跑（论文报告的典型写法）' },
+      { action: 'record', level: 'L3', answer: ANSWERS[2][1], note: '六组全跑（论文报告的典型写法）' },
       {},
     )
-    steps.push({ label: '③ record 记录一次构造：六臂 × 11 seeds', satisfied: gate().satisfied, evidence: gate().evidence })
+    steps.push({ label: '③ record 记录一次构造：六组 × 11 seeds', satisfied: gate().satisfied, evidence: gate().evidence })
     const trimmed = await tool.execute(
-      { action: 'record', level: 'L3', answer: 'TARGET: h1\nARMS: 2,3,4,5\nSEEDS: 12', note: '裁到四臂 × 12 seeds' },
+      { action: 'record', level: 'L3', answer: 'TARGET: h1\nARMS: 2,3,4,5\nSEEDS: 12', note: '裁到四组 × 12 seeds' },
       {},
     )
     steps.push({ label: '④ 把设计裁到预算内，再记录一次', satisfied: gate().satisfied, evidence: gate().evidence })
@@ -155,9 +155,9 @@ const flow = await (async () => {
 const extracted = (() => {
   const KNOWN = [
     'TARGET: h1 | ARMS: 0,1,2,3,4,5 | SEEDS: 11',
-    '做一次 memory 模块的消融实验，跑一条臂，2 个 seeds',
+    '做一次 memory 模块的消融实验，跑一条组，2 个 seeds',
     '对比 memory 与 attention 两个模块（两两对比），8 seeds',
-    '全臂扫描：0,1,2,3,4,5，4 seeds',
+    '全组扫描：0,1,2,3,4,5，4 seeds',
   ]
   const markdown = [...KNOWN.map((t, i) => `- [ ] A${i + 1} ${t}`), '- [ ] A5 撰写相关工作并补 12 条参考文献'].join('\n')
   const candidates = AC.extractCandidates(markdown, 'demo')
@@ -380,9 +380,9 @@ ${familyTables}
     </tbody>
   </table>
   <p class="note">
-    ③ 记录的是论文报告的典型失效：六臂 × 11 seeds，信息量高（96.8%）但成本 ${flow.over.cost.toFixed(2)} 超过预算
+    ③ 记录的是论文报告的典型失效：六组 × 11 seeds，信息量高（96.8%）但成本 ${flow.over.cost.toFixed(2)} 超过预算
     ${flow.over.budget.toFixed(1)}，合规口径 ${flow.over.compliant.toFixed(3)} —— 闸门阻断。
-    ④ 按预算裁到四臂 × 12 seeds 后，信息量 ${pct(flow.trimmed.bound_share)}（略降），合规口径
+    ④ 按预算裁到四组 × 12 seeds 后，信息量 ${pct(flow.trimmed.bound_share)}（略降），合规口径
     ${flow.trimmed.compliant.toFixed(3)}，成本 ${flow.trimmed.cost.toFixed(2)} ≤ ${flow.trimmed.budget.toFixed(1)} —— 闸门放行。
     <b>这就是论文那条修法在工作区里的样子</b>：先量化代价，再把设计裁到付得起，然后才发真实调用。
   </p>

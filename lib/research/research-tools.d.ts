@@ -48,6 +48,7 @@ export declare const PAPER_DOWNLOAD_TOOL = "research_paper_download";
 export declare const PAPER_LATEX_TOOL = "research_paper_latex";
 export declare const ACTION_CONSTRUCTION_TOOL = "research_action_construction";
 export declare const DIAGRAM_TOOL = "research_diagram";
+export declare const SCHEMATIC_TOOL = "research_schematic";
 export declare const IR_TOOL = "research_ir";
 /**
  * 构造研究资产工具集。

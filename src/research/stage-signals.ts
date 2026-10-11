@@ -28,7 +28,7 @@ import { listEvidence } from './evidence.js'
 import { listPlanDocuments } from './plans.js'
 import { loadProjectFile } from './project.js'
 import { DEFAULT_PAPER_ID } from './paper-data.js'
-import { paperDir } from './paper.js'
+import { hasManuscript as hasManuscriptIn } from './paper.js'
 import { FULLTEXT_DIR } from './paper-download.js'
 import { ACTION_STATE_FILE, summariseActionRecords } from './action-construction/index.js'
 
@@ -53,6 +53,8 @@ export const STAGE_SIGNALS = [
   'simulation-result',
   'fulltext-analyzed',
   'experiment-budget',
+  // ── 章节起草：论文大纲是否存在且不早于正文（结构契约，见 C08P04）──
+  'paper-outline',
   // ── 动作构造（论文 d4）：动作是否被写成可执行设计，且预算付得起 ──
   'action-construction',
 ] as const
@@ -76,6 +78,10 @@ export interface SignalContext {
   fulltextCount: number
   /** 最新的执行前预算计划（`plans/*budget*.md`），无则 null。 */
   budgetPlan: { path: string; mtimeMs: number } | null
+  /** 论文大纲：`papers/<id>/paper-outlines.md` 中最新的一份（章节起草的结构契约）。 */
+  paperOutline: { path: string; mtimeMs: number } | null
+  /** 论文正文最新改动时间（`papers/<id>/latex/main.tex` 或 `paper.md`）。 */
+  latestManuscriptMs: number
   /** `experiments/**` 下最新的缓存/结果文件时间戳；0 = 还没有跑过。 */
   latestRunArtifactMs: number
   /** 是否已写下可度量的动作状态（`research/action-state.json`）。 */
@@ -95,7 +101,7 @@ export function buildSignalContext(workspace: string): SignalContext {
   const literatureEvidence = evidence.filter((e) => e.sourceKind === 'literature')
   const settledEvidence = evidence.filter((e) => e.status === 'supported' || e.status === 'verified')
   const hasExperiments = existsSync(join(workspace, 'experiments'))
-  const hasManuscript = existsSync(join(paperDir(workspace, DEFAULT_PAPER_ID), 'paper.md'))
+  const hasManuscript = hasManuscriptIn(workspace)
 
   // 研究话题落盘（`research/topics.md`）：只数**顶层 bullet**（一条话题一个 bullet）。
   // 缩进的子项（依据 / 什么会推翻它）、标题、引用说明都不算 —— 否则一条话题会被数成好几条。
@@ -157,11 +163,39 @@ export function buildSignalContext(workspace: string): SignalContext {
     latestRunArtifactMs = 0
   }
 
+  // 论文大纲：`papers/<id>/paper-outlines.md`（章节起草的结构契约），
+  // 以及论文正文时间戳 —— 正文比大纲新即为**漂移**，起草前应先把大纲改回来。
+  let paperOutline: { path: string; mtimeMs: number } | null = null
+  let latestManuscriptMs = 0
+  try {
+    const papersDir = join(workspace, 'papers')
+    for (const d of readdirSync(papersDir)) {
+      const dir = join(papersDir, d)
+      if (!statSync(dir).isDirectory()) continue
+      const outline = join(dir, 'paper-outlines.md')
+      if (existsSync(outline)) {
+        const st = statSync(outline)
+        if (!paperOutline || st.mtimeMs > paperOutline.mtimeMs) {
+          paperOutline = { path: `papers/${d}/paper-outlines.md`, mtimeMs: st.mtimeMs }
+        }
+      }
+      for (const rel of [join('latex', 'main.tex'), 'paper.md']) {
+        const f = join(dir, rel)
+        if (!existsSync(f)) continue
+        const st = statSync(f)
+        if (st.mtimeMs > latestManuscriptMs) latestManuscriptMs = st.mtimeMs
+      }
+    }
+  } catch {
+    paperOutline = null
+    latestManuscriptMs = 0
+  }
+
   // 动作构造：状态文件是否存在 + 记录汇总（在预算内的条数决定信号是否落地）。
   const hasActionState = existsSync(join(workspace, ACTION_STATE_FILE))
   const actionConstruction = summariseActionRecords(workspace)
 
-  return { project, evidence, claims, decisions, plans, literatureEvidence, settledEvidence, hasExperiments, hasManuscript, topicCount, fulltextCount, budgetPlan, latestRunArtifactMs, hasActionState, actionConstruction }
+  return { project, evidence, claims, decisions, plans, literatureEvidence, settledEvidence, hasExperiments, hasManuscript, topicCount, fulltextCount, budgetPlan, latestRunArtifactMs, hasActionState, actionConstruction, paperOutline, latestManuscriptMs }
 }
 
 /**
@@ -294,6 +328,21 @@ export function judgeSignal(
         evidence: fresh
           ? `${ctx.budgetPlan.path}（${at}）不早于最近实验产物，可用于授权本次执行`
           : `${ctx.budgetPlan.path}（${at}）早于最近实验产物 —— 预算已过期，需重新报预算并取得确认`,
+      }
+    }
+    case 'paper-outline': {
+      // 章节起草的结构契约：大纲必须存在，且**不早于**论文正文。
+      // 正文比大纲新 = 结构漂移（先改正文后补大纲，顺序反了），起草前应先把大纲改回来。
+      if (!ctx.paperOutline) {
+        return { satisfied: false, evidence: '尚无论文大纲（`papers/<id>/paper-outlines.md`）—— 先定大纲再起草正文' }
+      }
+      const drifted = ctx.paperOutline.mtimeMs < ctx.latestManuscriptMs
+      const at = new Date(ctx.paperOutline.mtimeMs).toISOString().slice(0, 16).replace('T', ' ')
+      return {
+        satisfied: !drifted,
+        evidence: drifted
+          ? `${ctx.paperOutline.path}（${at}）早于论文正文 —— 结构已漂移，需先改大纲再改正文`
+          : `${ctx.paperOutline.path}（${at}）不早于论文正文，可作为起草的结构依据`,
       }
     }
     default:

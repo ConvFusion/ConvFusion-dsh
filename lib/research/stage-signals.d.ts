@@ -31,7 +31,7 @@ import { summariseActionRecords } from './action-construction/index.js';
  * ⚠️ 固定词表是刻意的：用户能改**过程 / 依赖图**，但改不了**判定逻辑**。
  * 允许任意表达式会让一个笔误把"当前阶段"永久判错，而且无法校验。
  */
-export declare const STAGE_SIGNALS: readonly ["topic-proposed", "problem-defined", "literature-evidence", "claims", "method-plan", "experiments", "settled-evidence", "decisions", "manuscript", "resource-estimate", "simulation-result", "fulltext-analyzed", "experiment-budget", "action-construction"];
+export declare const STAGE_SIGNALS: readonly ["topic-proposed", "problem-defined", "literature-evidence", "claims", "method-plan", "experiments", "settled-evidence", "decisions", "manuscript", "resource-estimate", "simulation-result", "fulltext-analyzed", "experiment-budget", "paper-outline", "action-construction"];
 export type StageSignal = (typeof STAGE_SIGNALS)[number];
 /** 信号判定的运行时上下文（一次性读盘，供阶段评估与前置评估共用）。 */
 export interface SignalContext {
@@ -53,6 +53,13 @@ export interface SignalContext {
         path: string;
         mtimeMs: number;
     } | null;
+    /** 论文大纲：`papers/<id>/paper-outlines.md` 中最新的一份（章节起草的结构契约）。 */
+    paperOutline: {
+        path: string;
+        mtimeMs: number;
+    } | null;
+    /** 论文正文最新改动时间（`papers/<id>/latex/main.tex` 或 `paper.md`）。 */
+    latestManuscriptMs: number;
     /** `experiments/**` 下最新的缓存/结果文件时间戳；0 = 还没有跑过。 */
     latestRunArtifactMs: number;
     /** 是否已写下可度量的动作状态（`research/action-state.json`）。 */

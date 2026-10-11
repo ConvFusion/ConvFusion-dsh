@@ -281,6 +281,10 @@ async function main() {
       ['A2', '做一次 memory 模块的消融实验，跑一条臂，2 个 seeds', 'single_ablation', [0], 2],
       ['A3', '对比 memory 与 attention 两个模块（两两对比），8 seeds', 'binary_contrast', [0, 1], 8],
       ['A4', '全臂扫描：0,1,2,3,4,5，4 seeds', 'component_scan', [0, 1, 2, 3], 4],
+      // 术语以论文用词为准：实验条件叫**组**（`plans/deck-conventions.md` §9）。
+      // 上面两条夹具刻意保留旧写法「臂」，用来锁住**兼容别名**不被误删；下面两条锁住主用词。
+      ['A5', '做一次 memory 模块的消融实验，跑一个组，2 个 seeds', 'single_ablation', [0], 2],
+      ['A6', '全组扫描：0,1,2,3,4,5，4 seeds', 'component_scan', [0, 1, 2, 3], 4],
     ]
     const markdown = KNOWN.map(([id, text]) => `- [ ] ${id} ${text}`).join('\n')
     const candidates = ac.extractCandidates(markdown, 'verify')

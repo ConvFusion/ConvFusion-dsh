@@ -54,7 +54,7 @@ import {
   type PaperGapType,
   type PaperMaturityLevel,
 } from './paper-data.js'
-import { getActivePaperId, listPapers, paperDir } from './paper.js'
+import { getActivePaperId, hasManuscript as hasManuscriptIn, listPapers } from './paper.js'
 import { paperStatusSummary, readPaperMaturity, suggestPaperMaturity } from './paper-evolution.js'
 import { detectPaperGaps, listPaperGaps, mergeDetectedGaps, paperTitle, prioritizeGaps } from './paper-gaps.js'
 
@@ -394,7 +394,7 @@ export function captureProgress(
       plansReady: plans.filter((p) => p.status === 'ready' || p.status === 'refined').length,
       openQuestions: index.openQuestions.length,
       outputs: listAllOutputs(workspace).length,
-      paperPresent: existsSync(join(paperDir(workspace, DEFAULT_PAPER_ID), 'paper.md')),
+      paperPresent: hasManuscriptIn(workspace),
     },
     stage: process.current ? { id: process.current.stage.id, label: process.current.stage.label } : null,
   }

@@ -1616,7 +1616,7 @@ section('[6e] 发布本机研究（work/publish）')
       '',
       '## Method',
       '',
-      '三臂对照 + oracle 上界。',
+      '三组对照 + oracle 上界。',
       '',
       '## Open Questions',
       '',
@@ -1747,7 +1747,7 @@ section('[6e] 发布本机研究（work/publish）')
     assertEq(payload.content.summary, '低算力视觉语言方向的可证伪问题', '摘要 = 主题句')
     assertEq(payload.content.hypothesis, 'H1：收益是强样本条件性的。', '假设取自 research-state.md 的 Hypotheses')
     assertEq(payload.content.core_idea, '把裁剪当作可证伪的干预来研究。', '核心想法取自 Innovation')
-    assertEq(payload.content.method_overview, '三臂对照 + oracle 上界。', '方法概览取自 Method（**方法留在本机**指的是提示词/工作流，不是研究方法的表述）')
+    assertEq(payload.content.method_overview, '三组对照 + oracle 上界。', '方法概览取自 Method（**方法留在本机**指的是提示词/工作流，不是研究方法的表述）')
     assertEq(payload.content.motivation, '给机器人策略做数据过滤时，失败判定不可靠。', '动机取自 project.md 的 Motivation')
     assertEq(payload.content.research_fields, ['多模态', '机器人学习'], '研究领域按分隔符切分')
     assertEq(payload.content.schema_version, 1, 'schema_version = 1')

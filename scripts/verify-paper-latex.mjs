@@ -77,6 +77,30 @@ console.log('\n[2] stripMarkdownHeaders 与内联强调')
   // 数学区的 * 是乘号，不能转
   assertEq(L.convertInlineEmphasis('$a*b$'), '$a*b$', '数学区 * 不被转成斜体')
   assertEq(L.convertInlineEmphasis('$**x**$'), '$**x**$', '数学区强调标记不动')
+  // 跨行强调：**当前刻意不支持**（单行限定）。2026-10-04 曾放开跨行，构造用例全过但
+  // 在真实 paper.md 上过度配对、错位斜体分隔符并令 paper-d2 编译失败（Missing \endcsname），
+  // 故回退。这里把"不支持"钉成回归护栏：若将来再放开，必须先满足
+  // 「真实 paper.md compose 后逐字节 diff + 编译通过」这一判据。
+  assertEq(L.convertInlineEmphasis('a **bold\nacross lines** b'),
+    'a **bold\nacross lines** b', '跨行粗体当前保持字面（已知限制，勿在无真实语料判据下放开）')
+  assertEq(L.convertInlineEmphasis('a *ital\nacross lines* b'),
+    'a *ital\nacross lines* b', '跨行斜体当前保持字面（同上）')
+  assertEq(L.convertInlineEmphasis('a **bold** b'), 'a \\textbf{bold} b', '单行粗体仍正常转换')
+  assertEq(L.convertInlineEmphasis('a *ital* b'), 'a \\textit{ital} b', '单行斜体仍正常转换')
+  // 覆盖前检查：旧 main.tex 有、新产物没有的实质内容必须被报出来
+  assertEq(L.detectComposeLoss('\\bibitem{a} X\n\\bibitem{b} Y', '\\bibitem{a} X').length, 1,
+    'detectComposeLoss 报出丢失的书目条目')
+  assertEq(L.detectComposeLoss('\\bibitem{a} X', '\\bibitem{a} X').length, 0,
+    'detectComposeLoss 对同名书目条目静默（只比 key，不比文本）')
+  assertEq(L.detectComposeLoss('\\newcommand{\\foo}{1}', '').length, 1,
+    'detectComposeLoss 报出自定义宏')
+  assertEq(L.detectComposeLoss('\\def\\bar{2}', '').length, 1, 'detectComposeLoss 报出 \\def 宏')
+  assertEq(L.detectComposeLoss('\\usepackage{amsmath,booktabs}', '\\usepackage{amsmath}').length, 1,
+    'detectComposeLoss 报出缺失宏包（按包名拆开比较）')
+  assertEq(L.detectComposeLoss('正文', '正文').length, 0, 'detectComposeLoss 对纯正文变化静默')
+  // 安全边界：不跨空行（未闭合的 ** 不得吞掉下一段）
+  assertEq(L.convertInlineEmphasis('stray **open\n\nnext **pair** end'),
+    'stray **open\n\nnext \\textbf{pair} end', '粗体不跨空行（未闭合不吞段）')
 }
 
 /* ── 3. 数学区净化 ────────────────────────────────────────────────── */

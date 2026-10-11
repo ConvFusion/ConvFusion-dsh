@@ -68,7 +68,7 @@ console.log(
 )
 
 const ANSWERS = [
-  ['L1', 'ACTION: component_scan\nREASON: 预算允许全部六条臂，信念分散，扫描即可定位'],
+  ['L1', 'ACTION: component_scan\nREASON: 预算允许全部六条组，信念分散，扫描即可定位'],
   ['L2', 'TARGET: h1\nWHY: 它最能解释已提升的数据集'],
   ['L3', 'TARGET: h1\nARMS: 0,1,2,3,4,5\nSEEDS: 11\nSUCCESS: 去掉 memory 后 A、D 的提升消失'],
   ['L4', 'TARGET: h1\nARMS: 0,1,2,3,4,5\nSEEDS: 11\nPREDICTION: A 与 D 失去提升\nSUCCESS: 去掉 memory 后 A、D 的提升消失'],
@@ -286,15 +286,15 @@ rule('5. 在 /research 里怎么用：实验前的动作构造闸门（在临时
     }
 
     console.log(`  ① 未配置状态时，闸门状态：${gate().satisfied ? '满足' : '不满足'} — ${gate().evidence}`)
-    await show({ action: 'set_state', state }, '② set_state 写下这次实验的状态（机制集 / 臂 / 信念 / 预算）')
+    await show({ action: 'set_state', state }, '② set_state 写下这次实验的状态（机制集 / 组 / 信念 / 预算）')
     console.log(`     闸门状态：${gate().satisfied ? '满足' : '不满足'} — ${gate().evidence}`)
     await show(
-      { action: 'record', level: 'L3', answer: ANSWERS[2][1], note: '六臂全跑，按论文的典型写法' },
-      '③ record 记录一次构造（六臂 × 11 seeds）',
+      { action: 'record', level: 'L3', answer: ANSWERS[2][1], note: '六组全跑，按论文的典型写法' },
+      '③ record 记录一次构造（六组 × 11 seeds）',
     )
     console.log(`     闸门状态：${gate().satisfied ? '满足' : '不满足'} — ${gate().evidence}`)
     await show(
-      { action: 'record', level: 'L3', answer: 'TARGET: h1\nARMS: 2,3,4,5\nSEEDS: 12', note: '按预算裁到四臂 × 12 seeds' },
+      { action: 'record', level: 'L3', answer: 'TARGET: h1\nARMS: 2,3,4,5\nSEEDS: 12', note: '按预算裁到四组 × 12 seeds' },
       '④ 把设计裁到预算内，再记录一次',
     )
     console.log(`     闸门状态：${gate().satisfied ? '满足' : '不满足'} — ${gate().evidence}`)
@@ -313,9 +313,9 @@ rule('6. 没有 Paper 1 也能用：从已知 Action 自动构建 Action Object'
 {
   const KNOWN = [
     'TARGET: h1 | ARMS: 0,1,2,3,4,5 | SEEDS: 11',
-    '做一次 memory 模块的消融实验，跑一条臂，2 个 seeds',
+    '做一次 memory 模块的消融实验，跑一条组，2 个 seeds',
     '对比 memory 与 attention 两个模块（两两对比），8 seeds',
-    '全臂扫描：0,1,2,3,4,5，4 seeds',
+    '全组扫描：0,1,2,3,4,5，4 seeds',
     '撰写相关工作并补 12 条参考文献',
   ]
   const markdown = KNOWN.map((t, i) => `- [ ] A${i + 1} ${t}`).join('\n')
@@ -338,7 +338,7 @@ rule('6. 没有 Paper 1 也能用：从已知 Action 自动构建 Action Object'
   }
   console.log(
     '\n读法：结构化写法的动作直接把设计读出来（as written 即构造）；散文写法的动作要先\n' +
-      '把文字里的信息（模块名、臂数、seeds）落成对象，代价与收益才看得见；不属于消融类\n' +
+      '把文字里的信息（模块名、组数、seeds）落成对象，代价与收益才看得见；不属于消融类\n' +
       '实验的步骤明确跳过，而不是硬套一个设计。',
   )
 }
