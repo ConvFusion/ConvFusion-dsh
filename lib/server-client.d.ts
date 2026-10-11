@@ -496,6 +496,26 @@ export declare function fetchProjectFiles(base: string, apiKey: string, projectI
     source?: FileSource;
 }): Promise<RemoteProjectFile[]>;
 /**
+ * 文件列表**加上这一侧的身份**（`workspace_id`）。
+ *
+ * 【下载】要回答"目标工作区里已有的 `workspace/` 是不是同一项研究"，判据就是它：
+ * 服务器给"一项研究工作"一个全局唯一、跨项目生命周期不变的标识
+ * （`ws_<32 hex>`；规格见 `dev-notes/v3-Workspace-Identity-API.md`）。
+ *
+ * ⚠️ 字段**在不在**决定行为，不按服务器版本号判断：
+ * 老服务器不返回它 → `workspaceId = null` → 插件按"**无法校验**"处理（**不阻塞**下载）。
+ * 形状非法（不是 `ws_…`）同样当"没给"——宁可少一道保护，也不要拿一个可疑的值去
+ * 判定"这项研究是另一个"而误禁用户。
+ *
+ * 位置是**响应体顶层**（项目/工作区级属性），**不是** `items` 里的文件级字段。
+ */
+export declare function fetchProjectFilesWithIdentity(base: string, apiKey: string, projectId: string, options?: ServerRequestOptions & {
+    source?: FileSource;
+}): Promise<{
+    files: RemoteProjectFile[];
+    workspaceId: string | null;
+}>;
+/**
  * 下载项目工作区的 **ZIP 快照**（`GET /projects/{id}/files/archive`），
  * **边收边写进 `sink`**（不驻留内存、界面能看见进度）。
  *
@@ -522,6 +542,7 @@ export declare function fetchProjectArchive(base: string, apiKey: string, projec
     filename: string | null;
     fileCount: number | null;
     sourceUpdatedAt: string | null;
+    workspaceId: string | null;
 }>;
 /**
  * 下载一个文件的**原始字节**（不是 JSON，所以不能走 `requestJson`）。

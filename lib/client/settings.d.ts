@@ -225,6 +225,175 @@ export declare function loadSettingsState(send?: SettingsSend, options?: {
 }, t?: Translate): Promise<SettingsLoad>;
 export declare function ConvFusionProjectSettings({ scope, t, send, }: ConvFusionSettingsProps): JSX.Element;
 /**
+ * 一个**候选下载目标工作区**的校验结果（宿主 `mentor/downloadState` 的 `items[]` 镜像）。
+ *
+ * 判据是服务器给的研究工作标识 `workspace_id`（全局唯一、跨项目生命周期不变）：
+ * 这个工作区里已有的 `workspace/` 和我要下载的是不是**同一项研究**。
+ */
+interface HostDownloadTarget {
+    id: string;
+    title: string;
+    path: string;
+    /** 目录还在吗。 */
+    exists: boolean;
+    /** 研究根绝对路径（已有或将会是）。 */
+    researchRoot: string | null;
+    /** `nested` = `<ws>/workspace`；`legacy` = 研究直接在 `<ws>`；`null` = 还没有研究。 */
+    layout: 'nested' | 'legacy' | null;
+    /**
+     * 结论：
+     * · `new` 还没有研究工作区 → 允许（按新建处理）
+     * · `same` 同一项研究 → 允许（下载后融合）
+     * · `other` **另一项研究** → 禁止
+     * · `unknown` 有研究但读不到标识 → 默认禁止，二次确认可强制
+     * · `unverifiable` 服务器没给标识 → 允许，但明说"无法校验"
+     * · `missing` 目录不存在 → 禁止
+     */
+    status: 'new' | 'same' | 'other' | 'unknown' | 'unverifiable' | 'missing';
+    /** 本地读到的标识（`null` = 读不到）。 */
+    localWorkspaceId: string | null;
+    /** 工作区内标记与本地记录冲突（读到了但值不同）。 */
+    identityConflict: boolean;
+}
+/** 导师简介（`research_profiles` 投影；后端 enrich 后才有）。 */
+interface HostMentorProfile {
+    institution: string | null;
+    department: string | null;
+    bio: string | null;
+    researchFields: string[];
+    researchInterests: string[];
+    researchExpertise: string[];
+}
+/** 提案当事一方。`displayName` 缺失时宿主已回退成 id 短前缀。 */
+interface HostProposalParty {
+    id: string;
+    displayName: string;
+    profile?: HostMentorProfile | null;
+}
+type HostProposalStatus = 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED';
+/** 一条指导提案：我发起的（我是 mentor）/ 我收到的（我是 researcher）。 */
+interface HostProposal {
+    id: string;
+    projectId: string;
+    /** 项目标题（后端 enrich 后才有；缺 → null，界面写"未命名项目"）。 */
+    projectTitle: string | null;
+    mentor: HostProposalParty | null;
+    researcher: HostProposalParty | null;
+    guidanceScope: string;
+    totalFee: number;
+    depositAmount: number;
+    successPaymentAmount: number;
+    successCondition: {
+        type: string;
+        description: string | null;
+    };
+    status: HostProposalStatus;
+    /**
+     * 关系建立（ACCEPTED）后，导师已上传的指导结果条数（`review/` 下的文件数）。
+     *
+     * 提案状态接受之后就不再变了，而用户要看的是**指导进展**；这个事实只在项目
+     * 文件里。宿主在 `mentor/list` 里补齐；`null` = 没查到（未知），不是"没有"。
+     */
+    reviewFiles?: number | null;
+    /**
+     * **宿主算好的**："导师手里这份工作区是不是最新"（判别联合，见 `sync-watermarks.ts`）。
+     *
+     * - `{ neverDownloaded: true }` —— 本地没有水位 = **从没成功下载过** → 提示"先下载"；
+     * - `{ changed: true, reason: 'uploaded' | 'deleted' }` —— 下载过、学生又动过 → 提示重新下载；
+     * - `{ changed: false }` —— 下载过、两个判据都说没动；
+     * - `null` —— **无从判断**（旧服务器不给字段 / 服务器说不可知 / 只有一半判据可用）。
+     *
+     * ⚠️ `undefined` = 旧宿主不返回这个字段（协议 <22）→ 界面**不提示**，
+     * 但那不等于"没更新"，所以只能按"拿不到就不提示"处理，不许编成 false。
+     *
+     * ⚠️ **"从没下载过"与"无从判断"必须分开**（2026-10 用户指出）：前者手里没副本，
+     * 该提示下载；后者是判不出来，不该编造。早先两者都在 `null` 里 → 导师第一次进
+     * 【指导中】一声不吭，而学生明明更新过了。
+     */
+    sync?: {
+        neverDownloaded: true;
+    } | {
+        changed: boolean;
+        reason: 'uploaded' | 'deleted' | null;
+    } | null;
+    expiresAt: string;
+    createdAt: string;
+}
+/**
+ * 复制文本到剪贴板。
+ *
+ * ⚠️ 两条路都要有：`navigator.clipboard` 需要**安全上下文**（回环地址算，所以 DSH Web
+ * 正常可用），拿不到时退到 `execCommand('copy')` 那套老办法。
+ * 无论哪条路失败都**只返回 false、不抛** —— 复制失败不该让界面崩，也不该打断下载。
+ */
+export declare function copyText(text: string): Promise<boolean>;
+/**
+ * 【下载】：下载到**用户选的 DSH 工作区**（2026-09 用户要求）。
+ *
+ * 不用浏览器的默认下载，也不需要输地址：列出宿主注册表里的工作区，点一个就行。
+ *
+ * **只存 ZIP，不解压**（2026-09 用户拍板）：同名不覆盖（宿主自动加序号），
+ * 所选工作区里原有的东西一个都不动。
+ *
+ * ⚠️ **0.5.8 起多了一道闸门**：每一项先判"这个工作区里已有的 `workspace/` 和我要下载的
+ * 是不是**同一项研究**"（判据是服务器的 `workspace_id`）—— 同一项才允许下进去融合，
+ * 另一项**在下之前就拦住**（而不是等文件都解压进去了才发现）。
+ */
+export declare function DownloadDialog({ t, proposal, fileName, workspaces, workspacesAvailable, workspacesReason, selection, files, bytes, busy, 
+/** 下载中已收到的字节数（宿主如实报告；null = 还没开始/已结束）。 */
+received, notice, targets, currentWorkspaceId, done, onSelect, onDownload, onClose, onFill, onCopy, onRefill, }: {
+    t: Translate;
+    proposal: HostProposal;
+    /** 预计保存成的文件名（服务器命名 `<owner>-<title>.zip`；实际以响应头为准）。 */
+    fileName: string;
+    workspaces: Array<{
+        id: string;
+        title: string;
+        path: string;
+    }> | null;
+    workspacesAvailable: boolean;
+    workspacesReason: string | null;
+    selection: string;
+    files: number | null;
+    bytes: number | null;
+    busy: boolean;
+    received: number | null;
+    notice: {
+        tone: 'success' | 'error';
+        text: string;
+    } | null;
+    /** v23：每个候选工作区的校验结论；`null` = 旧宿主（不显示状态，退回旧行为）。 */
+    targets: HostDownloadTarget[] | null;
+    /** 当前会话的工作区 id（标出来 + 说明提示词能不能填）。 */
+    currentWorkspaceId: string | null;
+    /**
+     * 「整合提示词」面板；`null` = 没在下载也没下过。
+     *
+     * `phase = 'pending'` 发生在下载**进行中** —— 那时提示词已经先用预检的值填好了
+     * （2026-10 用户要求：不要等下载完才出现），只是文件名还是猜的。
+     */
+    done: {
+        phase: 'pending' | 'ready';
+        dir: string;
+        name: string;
+        plan: string;
+        prompt: string;
+        correctedPrompt: string | null;
+        canFill: boolean;
+        filled: boolean;
+        fillHint: string | null;
+    } | null;
+    onSelect: (id: string) => void;
+    onDownload: () => void;
+    onClose: () => void;
+    /** 把提示词填进当前会话的输入框（**不发送**）。 */
+    onFill: () => void;
+    /** 复制提示词到剪贴板。 */
+    onCopy: () => void;
+    /** 用**实际落盘的文件名**替换提示词（只在这两者不一致时出现）。 */
+    onRefill: () => void;
+}): JSX.Element;
+/**
  * 【设置】-【ConvFusion】-【ConvFusion.com】这一页的**全部内容**。
  *
  * ⚠️ 它同时被两处渲染：设置页的 Tab 2，以及会话 Tab「科V社区」的正文
@@ -232,9 +401,35 @@ export declare function ConvFusionProjectSettings({ scope, t, send, }: ConvFusio
  * 自己联网验证、自己持有全部对话状态；宿主状态传 `null` 也能正常站起来
  * （`initial` 只是首屏的乐观初值，省掉一次闪烁）。
  */
-export declare function CommunityTab({ send, initial, t, }: {
+/**
+ * 「把提示词放进输入框」的窄接口（**不发送**）。
+ *
+ * 只有**会话内**那个视图（`./community-view.js`）能提供它 —— DSH 把 `inputActions` 作为
+ * session 标准 props 交给会话作用域槽位；设置页没有，所以那里只给「复制提示词」。
+ */
+export interface SessionBridge {
+    /**
+     * 当前会话（下载预检要用它算"当前会话的工作区"）。
+     *
+     * 只有它才能回答两件事：① 该预选哪个工作区；② 下载完**能不能**把提示词填进输入框
+     * （DSH 的写权限按会话自己的工作区收窄，目标不是它时会话就写不进去）。
+     */
+    sessionId: string;
+    /** 把整段提示词放进输入框（**绝不**调用 submit）。缺省 = 拿不到输入框，只能复制。 */
+    setDraft?: ((text: string) => void) | undefined;
+    /** 输入框现在是空的吗（空 → 自动填；非空 → 先问一句再替换）。 */
+    draftEmpty: boolean;
+}
+export declare function CommunityTab({ send, initial, t, session, }: {
     send: SettingsSend;
     initial: HostAccountState | null;
     t: Translate;
+    /**
+     * 会话桥（会话内才有）。
+     *
+     * 它的有无**就是**"要不要/能不能把整合提示词填进输入框"那个开关：DSH 的写权限按会话
+     * 自己的工作区收窄，所以只有"目标工作区 == 当前会话的工作区"时填进去才有意义。
+     */
+    session?: SessionBridge | undefined;
 }): JSX.Element;
 export default ConvFusionProjectSettings;

@@ -50,6 +50,7 @@ import {
   translateOr,
   type Translate,
 } from './i18n/index.js'
+import { buildMergePrompt, planKeyOf } from './merge-prompt.js'
 
 /* ════════════════════════════════════════════════════════════════════════
  * 跨插件服务的结构化契约（镜像，不 import）
@@ -1618,6 +1619,47 @@ interface HostUploadWorkspace {
 }
 
 /**
+ * 「目标工作区校验」从哪个宿主协议号开始有（见 `src/protocol.ts` 的 `23`）。
+ *
+ * 客户端**不按服务器**版本号判断（那是 `workspace_id` 字段在不在的事），但**宿主**这一侧
+ * 得看协议号：旧宿主的 `mentor/downloadState` 既不返回 `targets`、也不返回 `protocol`，
+ * 于是界面**完全不显示校验状态** —— 退回旧行为，而不是把"没有字段"渲染成"校验通过"。
+ */
+const HOST_PROTOCOL_MIN_FOR_CHECK = 23
+
+/**
+ * 一个**候选下载目标工作区**的校验结果（宿主 `mentor/downloadState` 的 `items[]` 镜像）。
+ *
+ * 判据是服务器给的研究工作标识 `workspace_id`（全局唯一、跨项目生命周期不变）：
+ * 这个工作区里已有的 `workspace/` 和我要下载的是不是**同一项研究**。
+ */
+interface HostDownloadTarget {
+  id: string
+  title: string
+  path: string
+  /** 目录还在吗。 */
+  exists: boolean
+  /** 研究根绝对路径（已有或将会是）。 */
+  researchRoot: string | null
+  /** `nested` = `<ws>/workspace`；`legacy` = 研究直接在 `<ws>`；`null` = 还没有研究。 */
+  layout: 'nested' | 'legacy' | null
+  /**
+   * 结论：
+   * · `new` 还没有研究工作区 → 允许（按新建处理）
+   * · `same` 同一项研究 → 允许（下载后融合）
+   * · `other` **另一项研究** → 禁止
+   * · `unknown` 有研究但读不到标识 → 默认禁止，二次确认可强制
+   * · `unverifiable` 服务器没给标识 → 允许，但明说"无法校验"
+   * · `missing` 目录不存在 → 禁止
+   */
+  status: 'new' | 'same' | 'other' | 'unknown' | 'unverifiable' | 'missing'
+  /** 本地读到的标识（`null` = 读不到）。 */
+  localWorkspaceId: string | null
+  /** 工作区内标记与本地记录冲突（读到了但值不同）。 */
+  identityConflict: boolean
+}
+
+/**
  * 项目文件空间的**两侧**（宿主 `FileSource` 的镜像）：`owner` = 学生自己那份，
  * `mentor` = 导师回传的那份。同一路径两侧并存、互不覆盖。
  */
@@ -1979,6 +2021,42 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MB`
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+/**
+ * 复制文本到剪贴板。
+ *
+ * ⚠️ 两条路都要有：`navigator.clipboard` 需要**安全上下文**（回环地址算，所以 DSH Web
+ * 正常可用），拿不到时退到 `execCommand('copy')` 那套老办法。
+ * 无论哪条路失败都**只返回 false、不抛** —— 复制失败不该让界面崩，也不该打断下载。
+ */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    const clipboard = (globalThis as { navigator?: { clipboard?: { writeText?(t: string): Promise<void> } } })
+      .navigator?.clipboard
+    if (clipboard?.writeText) {
+      await clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    /* 落到下面的兜底 */
+  }
+  try {
+    const doc = (globalThis as { document?: Document }).document
+    if (!doc?.body) return false
+    const area = doc.createElement('textarea')
+    area.value = text
+    area.setAttribute('readonly', '')
+    area.style.position = 'fixed'
+    area.style.opacity = '0'
+    doc.body.appendChild(area)
+    area.select()
+    const okText = typeof doc.execCommand === 'function' ? doc.execCommand('copy') : false
+    doc.body.removeChild(area)
+    return Boolean(okText)
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -2858,14 +2936,149 @@ function downloadPrefix(p: HostProposal): string {
 }
 
 /**
+ * 宿主的判定 → 提示词用的**五态**。
+ *
+ * `missing`（注册表里的目录暂时不在）归到 `new`：落盘那一步会把目录建出来，
+ * 提示词要做的就是"解压成新的研究根" ✓（这与宿主侧的 `isDirectlySelectable` 同一口径）。
+ */
+function mergeStateOf(
+  status: HostDownloadTarget['status'] | undefined,
+): 'new' | 'same' | 'other' | 'unknown' | 'unverifiable' {
+  switch (status) {
+    case 'same':
+      return 'same'
+    case 'other':
+      return 'other'
+    case 'unknown':
+      return 'unknown'
+    case 'new':
+    case 'missing':
+      return 'new'
+    default:
+      return 'unverifiable'
+  }
+}
+
+/**
+ * 目标工作区是哪种布局（提示词在**旧布局**下要换一套备份说法）。
+ *
+ * 宿主不回状态（旧宿主 / 缺字段）时按路径猜：研究根就是工作区根本身 = 旧布局。
+ * 这不会误伤 —— 猜错的后果只是提示词里那句"只搬研究数据"不适用，而 agent 会在
+ * 只读盘查那一步把实际情况报告出来。
+ */
+function chosenTargetLayout(
+  status: HostDownloadTarget['status'] | undefined,
+  researchRoot: string,
+  workspace: string,
+): 'nested' | 'legacy' | null {
+  if (status === 'new') return null
+  return researchRoot.replace(/\/+$/, '') === workspace.replace(/\/+$/, '') ? 'legacy' : 'nested'
+}
+
+/**
+ * 一个目标的校验结论 → 徽章（文案 + 颜色 + 一行说明）。
+ *
+ * 颜色只表达"能不能放心下"：绿 = 同一项研究，红 = **不能下**，
+ * 黄 = 下得了但要知道有风险（无法确认），灰 = 中性信息（新工作区）。
+ */
+/**
+ * ⚠️ `DownloadDialog` 是**导出**的，只为了离线自检能直接渲染它：
+ * 它没有 hook（状态都在 `CommunityTab` 里），当普通函数调一次就能拿到整棵 JSX 树，
+ * 于是"下拉框里是不是这几个工作区、默认选中的是不是当前工作区"可以被真的断言，
+ * 而不是只对着源码正则猜。
+ */
+function statusBadge(
+  t: Translate,
+  target: HostDownloadTarget,
+): { label: string; hint: string; tone: 'neutral' | 'brand' | 'success' | 'warn' | 'error' } {
+  switch (target.status) {
+    case 'same':
+      return {
+        label: t('community.exchange.ws.same'),
+        hint: t('community.exchange.ws.sameHint'),
+        tone: 'success',
+      }
+    case 'other':
+      return {
+        label: t('community.exchange.ws.other'),
+        hint: t('community.exchange.ws.otherHint'),
+        tone: 'error',
+      }
+    case 'missing':
+      // 不拦（落盘会 mkdir 创建它），但值得提醒一句"它现在不在"
+      return {
+        label: t('community.exchange.ws.missing'),
+        hint: t('community.exchange.ws.missingHint'),
+        tone: 'warn',
+      }
+    case 'unknown':
+      return {
+        label: t('community.exchange.ws.unknown'),
+        // 冲突（标记与本地记录矛盾）与"压根读不到"要分开说：前者是**两边都有值但不一样**，
+        // 后者是**没有值**。补救动作也不同（前者该去查那两条记录）。
+        hint: target.identityConflict
+          ? t('community.exchange.ws.conflictHint')
+          : t('community.exchange.ws.unknownHint'),
+        tone: 'warn',
+      }
+    case 'unverifiable':
+      return {
+        label: t('community.exchange.ws.unverifiable'),
+        hint: t('community.exchange.ws.unverifiableHint'),
+        tone: 'warn',
+      }
+    default:
+      return {
+        label: t('community.exchange.ws.new'),
+        hint: t('community.exchange.ws.newHint'),
+        tone: 'neutral',
+      }
+  }
+}
+
+/**
+ * 选中一个工作区之后、点【下载】之前的**后果提示**。
+ *
+ * ⚠️ 这道提示**必须留着**（2026-10 用户要求）：插件不再拦任何工作区，于是"选错"的代价
+ * 全靠用户在看清楚后果的前提下自己判断 —— 尤其 `other`（会把现有研究根备份后换掉）。
+ * `new` / `same` 没有需要提醒的后果 → `null`。
+ */
+function downloadWarning(
+  t: Translate,
+  target: HostDownloadTarget,
+): { text: string; tone: 'warn' | 'error' } | null {
+  switch (target.status) {
+    case 'other':
+      return { text: t('community.exchange.ws.otherWarn'), tone: 'error' }
+    case 'unknown':
+      return {
+        text: target.identityConflict
+          ? t('community.exchange.ws.conflictWarn')
+          : t('community.exchange.ws.unknownWarn'),
+        tone: 'warn',
+      }
+    case 'unverifiable':
+      return { text: t('community.exchange.ws.unverifiableWarn'), tone: 'warn' }
+    case 'missing':
+      return { text: t('community.exchange.ws.missingWarn'), tone: 'warn' }
+    default:
+      return null
+  }
+}
+
+/**
  * 【下载】：下载到**用户选的 DSH 工作区**（2026-09 用户要求）。
  *
  * 不用浏览器的默认下载，也不需要输地址：列出宿主注册表里的工作区，点一个就行。
  *
- * **只存 ZIP，不解压**（2026-09 用户拍板）：所以没有 scope、没有"这个工作区里有没有
- * 研究"的拦截 —— 同名不覆盖（宿主自动加序号），任何工作区都能选。
+ * **只存 ZIP，不解压**（2026-09 用户拍板）：同名不覆盖（宿主自动加序号），
+ * 所选工作区里原有的东西一个都不动。
+ *
+ * ⚠️ **0.5.8 起多了一道闸门**：每一项先判"这个工作区里已有的 `workspace/` 和我要下载的
+ * 是不是**同一项研究**"（判据是服务器的 `workspace_id`）—— 同一项才允许下进去融合，
+ * 另一项**在下之前就拦住**（而不是等文件都解压进去了才发现）。
  */
-function DownloadDialog({
+export function DownloadDialog({
   t,
   proposal,
   fileName,
@@ -2879,9 +3092,15 @@ function DownloadDialog({
   /** 下载中已收到的字节数（宿主如实报告；null = 还没开始/已结束）。 */
   received,
   notice,
+  targets,
+  currentWorkspaceId,
+  done,
   onSelect,
   onDownload,
   onClose,
+  onFill,
+  onCopy,
+  onRefill,
 }: {
   t: Translate
   proposal: HostProposal
@@ -2896,15 +3115,52 @@ function DownloadDialog({
   busy: boolean
   received: number | null
   notice: { tone: 'success' | 'error'; text: string } | null
+  /** v23：每个候选工作区的校验结论；`null` = 旧宿主（不显示状态，退回旧行为）。 */
+  targets: HostDownloadTarget[] | null
+  /** 当前会话的工作区 id（标出来 + 说明提示词能不能填）。 */
+  currentWorkspaceId: string | null
+  /**
+   * 「整合提示词」面板；`null` = 没在下载也没下过。
+   *
+   * `phase = 'pending'` 发生在下载**进行中** —— 那时提示词已经先用预检的值填好了
+   * （2026-10 用户要求：不要等下载完才出现），只是文件名还是猜的。
+   */
+  done: {
+    phase: 'pending' | 'ready'
+    dir: string
+    name: string
+    plan: string
+    prompt: string
+    correctedPrompt: string | null
+    canFill: boolean
+    filled: boolean
+    fillHint: string | null
+  } | null
   onSelect: (id: string) => void
   onDownload: () => void
   onClose: () => void
+  /** 把提示词填进当前会话的输入框（**不发送**）。 */
+  onFill: () => void
+  /** 复制提示词到剪贴板。 */
+  onCopy: () => void
+  /** 用**实际落盘的文件名**替换提示词（只在这两者不一致时出现）。 */
+  onRefill: () => void
 }): JSX.Element {
   /*
-   * **每个工作区都可以选**：下载只是把 ZIP 存进工作区，同名不覆盖（自动加序号），
-   * 所选工作区里原有的东西一个都不动 —— 所以"已有研究项目就禁用"既没必要也挡路。
+   * **一个都不禁用**（2026-10 用户拍板："插件端全部设计成提示词构建"）。
+   *
+   * 校验结论不再决定"能不能下"，而是决定**提示词说什么**：
+   *   · `new`     → 解压成新的研究根
+   *   · `same`    → 融合进现有研究根
+   *   · `other`   → **先备份现有研究根（移动，不删），再解压成新的研究根**
+   *   · `unknown` / `unverifiable` → 先盘查、给出判断，用户确认后按对应的一支执行
+   * 徽章仍然显示，因为用户有权在下载前知道"这一下会发生什么"。
    */
+  const targetOf = (id: string): HostDownloadTarget | undefined => targets?.find((x) => x.id === id)
   const chosen = workspaces?.find((w) => w.id === selection)
+  const chosenTarget = chosen ? targetOf(chosen.id) : undefined
+  const chosenBadge = chosenTarget ? statusBadge(t, chosenTarget) : null
+  const warning = chosenTarget ? downloadWarning(t, chosenTarget) : null
   const dest = chosen ? `${chosen.path}/${fileName}` : ''
   const ready = Boolean(selection) && files !== null && files > 0 && !busy
   /*
@@ -2941,36 +3197,109 @@ function DownloadDialog({
           ) : workspaces.length === 0 ? (
             <div style={S.hint}>{t('community.exchange.noWorkspaces')}</div>
           ) : (
-            <div style={{ ...S.list, maxHeight: 240, overflowY: 'auto' }}>
-              {workspaces.map((w, i) => (
-                <label
-                  key={w.id}
-                  style={{
-                    ...S.listRow,
-                    alignItems: 'center',
-                    cursor: 'pointer',
-                    ...(i === 0 ? {} : { borderTop: '1px solid var(--dsw-alias-border-l1)' }),
-                  }}
-                >
-                  <input
-                    type="radio"
-                    name="cf-download-workspace"
-                    checked={selection === w.id}
-                    onChange={() => onSelect(w.id)}
-                  />
-                  <span style={{ minWidth: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <span style={S.listTitle}>{w.title}</span>
-                    <span style={{ ...S.hint, wordBreak: 'break-all' }}>{w.path}</span>
-                  </span>
-                </label>
-              ))}
+            /*
+             * **下拉框**而不是单选列表（2026-10 用户要求）：工作区多起来时列表太长，
+             * 而这里每次只会选一个。样式直接复用设置页既有的 `S.select`（与上传对话框同源）。
+             *
+             * 下拉框里塞不下徽章，所以把"当前会话"与判定结论压进**选项文字**；
+             * 选中项的完整路径与结论说明放在框下面（`chosenBadge`）。
+             * 默认选中**当前会话的工作区**（预选优先级在 `requestDownload` 里，第一顺位）。
+             */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <div style={S.label}>{t('community.exchange.workspaceLabel')}</div>
+              <select
+                style={S.select}
+                value={selection}
+                // 下载进行中不许改目标：请求已经发出去了，改了只会让人以为换成功了
+                disabled={busy}
+                onChange={(e) => onSelect(e.target.value)}
+              >
+                {workspaces.map((w) => {
+                  const tg = targetOf(w.id)
+                  const badge = tg ? statusBadge(t, tg) : null
+                  const marks = [
+                    // 只有当前会话的工作区才能把整合提示词填进输入框
+                    currentWorkspaceId === w.id ? t('community.exchange.ws.current') : '',
+                    badge ? badge.label : '',
+                  ].filter(Boolean)
+                  return (
+                    <option key={w.id} value={w.id}>
+                      {marks.length > 0 ? `${w.title}（${marks.join(' · ')}）` : w.title}
+                    </option>
+                  )
+                })}
+              </select>
+              {/* 选中项的路径：下拉框里放不下（它可能很长） */}
+              {chosen ? (
+                <div style={{ ...S.hint, wordBreak: 'break-all' }}>{chosen.path}</div>
+              ) : null}
+              {/* 选中项的**校验结论**：这一行是"会发生什么"的一半（另一半是下面的后果提示） */}
+              {chosenBadge ? (
+                <div style={S.hint}>
+                  <Badge tone={chosenBadge.tone}>{chosenBadge.label}</Badge> {chosenBadge.hint}
+                </div>
+              ) : null}
             </div>
           )}
 
+          {/*
+            下载成功之后：ZIP 只是躺在那儿，还要解压并**融合**。这一段给出**两步走**的
+            提示词（先只读盘查并报告 → 我确认 → 再融合），**不自动发送**。
+            能填就填进当前会话的输入框；目标不是当前会话的工作区、或不在会话里 →
+            只给「复制提示词」，并把"为什么不能填"说清楚（DSH 只写自己会话的工作区）。
+          */}
+          {done ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+              <div style={S.listTitle}>{t('community.merge.title')}</div>
+              <div style={S.hint}>{t('community.exchange.downloadDone', { dir: done.dir, name: done.name })}</div>
+              <div style={S.hint}>{done.plan}</div>
+              <div style={S.hint}>{t('community.merge.hint')}</div>
+              {/* 下载还没落盘：说清"已经填好了，但要等写完再发" */}
+              {done.phase === 'pending' ? (
+                <div style={S.hint}>{t('community.merge.pendingHint')}</div>
+              ) : null}
+              {/* 落盘后的真名与提示词里猜的不一致 → 给一个更正版（点了才替换） */}
+              {done.correctedPrompt ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <div style={S.hint}>{t('community.merge.nameChanged', { name: done.name })}</div>
+                  <div>
+                    <button type="button" style={S.ghostBtn} onClick={onRefill}>
+                      {t('community.merge.refill')}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {/* 输入框非空时「填入输入框」是**替换**：这一句必须在按之前就看得见 */}
+              {done.canFill && !done.filled ? <div style={S.hint}>{t('community.merge.fillHint')}</div> : null}
+              {done.filled ? (
+                <div style={S.hint}>{t('community.merge.filled')}</div>
+              ) : done.fillHint ? (
+                <div style={S.hint}>{done.fillHint}</div>
+              ) : null}
+            </div>
+          ) : null}
+
           {/* 写到哪里要看得见（用户可以选任何工作区，那就更该知道落点在哪） */}
-          {dest ? (
+          {!(done && done.phase === 'ready') && dest ? (
             <div style={{ ...S.hint, wordBreak: 'break-all' }}>
               {t('community.exchange.destHint', { dest })}
+            </div>
+          ) : null}
+          {/*
+            选中之后的**后果提示**：插件不拦任何工作区，所以"这一下会发生什么"必须写在
+            用户按【下载】之前看得见的地方（尤其"另一项研究 → 会备份后换掉"）。
+          */}
+          {!(done && done.phase === 'ready') && warning ? (
+            <div
+              style={{
+                ...S.hint,
+                color:
+                  warning.tone === 'error'
+                    ? 'var(--dsw-alias-state-error-primary)'
+                    : 'var(--dsw-alias-state-warn-primary)',
+              }}
+            >
+              {warning.text}
             </div>
           ) : null}
           {/* 下载中：真实字节数 + 细进度条。不显示的话，慢链路下界面就是"卡住" */}
@@ -3021,14 +3350,27 @@ function DownloadDialog({
             <button type="button" style={S.ghostBtn} onClick={onClose}>
               {t('community.action.close')}
             </button>
-            <button
-              type="button"
-              style={{ ...S.primaryBtn, opacity: ready ? 1 : 0.55 }}
-              disabled={!ready}
-              onClick={onDownload}
-            >
-              {busy ? t('community.exchange.downloadingBtn') : t('community.action.download')}
-            </button>
+            {done ? (
+              <>
+                <button type="button" style={S.ghostBtn} onClick={onCopy}>
+                  {t('community.merge.copy')}
+                </button>
+                {done.canFill && !done.filled ? (
+                  <button type="button" style={S.primaryBtn} onClick={onFill}>
+                    {t('community.merge.fill')}
+                  </button>
+                ) : null}
+              </>
+            ) : (
+              <button
+                type="button"
+                style={{ ...S.primaryBtn, opacity: ready ? 1 : 0.55 }}
+                disabled={!ready}
+                onClick={onDownload}
+              >
+                {busy ? t('community.exchange.downloadingBtn') : t('community.action.download')}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -3419,14 +3761,42 @@ function ServerPresetButton({
  * 自己联网验证、自己持有全部对话状态；宿主状态传 `null` 也能正常站起来
  * （`initial` 只是首屏的乐观初值，省掉一次闪烁）。
  */
+/**
+ * 「把提示词放进输入框」的窄接口（**不发送**）。
+ *
+ * 只有**会话内**那个视图（`./community-view.js`）能提供它 —— DSH 把 `inputActions` 作为
+ * session 标准 props 交给会话作用域槽位；设置页没有，所以那里只给「复制提示词」。
+ */
+export interface SessionBridge {
+  /**
+   * 当前会话（下载预检要用它算"当前会话的工作区"）。
+   *
+   * 只有它才能回答两件事：① 该预选哪个工作区；② 下载完**能不能**把提示词填进输入框
+   * （DSH 的写权限按会话自己的工作区收窄，目标不是它时会话就写不进去）。
+   */
+  sessionId: string
+  /** 把整段提示词放进输入框（**绝不**调用 submit）。缺省 = 拿不到输入框，只能复制。 */
+  setDraft?: ((text: string) => void) | undefined
+  /** 输入框现在是空的吗（空 → 自动填；非空 → 先问一句再替换）。 */
+  draftEmpty: boolean
+}
+
 export function CommunityTab({
   send,
   initial,
   t,
+  session,
 }: {
   send: SettingsSend
   initial: HostAccountState | null
   t: Translate
+  /**
+   * 会话桥（会话内才有）。
+   *
+   * 它的有无**就是**"要不要/能不能把整合提示词填进输入框"那个开关：DSH 的写权限按会话
+   * 自己的工作区收窄，所以只有"目标工作区 == 当前会话的工作区"时填进去才有意义。
+   */
+  session?: SessionBridge | undefined
 }): JSX.Element {
   const [state, setState] = React.useState<HostAccountState | null>(initial)
   const [phase, setPhase] = React.useState<'loading' | 'ready'>('loading')
@@ -3610,6 +3980,54 @@ export function CommunityTab({
     /** 预计/实际保存成的文件名（服务器命名，落盘后由宿主回报真名）。 */
     fileName: string
     notice: { tone: 'success' | 'error'; text: string } | null
+    /*
+     * ── v23：目标工作区校验（这个工作区是不是**同一项研究**）────────────────
+     * 旧宿主（协议 < 23）不返回下面这些 → `targets` 为 null、`statusAvailable` 为 false
+     * → 界面**完全不显示状态**，退回今天的行为（不假装校验过）。
+     */
+    /** 每个候选工作区的状态（`null` = 旧宿主，不显示）。 */
+    targets: HostDownloadTarget[] | null
+    /** 本次下载项在服务器上的标识；`null` = 服务器没给（判定必为 `unverifiable`）。 */
+    remoteWorkspaceId: string | null
+    /** 当前会话的工作区 id（预选 + 决定提示词能不能填）。 */
+    currentWorkspaceId: string | null
+    /**
+     * 下载成功后的「整合提示词」面板（**不自动发送**）。
+     *
+     * 下载完把 ZIP 存下来只是第一步 —— 要让它变成研究前进，还得解压并和本地内容**融合**，
+     * 那件事交给用户会话里的 agent。这里只把提示词准备好：能填就填进输入框，不能填就复制。
+     */
+    done: {
+      /**
+       * `pending` = 下载还在跑（提示词已经先填好了）；`ready` = 落盘完成、判定已核准。
+       */
+      phase: 'pending' | 'ready'
+      /** ZIP 落在哪个工作区根目录。 */
+      dir: string
+      /** 落盘后的真名（`pending` 时还是预检的猜测）。 */
+      name: string
+      /**
+       * "接下来会发生什么"那句话（**已本地化**）。
+       *
+       * 由构建提示词时的同一套分叉规则算出来（`planKeyOf`）—— 面板与提示词不会各说一套。
+       */
+      plan: string
+      /** 当前这段提示词（与输入框里那一版一致）。 */
+      prompt: string
+      /**
+       * 落盘后的文件名与提示词里写的**不一致**时的更正版（点按钮才替换）。
+       *
+       * 为什么要它：提示词是**下载前**用预检猜的文件名填的；服务器才是命名的权威，
+       * 同名还会加 `-2`。不一致时把更正版备着，让用户自己决定（绝不静默改掉输入框）。
+       */
+      correctedPrompt: string | null
+      /** 目标就是当前会话的工作区（只有这时填进去才有意义）。 */
+      canFill: boolean
+      /** 已经自动填进输入框了吗。 */
+      filled: boolean
+      /** 不能填时的解释（`canFill` 为真时是 `null`）—— 由上层按"为什么不能填"算好。 */
+      fillHint: string | null
+    } | null
   } | null>(null)
   const [downloadBusy, setDownloadBusy] = React.useState(false)
   /**
@@ -4101,7 +4519,13 @@ export function CommunityTab({
     const prefix = downloadPrefix(p)
     // 导师下学生的工作区（owner 侧）；学生取导师回传的那份（mentor 侧）
     const source = otherSide(p)
-    const res = await post('mentor/downloadState', { projectId: p.projectId, prefix, source })
+    const res = await post('mentor/downloadState', {
+      projectId: p.projectId,
+      prefix,
+      source,
+      // v23：宿主按它算"当前会话的工作区"（预选 + 决定提示词能不能填）
+      ...(session?.sessionId ? { sessionId: session.sessionId } : {}),
+    })
     if (!res.ok) {
       setMentorNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
       return
@@ -4113,22 +4537,49 @@ export function CommunityTab({
       reason: string | null
       expectedName: string
       items: Array<{ id: string; title: string; path: string }>
+      /** v23 才有；旧宿主不返回 → 界面不显示校验状态。 */
+      targets?: HostDownloadTarget[]
+      remoteWorkspaceId?: string | null
+      currentWorkspaceId?: string | null
+      protocol?: number
     }
-    // 预选：优先这项工作**所在的工作区**（学生侧指导意见该落回那里），否则第一个
+    /*
+     * v23 的校验状态只有在**宿主报了新协议号**时才用：光有字段不够 ——
+     * 旧宿主可能压根不返回 `targets`，这时按"完全没有校验"渲染（不假装校验过）。
+     */
+    const supportsCheck = typeof v.protocol === 'number' && v.protocol >= HOST_PROTOCOL_MIN_FOR_CHECK
+    const targets = supportsCheck && Array.isArray(v.targets) ? v.targets : null
+    /*
+     * 预选优先级（v23 起）：
+     *   ① **当前会话的工作区** —— 它是唯一"下载完能把提示词填进去"的目标（agent 只写得进
+     *      自己会话的工作区），所以**默认就选它**；
+     *   ② 这项工作**已发布到的那个工作区**（学生侧指导意见该落回那里）；
+     *   ③ 第一个。
+     *
+     * ⚠️ 这里**不按判定过滤**：判定只决定提示词说什么，不决定"能不能下" ——
+     * 早先有一版会把 `other` / `missing` 从预选里跳过，结果"当前工作区恰好是另一项研究"时
+     * 默认落到别处，用户会以为提示词填不进去是坏了。
+     */
+    const current = v.currentWorkspaceId ? v.items.find((w) => w.id === v.currentWorkspaceId) : undefined
     const own = v.items.find((w) =>
       (mine ?? []).some((m) => m.id === w.id && m.published?.projectId === p.projectId),
     )
+    const preferred = [current, own, ...v.items].find(Boolean)
     setDownload({
       proposal: p,
       source,
       workspaces: v.items,
       available: v.available,
       reason: v.reason,
-      selection: (own ?? v.items[0])?.id ?? '',
+      selection: preferred?.id ?? '',
       files: v.files,
       bytes: v.bytes,
       fileName: v.expectedName,
       notice: null,
+      targets,
+      remoteWorkspaceId: v.remoteWorkspaceId ?? null,
+      currentWorkspaceId: v.currentWorkspaceId ?? null,
+      done: null,
     })
   }
 
@@ -4136,9 +4587,96 @@ export function CommunityTab({
     const target = download
     if (!target || !target.selection) return
     const projectId = target.proposal.projectId
+    const chosen = target.workspaces?.find((w) => w.id === target.selection)
+    const chosenTarget = target.targets?.find((x) => x.id === target.selection)
     setDownloadBusy(true)
     setDownloadReceived(null)
-    setDownload((prev) => (prev ? { ...prev, notice: null } : prev))
+
+    /*
+     * ═══ 第一件事：**先把提示词填进输入框**（2026-10 用户要求）═══
+     *
+     * 下载一份快照要几秒到两分钟，而提示词只是一段"等下要用的文本" —— 没必要让用户干等到
+     * 落盘完成才看见它。所以这里**在下载之前**就用**预检**的值构建一版并填好：
+     * 工作区 / 研究根 / 判定 / 标识在预检时都已经知道，**只有文件名是猜的**
+     * （真正以服务器落盘的名字为准，也可能因为同名而带上 `-2`）——
+     * 所以这一版的提示词里附一句"以实际落盘的名字为准"，并在下载完成后提供更正版。
+     */
+    const provisionalDir = chosen?.path ?? ''
+    const provisionalRoot = chosenTarget?.researchRoot ?? `${provisionalDir}/workspace`
+    const provisionalState = mergeStateOf(chosenTarget?.status)
+    const provisionalName = target.fileName
+    /*
+     * 填不填得进输入框有个硬条件：**目标工作区必须就是当前会话的工作区** ——
+     * DSH 的写权限按会话自己的工作区收窄，指向别处的话 agent 根本写不进去，
+     * 填进去就是给用户一段必错的提示词。这时只给「复制提示词」。
+     */
+    const canFill = Boolean(session?.setDraft) && target.selection === target.currentWorkspaceId
+    const fillHint = canFill
+      ? null
+      : !session
+        ? t('community.merge.noComposer')
+        : t('community.merge.otherWorkspace', { dir: provisionalDir })
+    const buildPrompt = (
+      dir: string,
+      root: string,
+      name: string,
+      status: HostDownloadTarget['status'] | undefined,
+      layout: HostDownloadTarget['layout'] | null | undefined,
+      workspaceId: string | null,
+      pendingName: boolean,
+    ): string =>
+      dir
+        ? buildMergePrompt({
+            t,
+            // 只用于**建议**备份目录名（真正取缩写的是 DSH，它读得到工作区里的 project.md）
+            projectTitle: target.proposal.projectTitle ?? '',
+            zipPath: `${dir}/${name}`,
+            workspace: dir,
+            researchRoot: root,
+            state: mergeStateOf(status),
+            layout: layout ?? null,
+            workspaceId,
+            projectId,
+            serverUrl: state?.serverUrl ?? '',
+            source: target.source,
+            zipNamePending: pendingName,
+          })
+        : ''
+    const provisionalPrompt = buildPrompt(
+      provisionalDir,
+      provisionalRoot,
+      provisionalName,
+      chosenTarget?.status,
+      chosenTarget?.layout,
+      target.remoteWorkspaceId,
+      true,
+    )
+    /*
+     * 输入框空着就直接填好（用户少一步）；里面已经有内容就**绝不动它** ——
+     * 只把提示词备着，等用户点「填入输入框」才替换（那句提示会说"会替换"）。
+     */
+    const autoFilled = Boolean(provisionalPrompt) && canFill && session?.draftEmpty === true
+    if (autoFilled) session?.setDraft?.(provisionalPrompt)
+    setDownload((prev) =>
+      prev
+        ? {
+            ...prev,
+            notice: null,
+            done: {
+              phase: 'pending',
+              dir: provisionalDir,
+              name: provisionalName,
+              plan: t(`community.merge.plan.${planKeyOf(provisionalState)}`),
+              prompt: provisionalPrompt,
+              correctedPrompt: null,
+              canFill,
+              filled: autoFilled,
+              fillHint,
+            },
+          }
+        : prev,
+    )
+
     /*
      * 下载期间**按秒问宿主收到了多少字节**。
      *
@@ -4169,6 +4707,8 @@ export function CommunityTab({
         prefix: downloadPrefix(target.proposal),
         // 与预检**同一侧**：否则会出现"预检说有 3 个文件、点下去 404"
         source: target.source,
+        // v23：预检时那一侧的标识。宿主据此**在落盘前再判一次**，并用归档响应头复核。
+        ...(target.remoteWorkspaceId ? { remoteWorkspaceId: target.remoteWorkspaceId } : {}),
       })
     } finally {
       stopPoll()
@@ -4176,22 +4716,79 @@ export function CommunityTab({
       setDownloadReceived(null)
     }
     if (!res.ok) {
+      /*
+       * 失败：ZIP 没落盘 → **刚才填进输入框的那段提示词先别发送**。
+       * 面板撤掉、回执说清楚（输入框是用户的，插件不动它）。
+       */
       setDownload((prev) =>
         prev
-          ? { ...prev, notice: { tone: 'error', text: res.error?.message ?? t('community.error.unknown') } }
+          ? {
+              ...prev,
+              done: null,
+              notice: {
+                tone: 'error',
+                text: `${res.error?.message ?? t('community.error.unknown')} ${t('community.merge.downloadFailedHint')}`,
+              },
+            }
           : prev,
       )
       return
     }
-    const v = res.value as { dir: string; path: string; name: string; bytes: number }
+    const v = res.value as {
+      dir: string
+      path: string
+      name: string
+      bytes: number
+      /** v23：目标研究根（已有或将会是）。 */
+      researchRoot?: string | null
+      /** v23：落盘前那一次判定。 */
+      workspaceStatus?: HostDownloadTarget['status']
+      /** v23：这项研究的标识（归档响应头优先）。 */
+      workspaceId?: string | null
+      /** v23：布局（`legacy` 时提示词要换一套备份说法）。 */
+      workspaceLayout?: 'nested' | 'legacy' | null
+    }
     /*
-     * 成功就**关窗**（2026-09 用户要求）：文件已经落盘，对话框再留着没有任何可做的事，
-     * 只剩一个"已保存"的提示——那放到列表页顶部那条回执里说（和其它业务回执同一处）。
+     * 下载成功**不等于**事情做完：ZIP 还在工作区根上躺着，要解压并和本地内容**融合**
+     * 才算研究前进了一步。那一步交给用户会话里的 agent —— 提示词上面**已经填好了**，
+     * 这里只做两件事：把判定/路径**按落盘实测值核准**，以及文件名对不上时给一个更正版。
      */
-    setDownload(null)
+    const finalRoot = v.researchRoot ?? `${v.dir}/workspace`
+    const correctedPrompt = buildPrompt(
+      v.dir,
+      finalRoot,
+      v.name,
+      v.workspaceStatus,
+      v.workspaceLayout ?? chosenTargetLayout(v.workspaceStatus, finalRoot, v.dir),
+      v.workspaceId ?? target.remoteWorkspaceId,
+      false,
+    )
+    const nameChanged = Boolean(correctedPrompt) && v.name !== provisionalName
+    setDownload((prev) =>
+      prev
+        ? {
+            ...prev,
+            notice: null,
+            done: {
+              phase: 'ready',
+              dir: v.dir,
+              name: v.name,
+              plan: t(`community.merge.plan.${planKeyOf(mergeStateOf(v.workspaceStatus))}`),
+              // 没变就是同一个文本；变了则保留"已填进去的那一版"，更正版放另一栏等用户点
+              prompt: nameChanged ? provisionalPrompt : correctedPrompt,
+              correctedPrompt: nameChanged ? correctedPrompt : null,
+              canFill,
+              filled: autoFilled,
+              fillHint,
+            },
+          }
+        : prev,
+    )
     setMentorNotice({
       tone: 'success',
-      text: t('community.exchange.downloadDone', { dir: v.dir, name: v.name }),
+      text: autoFilled
+        ? t('community.merge.filled')
+        : t('community.exchange.downloadDone', { dir: v.dir, name: v.name }),
     })
     /*
      * 下载成功的那一刻，宿主已把**这一版的水位**存下 —— 刷新提案让"学生更新了"
@@ -5190,9 +5787,59 @@ export function CommunityTab({
           busy={downloadBusy}
           received={downloadReceived}
           notice={download.notice}
+          targets={download.targets}
+          currentWorkspaceId={download.currentWorkspaceId}
+          done={download.done}
           onSelect={(id) => setDownload((prev) => (prev ? { ...prev, selection: id } : prev))}
           onDownload={() => void runDownload()}
           onClose={() => setDownload(null)}
+          onFill={() => {
+            const prompt = download.done?.prompt
+            if (!prompt || !session?.setDraft) return
+            /*
+             * 走到这里说明输入框里**已经有内容**（空的话下载完就自动填好了）——
+             * 按钮旁边那句"会替换输入框里现有的内容"就是给这一步的确认。
+             * ⚠️ 只填，**不发送**（绝不调用 submit）。
+             */
+            session.setDraft(prompt)
+            setDownload((prev) =>
+              prev?.done ? { ...prev, done: { ...prev.done, filled: true } } : prev,
+            )
+            setMentorNotice({ tone: 'success', text: t('community.merge.filled') })
+          }}
+          onCopy={() => {
+            const prompt = download.done?.prompt
+            if (!prompt) return
+            void copyText(prompt).then((copied) => {
+              setMentorNotice({
+                tone: 'success',
+                text: copied ? t('community.merge.copied') : t('community.merge.copyFailed'),
+              })
+            })
+          }}
+          onRefill={() => {
+            const corrected = download.done?.correctedPrompt
+            if (!corrected) return
+            /*
+             * 落盘的实际文件名与提示词里猜的不同 → 换成更正版。
+             * 这是**用户明确点的一下**（不是静默改），所以可以替换输入框。
+             */
+            if (download.done?.canFill && session?.setDraft) session.setDraft(corrected)
+            setDownload((prev) =>
+              prev?.done
+                ? {
+                    ...prev,
+                    done: {
+                      ...prev.done,
+                      prompt: corrected,
+                      correctedPrompt: null,
+                      filled: prev.done.filled || prev.done.canFill,
+                    },
+                  }
+                : prev,
+            )
+            setMentorNotice({ tone: 'success', text: t('community.merge.filled') })
+          }}
         />
       ) : null}
 

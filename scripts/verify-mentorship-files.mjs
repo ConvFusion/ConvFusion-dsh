@@ -739,14 +739,53 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
   const host = hostFor([empty, mine])
   const state = await host.handler('mentor/downloadState', { projectId: PROJECT_ID, prefix: '学生甲-长上下文推理' })
   assertEq(state.ok, true, 'downloadState 可用')
+  /*
+   * ⚠️ 比对要用 **realpath**：宿主一律走真身路径（`realpathSync`），而 `mkdtemp` 给的
+   * 路径在 macOS 上经过 `/var → /private/var` 这层符号链接，字符串直接比会对不上。
+   */
+  const itemOf = (dir) => state.value?.items?.find((w) => w.path === dir)
+  const realDir = (dir) => realpathSync(dir)
   assertEq(state.value?.files, 3, '预检报 3 个文件（全量，不再按 scope 过滤）')
   assertEq(state.value?.bytes, 15, '预检报总体积')
   assertEq(state.value?.items?.length, 2, '列出两个工作区')
+  /*
+   * v23：每项多出**校验结论**（`status` = 这个工作区里已有的 `workspace/` 和我要下载的
+   * 是不是同一项研究）。这里只钉住"字段在、形状对"；判定矩阵本身由
+   * `verify-workspace-identity.mjs` 全覆盖（那台是纯函数，不必经过 RPC）。
+   *
+   * 注意 `status` 的依据是服务器的 `workspace_id`：这个夹具的假服务器**不返回**它，
+   * 所以两项都判成 `unverifiable`（允许下载、但界面明说"无法校验"）—— 不阻塞，
+   * 也不假装校验过。
+   */
   assertEq(
-    state.value?.items?.map((w) => Object.keys(w).sort()),
-    [['id', 'path', 'title'], ['id', 'path', 'title']],
-    '工作区只给 id/title/path —— 没有 hasResearch 之类的禁用标记',
+    state.value?.items?.map((w) => Object.keys(w).filter((k) => k !== 'canonical').sort()),
+    [
+      ['exists', 'id', 'identityConflict', 'layout', 'localWorkspaceId', 'path', 'researchRoot', 'status', 'title'],
+      ['exists', 'id', 'identityConflict', 'layout', 'localWorkspaceId', 'path', 'researchRoot', 'status', 'title'],
+    ],
+    'v23：每项带校验结论（status / exists / researchRoot / layout / localWorkspaceId / identityConflict）',
   )
+  assertEq(
+    itemOf(mine)?.status,
+    'unverifiable',
+    '有研究 + 服务器不给 workspace_id → unverifiable（**允许**下载，只是校验不了）',
+  )
+  assertEq(itemOf(empty)?.status, 'new', '没有研究 → new（与"校验不了"是两件事）')
+  assertEq(state.value?.remoteWorkspaceId, null, '服务器没给标识 → 顶层字段是 null（不是空串）')
+  assertEq(state.value?.protocol, 23, '响应带宿主协议号，界面据此决定显不显示校验状态')
+  assertEq(
+    itemOf(mine)?.layout,
+    'nested',
+    '有研究的工作区：layout = nested（研究根在 <ws>/workspace）',
+  )
+  assertEq(itemOf(mine)?.researchRoot, join(realDir(mine), 'workspace'), '研究根 = <ws>/workspace（真身路径）')
+  assertEq(itemOf(empty)?.layout, null, '没有研究的工作区：layout = null（状态必然是 new）')
+  assertEq(
+    itemOf(empty)?.researchRoot,
+    join(realDir(empty), 'workspace'),
+    '没有研究时也给"将会是研究根"的路径（提示词要用）',
+  )
+  assertEq(itemOf(empty)?.exists, true, '目录在不在是**独立**的一维（这里在）')
   assertEq(state.value?.expectedName, '学生甲-长上下文推理.zip', '预计文件名走宿主安全化')
 
   // ② 落盘：ZIP 写进工作区**根目录**，文件名取服务器给的 Content-Disposition

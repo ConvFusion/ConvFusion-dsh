@@ -241,6 +241,93 @@ export const en = {
   'community.exchange.downloadingBtn': 'Downloading…',
   'community.exchange.noWorkspaces': 'No DSH workspace available (create one in DSH first).',
   'community.exchange.downloadDone': 'Saved {name} into {dir}.',
+
+  // Download target validation (protocol 23): is this workspace **the same research**?
+  'community.exchange.ws.new': 'New workspace',
+  'community.exchange.ws.newHint': 'No research workspace yet; treated as a fresh one',
+  'community.exchange.ws.same': 'Same research',
+  'community.exchange.ws.sameHint': 'DSH will read both sides and merge into the existing workspace/',
+  'community.exchange.ws.other': 'Another research',
+  'community.exchange.ws.otherHint': 'This workspace holds a different research; the prompt backs it up first, then extracts fresh',
+  'community.exchange.ws.unknown': 'Cannot confirm',
+  'community.exchange.ws.unknownHint': 'Its identity cannot be read; the prompt surveys first and asks you to judge',
+  'community.exchange.ws.unverifiable': 'Server gave no id',
+  'community.exchange.ws.unverifiableHint': 'Cannot verify sameness; the prompt surveys first and asks you to judge',
+  'community.exchange.ws.missing': 'Directory missing',
+  'community.exchange.ws.missingHint': 'This workspace directory is not present right now (e.g. an unmounted volume); it will be created on download',
+  'community.exchange.ws.conflict': 'Identity conflict',
+  'community.exchange.ws.conflictHint': 'The in-workspace marker and the local record disagree — cannot confirm',
+  'community.exchange.ws.current': 'Current session',
+  'community.exchange.ws.otherWarn': '⚠️ This workspace holds **another** research. After downloading, DSH first **backs up** the existing research root (moved under this workspace and renamed to `workspace_<initialism>_<date>`; never deleted) and then extracts this one as a new root — pick another workspace if you want to keep it as it is.',
+  'community.exchange.ws.unknownWarn': '⚠️ This workspace\'s identity cannot be read, so sameness is unconfirmed. The merge prompt makes DSH survey read-only, state a judgement, and wait for your confirmation before touching files.',
+  'community.exchange.ws.conflictWarn': '⚠️ The in-workspace marker and the local record contradict each other, so sameness is unconfirmed. The merge prompt makes DSH survey read-only, state a judgement, and wait for your confirmation.',
+  'community.exchange.ws.unverifiableWarn': '⚠️ The server provided no research identity, so sameness cannot be verified. The merge prompt makes DSH survey read-only, state a judgement, and wait for your confirmation.',
+  'community.exchange.ws.missingWarn': '⚠️ This workspace directory is not present right now (e.g. an unmounted volume); downloading will create it.',
+  // After downloading: the plugin **only builds the prompt**; the agent follows it.
+  // new → extract as a new root · **same → merge** · **other → back up the existing root (move, never
+  // delete), then extract as a new one**. Unreadable / missing identity → survey, state a judgement,
+  // wait for confirmation, then act on the matching branch. Two steps either way.
+  'community.merge.title': 'Merge prompt',
+  'community.merge.hint': 'Two steps: DSH surveys read-only and reports, then waits for your confirmation before touching files. Same research → merge (read both sides, produce one file — never overwrite). Different research → back up the current root first, then extract fresh.',
+  'community.merge.fill': 'Fill the input box',
+  'community.merge.fillHint': 'Replaces whatever is in the input box',
+  'community.merge.copy': 'Copy prompt',
+  'community.merge.copied': 'Prompt copied to the clipboard.',
+  'community.merge.copyFailed': 'Copy failed — select the prompt in the input box manually.',
+  'community.merge.filled': 'Merge prompt filled into the input box — send it when you are ready.',
+  'community.merge.otherWorkspace': 'Saved to {dir}. That is not this session\'s workspace — send the prompt from a session **in that workspace** (DSH can only write its own session workspace).',
+  'community.merge.noComposer': 'Not inside a session: copy the prompt and paste it into a session in the target workspace.',
+  'community.merge.plan.new': 'This workspace has **no** research root yet: step 2 extracts the archive into a new one.',
+  'community.merge.plan.same': 'This workspace already holds the **same** research (identity matches): step 2 **merges** the archive into it — not a replacement, information from both sides survives.',
+  'community.merge.plan.other': 'This workspace currently holds **another** research (identity differs): step 2 first backs up the whole existing research root (**moves** it, never deletes) and then extracts the download as a **new** research root. The backup stays in place — nothing is lost.',
+  'community.merge.plan.unknown': 'This workspace has research but its **identity cannot be read**, so sameness cannot be decided automatically: in the survey, compare both sides\' project.md / research-state.md topics and questions, state whether they are the same research and why, and **wait for my confirmation** before acting on either branch.',
+  'community.merge.plan.unverifiable': 'The server provided **no** research identity, so sameness cannot be decided automatically: in the survey, compare both sides\' project.md / research-state.md topics and questions, state your judgement and its basis, and **wait for my confirmation** before acting on either branch.',
+  'community.merge.action.new': 'Extract as a new research root',
+  'community.merge.backupNameHint': 'Name the backup directory **yourself**: the prefix is always `workspace_`, followed by the **initialism of the research topic / method** and the **date**, e.g. `workspace_LHRDP_20261011`; take the initialism from the topic/method in the workspace\'s `project.md`. **If it already exists, append `-2`, `-3`** rather than overwriting an earlier backup. Suggested starting point: `{suggested}` (guessed from the server-side project title — use a better one if you have it).',
+  'community.merge.body.new': 'Extract the archive\'s files into {newRoot}, keeping archive-relative paths. This workspace holds no research data yet, so there is nothing to back up.',
+  'community.merge.action.merge': 'Merge (same research)',
+  'community.merge.body.merge': 'For every category ④ file, read both sides first and produce **one merged file**:\n· Text / structured (.md/.tex/.json/.yaml/.csv…): information from **both** sides must survive. Not concatenation — merge by the file\'s semantics (research-state by dimension, plans by de-duplicating plan items, papers by section, evidence/claims/references as a de-duplicated union).\n· If the two sides state conclusions that cannot both hold: do not decide for me and do not drop either side — list the conflict in the report and keep both readings distinguishable, for me to adjudicate.\n· Binary / media (figures, PDFs, archives…): cannot be merged semantically — keep the newer mtime in place and **move** the other to {incoming}<original relative path> (do not delete), reporting both mtimes.\n· Machine-generated (caches / dependencies / build output / backups): skip, one line in the report.\nWrite category ① straight into {root}; leave category ② completely alone.',
+  'community.merge.action.switch': 'Back up the current research root, then extract a new one',
+  'community.merge.body.switch': '1. **Back up** (move, never delete): move {backupFrom} into a backup directory **under this workspace root** (a sibling of the research work, not inside the root) — move rather than copy, so the new research root starts empty; the backup must stay in place and be recoverable.\n   {backupNameHint}\n   {layoutNote}\n2. **Extract**: write the archive\'s files, keeping relative paths, into {newRoot}.\n3. Do not modify or delete anything inside the backup directory.\n4. Report the **final name of the backup directory** (that is how I will find the old research again).',
+  'community.merge.backupNote.nested': '(The research root is `<workspace>/workspace`; move that whole directory.)',
+  'community.merge.backupNote.legacy': '(This is the **legacy layout**: research data sits directly in the workspace root. Move only the research files/directories into the backup; leave the user\'s own material — source papers, datasets, notes — untouched.)',
+  'community.merge.action.decide': 'Act on your judgement (same → merge; different → back up, then extract)',
+  'community.merge.body.decide': 'First state your judgement (same research / different research) and its basis in the report, **wait for my confirmation**, then act on the matching branch:\n· **Same** → merge: for every category ④ file, read both sides and produce a merged file that keeps information from both; list conflicts as they are instead of deciding. Write category ① into {root}; leave category ② alone.\n· **Different** → back up + extract: move {backupFrom} into a backup directory **under this workspace root** (move, not copy — recoverable; name it by the rule above and report the final name), then extract the archive into {newRoot} keeping relative paths.\nEither way, never delete content from either side.',
+  'community.merge.zipPending': ' (the name is the **pre-check guess**: if the file on disk ends with a suffix like `-2`, use that same-prefixed `.zip`; and **if it is still downloading, wait until it has fully landed before starting**.)',
+  'community.merge.pendingHint': 'Downloading: the merge prompt is **already filled into the input box** — send it once this download has landed (sending now would point at a half-written zip).',
+  'community.merge.nameChanged': 'The file actually written is `{name}` (different from the pre-check guess).',
+  'community.merge.refill': 'Update prompt with the real filename',
+  'community.merge.downloadFailedHint': 'Do **not** send the prompt already in the input box — the zip never landed.',
+  'community.merge.identityWrite': 'Finally write {identityFile} (the identity of this research: it is what lets the workspace identify itself after being copied or moved) and include its final content in the report:\n{identityJson}',
+  'community.merge.identitySkip': '(The server provided no research identity — skip writing {identityFile}.)',
+  'community.merge.prompt': `Integrate the research snapshot just downloaded from ConvFusion into this workspace — as a **merge / fresh extract / replacement**, never a blind overwrite.
+
+Archive: {zip}{zipNote}
+This workspace: {workspace}
+Its current research root: {root}
+{plan}
+
+═══ Step 1: read-only survey (do NOT modify, create or delete any file) ═══
+
+Compare the archive's file list (relative path + size) against the files already in {root} and report four categories, item by item:
+  ① in the archive only (would be added)      — list all
+  ② local only (must be kept as-is)           — list all
+  ③ in both, identical content (nothing to do)— report the count
+  ④ in both, different content                — for each: path, both sizes and mtimes, type (text / structured / binary / machine-generated), and one line on how they differ
+
+**Stop after reporting and wait for my confirmation** — do not start step 2.
+
+═══ Step 2: {actionTitle} (after I confirm) ═══
+
+{actionBody}
+{identity}
+
+═══ Report ═══
+1. Per-file disposition: added n / merged m / identical-skipped k / local-only kept j / binary newer-wins b / backed up b / generated-skipped c
+2. For each merged or replaced file: one line on what was combined and which side's content survived
+3. Conflicts you could not adjudicate (if any)
+
+Boundary: only touch paths inside this workspace; do not delete the archive itself; touch nothing else.`,
   // Upload = hand back *my copy of the workspace* (the mentor kept working inside the student's workspace/)
   'community.exchange.uploadTitle': 'Upload research progress',
   'community.exchange.workspaceLabel': 'Workspace',

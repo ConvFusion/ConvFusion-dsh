@@ -1921,7 +1921,11 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     '【下载】一次拿齐：预检 + 可选工作区列表',
   )
   assert(src.includes('function DownloadDialog('), '有工作区选择器对话框')
-  assert(/w\.path/.test(src) && /type="radio"/.test(src), '列出工作区（标题 + 路径）供点选 —— 不需要输地址')
+  assert(
+    /w\.path/.test(src) && /<select[\s\S]{0,400}?value=\{selection\}/.test(src),
+    '列出工作区（标题 + 路径）供**下拉选择** —— 不需要输地址',
+  )
+  assert(!/type="radio"/.test(src), '下载对话框用下拉框（不再是一长列单选）')
   /*
    * **任何工作区都能选**（2026-09 用户拍板）：下载只存 ZIP，同名不覆盖（宿主加序号），
    * 所以"已有研究项目就禁用"既没必要也挡路 —— 断言它真的不再回来。
@@ -1936,11 +1940,27 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     /post\('mentor\/download',\s*\{[\s\S]{0,200}?workspaceId: target\.selection/.test(src),
     '下载按工作区 id 提交（路径由宿主解析，客户端递不进任意路径）',
   )
-  // 成功就**关窗**（文件已落盘，对话框没有可做的事）；失败留着让用户看到原因并能重试
+  /*
+   * v23：成功**不再直接关窗** —— 存下 ZIP 只是第一步，接下来要把这份快照与本地内容
+   * **融合**（那件事交给会话里的 agent）。对话框留在原地给出「整合提示词」面板：
+   * 能填就填进输入框、否则复制；**绝不自动发送**。
+   * 失败时同样留着（让用户看到原因并能重试）。
+   */
   assert(
-    /setDownload\(null\)[\s\S]{0,200}?community\.exchange\.downloadDone/.test(src),
-    '下载成功后关闭对话框（回执改到列表顶部那条）',
+    /setDownload\(\(prev\)[\s\S]{0,700}?done:\s*\{/.test(src),
+    '下载成功后对话框转入「整合提示词」面板（不再是 setDownload(null) 直接关窗）',
   )
+  assert(src.includes("t('community.merge.copy')"), '面板给「复制提示词」')
+  assert(src.includes("t('community.merge.fill')"), '面板给「填入输入框」')
+  // 填输入框**只调 setDraft**：这是"不自动执行"的代码体现（submit 绝不出现）
+  const fillBlock = src.slice(src.indexOf('onFill={() => {'), src.indexOf('onCopy={() => {'))
+  assert(/session\.setDraft\(prompt\)/.test(fillBlock), '「填入输入框」走 session.setDraft')
+  assert(!/submit\(/.test(fillBlock), '填入**不发送**（没有任何 submit 调用）')
+  assert(
+    /canFill\s*=\s*[\s\S]{0,160}?target\.selection === target\.currentWorkspaceId/.test(src),
+    '只有"目标 == 当前会话的工作区"才允许填入（DSH 只写自己会话的工作区）',
+  )
+  assert(src.includes("t('community.merge.otherWorkspace'"), '不是当前会话的工作区 → 明说该去哪发')
   /*
    * 「学生更新了工作区 → 提示重新下载」（协议 v21）：
    * 比对在宿主（本地水位 vs 服务器 workspace_*），界面只负责**显示与刷新**。

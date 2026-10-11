@@ -31,12 +31,17 @@ import { ResearchProgressPanel, ResearchProgressView, readProgressValue, shorten
 export { loadSettingsState, applyNavIcon, installNavIcon, logoUrl };
 export { preferredCategory, preferredSection, preferredSkill } from './settings.js';
 /** 【ConvFusion.com】这一页的正文：设置页与会话 Tab 两处共用同一份（离线验证也要能拿到）。 */
-export { CommunityTab } from './settings.js';
+export { CommunityTab, DownloadDialog } from './settings.js';
 export { readProgressValue, shortenPath };
 /** 两个会话 Tab 的正文（面板本体单独导出：离线验证直接渲染它，不必穿透整页容器）。 */
 export { ResearchProgressPanel };
 export { ResearchProgressView };
 export { CommunityView };
+/**
+ * 「整合提示词」的构建（**纯函数**）：离线自检直接调它断言模板与占位符，
+ * 不必去渲染整个对话框。
+ */
+export { IDENTITY_FILE_REL, WORKSPACE_PREFIX, backupNameOf, backupTagOf, buildMergePrompt, compactDateOf, dateOf, identityFileOf, identityJsonFor, incomingDirOf, planKeyOf, stampOf, } from './merge-prompt.js';
 /** 闸门（按会话条件注册 / 注销）与它的常量。 */
 export { COMMUNITY_VIEW_ID, COMMUNITY_VIEW_ORDER, CONVFUSION_VIEW_SLOT, PROGRESS_VIEW_ID, PROGRESS_VIEW_ORDER, convfusionTabSpecs, currentMainSessionId, installConvFusionTabs, percentText, };
 interface ScopeSnapshot {

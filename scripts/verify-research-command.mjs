@@ -112,7 +112,12 @@ console.log('\n[1] 首次 `/research <主题>`：建项目 + 启动 Agent')
   assert(text.includes('基于视觉-LiDAR 跨模态共同刚体一致性的 UAV 定位误差校准'), '交给 Agent 的文本含研究主题')
   assert(text.includes('project.md'), '文本指向 project.md（研究定义已落盘，不用猜）')
   assert(/不用按固定流程|没有固定流程|不规定步骤|不是固定流程/.test(text), '明确告诉 Agent 没有固定流程')
-  assertEq(msg?.source?.kind, 'plugin', '消息来源标记为插件（走已知的 user/message 通道）')
+  /*
+   * ⚠️ DSH 0.2.0 **删除了** `kind: 'plugin'`（V4 会话格式直接拒绝它），本插件用的是
+   * `plugin:convfusion` —— 与官方 V3→V4 迁移对历史消息的改写结果一致
+   * （见 `src/research/message-source.ts` 的说明）。这里曾断言旧的 `'plugin'`，是陈旧的。
+   */
+  assertEq(msg?.source?.kind, 'plugin:convfusion', '消息来源标记为 plugin:convfusion（0.2.0 起的合法 kind）')
 
   const project = readFileSync(join(rootOf(ws), 'project.md'), 'utf8')
   assert(project.includes('基于视觉-LiDAR'), 'project.md 记录了主题')

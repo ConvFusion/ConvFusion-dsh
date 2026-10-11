@@ -57,6 +57,7 @@ import {
 } from './settings-rpc.js'
 import { createFileCustomizationStore } from './research/skill-customization.js'
 import { createFilePublishedStore } from './research/published-store.js'
+import { createFileWorkIdentityStore } from './research/work-identity.js'
 import { createFilePaidBriefStore } from './research/paid-briefs.js'
 import { createFileSyncWatermarkStore } from './research/sync-watermarks.js'
 import { systemLibraryStatus } from './research/skill-customization.js'
@@ -256,6 +257,17 @@ export function apply(ctx: Context, liveConfig: Partial<LiveConfig> = {}): void 
    */
   const syncWatermarkStore = createFileSyncWatermarkStore(() =>
     join(dirname(resolveCustomizationPath(currentConfig())), 'sync-watermarks.json'),
+  )
+  /**
+   * **本机工作区 ↔ 服务器上的"一项研究工作"**（`workspace_id`）。
+   *
+   * 【下载】要用它回答"这个工作区里已有的 `workspace/` 和我下的是不是同一项研究"。
+   * 与发布映射同一个目录（`$DSH_HOME/convfusion/`）—— 它记的是 (本机, 本账号, 哪台服务器)
+   * 下的事实，不属于研究内容，故不进工作区（工作区内的那份权威标记是
+   * `<研究根>/.convfusion/work.json`，见 `research/work-identity.ts`）。
+   */
+  const workIdentityStore = createFileWorkIdentityStore(() =>
+    join(dirname(resolveCustomizationPath(currentConfig())), 'work-identities.json'),
   )
   ctx.logger?.info(
     `[convfusion] user customizations: ${customizationStore.description}` +
@@ -542,6 +554,8 @@ export function apply(ctx: Context, liveConfig: Partial<LiveConfig> = {}): void 
       paidBriefStore,
       // 上一次归档响应的水位：mentor/list 据此提示"学生更新了，重新下载"
       syncStore: syncWatermarkStore,
+      // 目标工作区的身份（判"同一项研究 / 另一项研究"，见 research/work-identity.ts）
+      workIdentity: workIdentityStore,
       // 注册表读取放在这里（入口持有 ctx），过滤与进度计算在 settings-rpc 里
       /**
        * 读宿主的工作区注册表并归一成纯数据（**与 dsh-additive 的 `listWorkspaces` 同款做法**：

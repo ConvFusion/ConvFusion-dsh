@@ -32,6 +32,7 @@
 import { defaultServerUrl } from './config.js'
 import { serverAddressKey } from './server-env.js'
 import type { StudentSyncCheck } from './research/sync-watermarks.js'
+import { normalizeWorkspaceId } from './research/work-identity.js'
 
 /** 服务器 API 前缀（`ConvFusion-server/app/core/config.py` 的 `API_PREFIX`）。 */
 export const SERVER_API_PREFIX = '/api/v1'
@@ -1116,6 +1117,29 @@ export async function fetchProjectFiles(
   projectId: string,
   options: ServerRequestOptions & { source?: FileSource } = {},
 ): Promise<RemoteProjectFile[]> {
+  return (await fetchProjectFilesWithIdentity(base, apiKey, projectId, options)).files
+}
+
+/**
+ * 文件列表**加上这一侧的身份**（`workspace_id`）。
+ *
+ * 【下载】要回答"目标工作区里已有的 `workspace/` 是不是同一项研究"，判据就是它：
+ * 服务器给"一项研究工作"一个全局唯一、跨项目生命周期不变的标识
+ * （`ws_<32 hex>`；规格见 `dev-notes/v3-Workspace-Identity-API.md`）。
+ *
+ * ⚠️ 字段**在不在**决定行为，不按服务器版本号判断：
+ * 老服务器不返回它 → `workspaceId = null` → 插件按"**无法校验**"处理（**不阻塞**下载）。
+ * 形状非法（不是 `ws_…`）同样当"没给"——宁可少一道保护，也不要拿一个可疑的值去
+ * 判定"这项研究是另一个"而误禁用户。
+ *
+ * 位置是**响应体顶层**（项目/工作区级属性），**不是** `items` 里的文件级字段。
+ */
+export async function fetchProjectFilesWithIdentity(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  options: ServerRequestOptions & { source?: FileSource } = {},
+): Promise<{ files: RemoteProjectFile[]; workspaceId: string | null }> {
   const key = requireKey(apiKey)
   const id = (projectId ?? '').trim()
   if (!id) throw new ServerError('bad-request', '缺少 projectId。')
@@ -1126,11 +1150,13 @@ export async function fetchProjectFiles(
     options,
     '项目文件列表',
   )
-  const items = asRecord(body)?.items
+  const record = asRecord(body)
+  const items = record?.items
   if (!Array.isArray(items)) {
     throw new ServerError('bad-response', '项目文件列表缺少 items 字段。')
   }
-  return items.map((raw) => {
+  const workspaceId = normalizeWorkspaceId(record?.workspace_id)
+  const files = items.map((raw) => {
     const b = asRecord(raw) ?? {}
     const fileId = asString(b.id)
     const relativePath = asString(b.relative_path)
@@ -1139,6 +1165,7 @@ export async function fetchProjectFiles(
     }
     return { id: fileId, relativePath, size: asNumber(b.size), sha256: asString(b.sha256) }
   })
+  return { files, workspaceId }
 }
 
 /**
@@ -1162,6 +1189,8 @@ async function fetchBinary(
   fileCount: number | null
   /** 归档水位（`X-Source-Updated-At`；不是归档的请求为 `null`）。 */
   sourceUpdatedAt: string | null
+  /** 研究工作标识（`X-Workspace-Id`；老服务器 / 非归档请求为 `null`）。 */
+  workspaceId: string | null
   received: number
 }> {
   const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike | undefined)
@@ -1210,12 +1239,21 @@ async function fetchBinary(
    * 老服务器没这个头 → `null` → 调用方不存水位（宁可保持"未知"，不写个错的）。
    */
   const sourceUpdatedAt = res.headers?.get('x-source-updated-at') ?? null
+  /*
+   * 这一版归档属于**哪一项研究**（服务器 `GET /files/archive` 的 `X-Workspace-Id`）。
+   *
+   * 与 `GET /files` 响应体顶层的 `workspace_id` 是**同一个值**（服务器两侧一致），
+   * 所以"预检时比对的目标"和"落盘后记下的身份"不会错位。老服务器没有这个头 → `null`
+   * → 不写身份（保持"未知"比写一个错的强）。
+   */
+  const workspaceId = normalizeWorkspaceId(res.headers?.get('x-workspace-id'))
   const received = await readBody(res, options, label, controller)
   return {
     bytes: received.bytes,
     contentDisposition,
     fileCount,
     sourceUpdatedAt,
+    workspaceId,
     received: received.total,
   }
 }
@@ -1376,18 +1414,25 @@ export async function fetchProjectArchive(
   filename: string | null
   fileCount: number | null
   sourceUpdatedAt: string | null
+  workspaceId: string | null
 }> {
   const key = requireKey(apiKey)
   const id = (projectId ?? '').trim()
   if (!id) throw new ServerError('bad-request', '缺少 projectId。')
-  const { contentDisposition, fileCount, sourceUpdatedAt, received } = await fetchBinary(
+  const { contentDisposition, fileCount, sourceUpdatedAt, workspaceId, received } = await fetchBinary(
     base,
     `/projects/${encodeURIComponent(id)}/files/archive${sourceQuery(options.source)}`,
     key,
     { ...options, onChunk: (chunk) => sink.write(chunk) },
     '下载工作区快照',
   )
-  return { received, filename: filenameFromDisposition(contentDisposition), fileCount, sourceUpdatedAt }
+  return {
+    received,
+    filename: filenameFromDisposition(contentDisposition),
+    fileCount,
+    sourceUpdatedAt,
+    workspaceId,
+  }
 }
 
 /**

@@ -74,6 +74,7 @@
  */
 import type { SkillCustomizationStore } from './research/skill-customization.js';
 import type { PaidBriefStore } from './research/paid-briefs.js';
+import { type WorkIdentityStore, type WorkspaceStatus } from './research/work-identity.js';
 import type { SyncWatermarkStore } from './research/sync-watermarks.js';
 import type { Config } from './config.js';
 import { type SecretField } from './config.js';
@@ -172,6 +173,65 @@ export declare function normalizeWorkspaceEntities(entities: ReadonlyArray<{
     path: string;
     updatedAt: string;
 }>;
+/** 一个候选目标工作区查盘后的现状。 */
+export interface DownloadTargetInfo {
+    /** 目录还在吗。 */
+    exists: boolean;
+    /** 真身路径（注册表存的是登记值，可能是符号链接；与 `collectLocalWorks` 同一纪律）。 */
+    canonical: string;
+    /**
+     * 研究根（真身路径上）：**已有研究**时是它自身，**还没有研究**时是"将会成为研究根"的
+     * 那个目录（`<ws>/workspace`）—— 提示词要用它当解压目标，所以不能是 `null`。
+     * 目录本身不存在（`missing`）时才是 `null`。
+     */
+    researchRoot: string | null;
+    /** 布局：`nested` = `<ws>/workspace`（现行）；`legacy` = 研究直接在 `<ws>`。 */
+    layout: 'nested' | 'legacy' | null;
+}
+/**
+ * 查一个候选目标工作区。
+ *
+ * 与 `collectLocalWorks` 的**区别**（所以没复用它）：那个只保留"有效研究项目"，
+ * 而下载目标必须**包含没有研究的工作区** —— "空工作区"正是最常见的合法目标
+ * （导师第一次指导学生、或另存为新研究根）。
+ */
+export declare function inspectDownloadTarget(path: string): DownloadTargetInfo;
+/** 送到客户端的一项（不含 `canonical`：客户端不需要真身路径）。 */
+export interface DownloadTargetItem {
+    id: string;
+    title: string;
+    path: string;
+    exists: boolean;
+    /**
+     * 研究根绝对路径（**已有或将会是**；目录不存在时为 `null`）。整理提示词用它当解压目标。
+     */
+    researchRoot: string | null;
+    /** 实际布局：`nested` / `legacy`；`null` = **还没有**研究工作区（状态必然是 `new`）。 */
+    layout: 'nested' | 'legacy' | null;
+    status: WorkspaceStatus;
+    /** 本地读到的标识（判定的依据；`null` = 读不到）。 */
+    localWorkspaceId: string | null;
+    /** 工作区内标记与插件注册表**冲突**（都读到了、但值不同）。 */
+    identityConflict: boolean;
+}
+/** 一个候选目标 + 它的真身路径（`canonical` 只在宿主侧用来对"当前会话的工作区"）。 */
+export interface BuiltDownloadTarget extends DownloadTargetItem {
+    canonical: string;
+}
+/**
+ * 把"注册表条目 + 服务器给的标识"判成一个目标项。
+ *
+ * @param item 注册表条目（id/title/path）。
+ * @param remoteWorkspaceId 本次下载项在服务器上的标识；`null` = 服务器没给（老服务器）。
+ * @param store 插件侧注册表（第二级身份）；缺省 = 只有工作区内标记这一级。
+ */
+export declare function buildDownloadTarget(item: {
+    id: string;
+    title: string;
+    path: string;
+}, remoteWorkspaceId: string | null, store?: Pick<WorkIdentityStore, 'get'> | undefined): BuiltDownloadTarget;
+/** 去掉宿主侧的 `canonical` 再回给界面。 */
+export declare function toWireTarget(built: BuiltDownloadTarget): DownloadTargetItem;
 /**
  * **本机**的一项研究工作（【研究工作 · 我的】的一行）。
  *
@@ -477,6 +537,14 @@ export interface SettingsRpcDeps {
             updatedAt: string;
         }>;
     }>;
+    /**
+     * 「本机工作区 ↔ 服务器上的**一项研究工作**」（`workspace_id`）。
+     *
+     * 【下载】要用它回答"这个工作区里已有的 `workspace/` 和我下的是不是同一项研究"：
+     * 同一个 → 允许下载、之后融合；另一个 → **拒绝**（否则两份研究会被搅在一起）。
+     * 缺省 = 没有第二级记录（只剩工作区内标记这一级）。
+     */
+    workIdentity?: WorkIdentityStore;
 }
 /**
  * 比较两个版本串（容忍 `v` 前缀与 `-rc.x` 后缀）：按点分数字段比较，
