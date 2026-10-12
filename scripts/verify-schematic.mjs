@@ -240,6 +240,23 @@ if (existsSync(exPath)) {
     rEx.error ?? JSON.stringify(rEx.stats ?? {}))
 }
 
+/* ── 技能可达性：工具做出来必须有人叫它 ─────────────────────────────
+ * 实测过的失效方式：`assets/figures_kit/` 与 `research_schematic` 是 v0.5.10 加的，
+ * 而 C08P07 技能正文当时还写着 "One tool, research_diagram"（v0.5.5 之前的原文）——
+ * 于是**照着技能走的 agent 永远不会调用这个工具**，它等于是死的。
+ * 所以这里钉一条：技能必须同时点名两个渲染器，并给出选哪个的判据。
+ */
+const skillPath = join(ROOT, 'skills', 'academic-writing', 'paper-diagrams.md')
+ok('C08P07 技能存在', existsSync(skillPath), skillPath)
+if (existsSync(skillPath)) {
+  const md = readFileSync(skillPath, 'utf8')
+  ok('技能点名 research_schematic（否则该工具不会被调用）', md.includes('research_schematic'))
+  ok('技能点名 research_diagram', md.includes('research_diagram'))
+  ok('技能给出「选哪个」的判据（Which tool 段）', /^## Which tool$/m.test(md))
+  ok('技能说明一篇论文不混用两者', /one paper uses one of them/i.test(md))
+  ok('技能不再声称"本技能不导出 PDF"', !/does not export PDF/i.test(md))
+}
+
 /* ── 结果 ─────────────────────────────────────────────────────── */
 rmSync(out, { recursive: true, force: true })
 console.log(`\n${failed} failed / ${passed} passed`)

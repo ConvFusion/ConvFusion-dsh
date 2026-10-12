@@ -11,13 +11,13 @@ origin: v0.5.5 dev-note (C08P07 paper-diagrams)
 
 ## Purpose
 
-Generate structured, publication-oriented diagrams from research content using an intermediate Diagram IR and deterministic rendering.
+Generate structured, publication-oriented figures from research content by describing them, never by drawing them.
 
-The division of labour is fixed and must not be blurred:
+Two renderers ship with the plugin and **the skill is responsible for picking the right one** (see [Which tool](#which-tool)): `research_schematic` writes the lab's fixed-style schematic, `research_diagram` renders a Diagram IR. Both keep the same division of labour, and it must not be blurred:
 
-> The agent decides **what to draw and why**; the Diagram IR fixes **which nodes, groups and edges exist**; the renderer decides **how it is drawn**.
+> The agent decides **what to draw and why**; a declarative description fixes **which boxes and connections exist**; the renderer decides **how it is drawn**.
 
-The agent never writes SVG, XML, HTML or CSS for a figure. It writes an IR and renders it.
+The agent never writes SVG, XML, HTML, CSS or matplotlib for a figure. It describes the figure and renders it.
 
 ## When to Use
 
@@ -47,9 +47,9 @@ requires: method-plan | 图要画的是已经定下来的方法／系统结构�
 
 1. **State what the figure must communicate, in one sentence, before choosing anything else.** A figure that has no sentence is decoration; if the sentence cannot be written, the figure is not ready to be drawn.
 2. **Read the sources first**: the Research State (question / method / experiments / evidence / decisions), the active paper's `paper.md`, and the user's own description. These are the only admissible origins for figure content.
-3. **Choose the diagram type from the sentence, not from taste** — method-overview, architecture, module-structure, workflow, system-architecture, data-flow, component-relationship.
-4. **Select the minimum set of entities and relations that carries the sentence.** Every node must be traceable to at least one source (Research State, manuscript, user description, equation or method definition). Do not add visual elements merely to make the figure look richer.
-5. **Write the Diagram IR** and render it with `research_diagram`. Do not attempt to draw it yourself.
+3. **Choose the tool from the sentence, then the type** — read [Which tool](#which-tool) first: `research_schematic` for an ordinary boxes-and-arrows figure, `research_diagram` when the sentence is about *order*, *state*, or *which claim the figure carries*. Only then pick the shape (method overview, architecture, workflow, sequence, lifecycle, …).
+4. **Select the minimum set of entities and relations that carries the sentence.** Every box must be traceable to at least one source (Research State, manuscript, user description, equation or method definition). Do not add visual elements merely to make the figure look richer.
+5. **Describe the figure and render it with that tool.** Do not attempt to draw it yourself.
 6. **Read the validation diagnostics** and repair only what they report — a structural repair (add the module the paper actually defines, merge duplicates, put the nodes in the group they belong to), never a cosmetic one.
 7. **Check the figure against the manuscript**: terminology, module set, direction of flow and symbol names must match the text exactly. A figure that renames a module is a defect, not a stylistic choice.
 8. **Record the figure as an artifact**: the `.json` IR is the editable source; the `.svg` is a build product. A later natural-language edit modifies the IR, never a fresh redraw.
@@ -109,17 +109,57 @@ The loop is bounded: at most `max_repair_rounds = 3` regenerate-validate cycles.
 Produce:
 
 - the one-sentence statement of what the figure communicates
-- the chosen diagram type and why that type fits the sentence
-- the `.json` Diagram IR (the editable source of the figure)
-- the rendered `.svg` (the build product), written to the paper's `figures/` directory
-- the exported `.pdf` for LaTeX, with the measured on-page text size and whether it is legible
+- **which renderer you used and why that one** — `research_schematic` for the ordinary boxes-and-arrows figure, `research_diagram` when the sentence is about order, state, or which claim the figure carries
+- the shape you chose and why it fits the sentence
+- the figure's **description, kept with it** — the Diagram IR for `research_diagram`; for `research_schematic`, the node/edge spec you fed the renderer. A figure whose description is lost can only be redrawn from scratch, which is how two versions of the same figure end up disagreeing
+- the artifact in the paper's `figures/` directory: a `.pdf` from the schematic renderer, or `.json` IR + `.svg` + exported `.pdf` from the diagram renderer
+- the measured on-page text size and whether the figure is legible **at the width it will be placed at** (one column and two columns are different figures)
 - the validation report: `valid`, plus every remaining error or warning and what was done about it
 - the list of contents deliberately left out of the figure, with the reason (detail moved to a second figure, a table, or the text)
 - any place where the paper does not define something the figure needed — reported as a gap in the paper, not silently drawn
 
+## Which tool
+
+Two renderers ship with the plugin. They are **not** interchangeable, and **one paper uses one of them**: the two styles are visibly different, so a paper assembled from both reads as though it came from two hands.
+
+| | `research_schematic` | `research_diagram` |
+|---|---|---|
+| **style** | the lab's **fixed** style — white box, near-black border, bold title + grey line — so figures from different workspaces still look like one project's | your own style tokens, chosen per figure |
+| **you author** | boxes on a grid (`col` / `row`) or placed in inches inside lane containers (`x`, `width`, `lane`), plus **explicit routes** (`auto` / `v` / `down` / `back` / `over` / `rowgap` / `outer` / `points`) | a Diagram IR: nodes / groups / edges, routed by the renderer |
+| **it verifies** | text inside its box · no text-on-text · no box-on-box · no edge through a non-endpoint box · lane clearances | endpoint piling · edges drawn on top of each other · an edge crossing a foreign container · label clearance · claim refs that do not exist |
+| **it cannot express** | a message timeline · a state machine with self-transitions · claim/evidence binding · cards | — |
+| **output** | `figures/<name>.pdf` (vector, directly usable by LaTeX) | `figures/<name>.{json,svg}` + an exported `.pdf` |
+
+**Default to `research_schematic`.** For the ordinary publication figure — boxes and arrows — it gives you the lab's one style *and* it verifies the geometry before the figure is delivered, which is precisely what a figure needs and what a hand-tuned layout quietly gets wrong (overlapping text, an edge through a box, a label sitting on another label).
+
+**Switch to `research_diagram`** when the figure says something the grid-and-lane model has no way to say:
+
+- a **message timeline** (`type: "sequence"`) — the information is *who says what to whom, in what order*, and in a layered figure "step 3" does not exist;
+- a **state machine** (`type: "lifecycle"`) — states and transitions, including a state that re-enters itself;
+- a figure whose boxes must be **bound to the paper's claims** (`refs`, e.g. `["C1","E008"]`) or that must carry **secondary points in cards** — see [A figure carries an argument](#a-figure-carries-an-argument-not-a-shape).
+
+Neither tool draws statistical charts (bar / line / scatter). Those come from a script that reads the result files, so the numbers have one source of truth.
+
 ## Tool Contract
 
-One tool, `research_diagram`, with actions:
+### `research_schematic` — the lab's fixed style
+
+One call renders one `.pdf`; there is no IR to keep in sync.
+
+| Input | Meaning |
+|---|---|
+| `nodes[]` | boxes in reading order: `label` (bold), `desc` (grey), `role` = normal / accent / reject, and placement — `col`/`row` on the grid, or `lane` + `x` + `width` in lane mode |
+| `lanes[]` | optional lane containers (`{id, label}`): the lane rectangle and the canvas height are computed from the measured size of their member boxes, so never pass coordinates |
+| `edges[]` | connections with an explicit `route`: `auto` / `v` / `down` / `back` / `over` / `rowgap` / `outer` / `points` |
+| `cols` / `rows` | column and row centres as fractions of the inner width / height |
+| `size` | canvas in inches (default `[3.45, 1.9]`, aspect 1.8) |
+| `note` | one grey line under the flow |
+
+A worked swimlane example ships with the plugin at `assets/figures_kit/examples/lanes_feedback.json` — read it before writing your first lane figure.
+
+**Keep it wide and short** (aspect ≥ 1.8): the figure is scaled by column width / canvas width, so a wide canvas makes the text unreadable. The result reports `effectiveNodePt` and `legible`; a wide schematic is normally a **full-width** float, and the same figure that fails at one column can pass at two.
+
+### `research_diagram` — a Diagram IR you control
 
 | Action | Purpose |
 |---|---|
@@ -238,4 +278,6 @@ Export needs a Python interpreter with PyMuPDF; if the tool reports it cannot fi
 
 ## Notes on Scope
 
-This skill does **not** draw statistical charts, timelines, mind maps or 3D diagrams, and it does not export PDF or PNG yet — the phase-one deliverable is a deterministic SVG. Turning the SVG into a PDF for LaTeX is a build step of the LaTeX pipeline, not something the agent should improvise with an arbitrary converter.
+This skill does **not** draw statistical charts, mind maps, or 3D diagrams. A chart's numbers must come from a script that reads the result files, so that they have one source of truth; a figure drawn by hand from numbers copied out of a table is a second, silently diverging source.
+
+Both renderers do produce what LaTeX needs: `research_schematic` writes a vector `.pdf` directly, and `research_diagram` exports its SVG to a vector PDF with the `export` action. **Never** convert a figure with an arbitrary tool (a screenshot, an online converter, `img2pdf`): SVG-to-PDF conversion that loses the embedded fonts produces a figure that looks right locally and prints wrong.
