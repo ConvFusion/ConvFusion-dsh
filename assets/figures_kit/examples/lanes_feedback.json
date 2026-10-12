@@ -1,0 +1,117 @@
+{
+  "name": "lanes_feedback",
+  "size": [
+    7.16,
+    3.9
+  ],
+  "lanes": [
+    {
+      "id": "model",
+      "label": "model lane, never gated"
+    },
+    {
+      "id": "kernel",
+      "label": "kernel lane, only state mutation passes"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "human",
+      "lane": "model",
+      "x": 1.13,
+      "width": 1.74,
+      "label": "Human",
+      "desc": "instructions enter as Markdown"
+    },
+    {
+      "id": "llm",
+      "lane": "model",
+      "x": 2.87,
+      "width": 1.4,
+      "label": "LLM reasoning",
+      "desc": "interpretation stays free, never gated"
+    },
+    {
+      "id": "proposal",
+      "lane": "model",
+      "x": 4.49,
+      "width": 1.5,
+      "label": "Typed proposal",
+      "desc": "one typed diff per step over the representation"
+    },
+    {
+      "id": "guards",
+      "lane": "kernel",
+      "x": 1.13,
+      "width": 1.74,
+      "label": "Kernel guards",
+      "desc": "$S$ structural, $E$ execution, $T$ state, $V$ evidence vs. version $R_t$"
+    },
+    {
+      "id": "commit",
+      "lane": "kernel",
+      "x": 2.87,
+      "width": 1.4,
+      "label": "Commit $R_{t+1}$",
+      "desc": "invariant re-established at every version",
+      "role": "accent"
+    },
+    {
+      "id": "execute",
+      "lane": "kernel",
+      "x": 4.49,
+      "width": 1.5,
+      "label": "Execute $\\rightarrow$ evidence",
+      "desc": "committed actions run, backed by artifacts"
+    },
+    {
+      "id": "reject",
+      "lane": "kernel",
+      "x": 6.16,
+      "width": 1.5,
+      "label": "Rejected + reason",
+      "desc": "failed guard returns the reason, state unchanged",
+      "role": "reject"
+    },
+    {
+      "id": "repr",
+      "x": 3.585,
+      "width": 6.65,
+      "label": "Typed representation of the research state (version $R_t$)",
+      "desc": "Question, Hypothesis, Decision, Plan, EvidenceRequirement, Evidence"
+    }
+  ],
+  "edges": [
+    {
+      "from": "proposal",
+      "to": "guards",
+      "route": "rowgap",
+      "enterOffset": -0.35,
+      "role": "muted"
+    },
+    {
+      "from": "guards",
+      "to": "reject",
+      "route": "rowgap",
+      "role": "reject"
+    },
+    {
+      "from": "reject",
+      "to": "proposal",
+      "route": "outer",
+      "side": "right",
+      "belt": 0,
+      "swing": 0.35,
+      "ls": "dashed"
+    },
+    {
+      "from": "repr",
+      "to": "proposal",
+      "route": "outer",
+      "side": "left",
+      "belt": 1,
+      "swing": 0.35,
+      "ls": "dashed"
+    }
+  ]
+}

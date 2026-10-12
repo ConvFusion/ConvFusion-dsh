@@ -2200,8 +2200,19 @@ export function defineResearchTools(
       'it is delivered (text inside its box, no two text runs overlapping, no two boxes overlapping, ' +
       'no edge crossing a non-endpoint box).\n' +
       'Inputs: `nodes[]` on a grid (`col`/`row` are 1-based; `label` is the bold title, `desc` the grey ' +
-      'line; `role` = normal | accent | error), `edges[]` (`route`: auto | down | back | over; use `over` ' +
-      'for a feedback edge), optional `note`.\n' +
+      'line; `role` = normal | accent | reject | muted), `edges[]` (`route`: auto | v | down | back | over | ' +
+      'rowgap | outer | points), optional `note`.\n' +
+      'For a **swimlane** figure, declare `lanes[]` (`{id, label}`) and give each box `nodes[].lane`: the ' +
+      'lane rectangle and height are computed from the measured size of its member boxes and the canvas ' +
+      'height follows from the content, so never pass coordinates. Boxes without `lane` form the bottom ' +
+      'belt (e.g. one wide summary box, via `nodes[].width`). See ' +
+      '`assets/figures_kit/examples/lanes_feedback.json` for a complete worked example (two lanes, four ' +
+      'boxes per lane, two feedback loops).\n' +
+      'Lane-aware routing: `rowgap` crosses the gap between lanes and enters the target top (it leaves the ' +
+      'side that faces the target, and honours `enterOffset`); `outer` runs outside the lane stack and ' +
+      'returns along a feedback belt above the top lane (`side`: left/right, `belt`: 0/1 so two loops stay ' +
+      'apart). Both keep their clearance measured **from the lane border**, so the lane checks hold by ' +
+      'construction. `v` connects vertically stacked boxes, and `points` (inches) is an escape hatch.\n' +
       'Keep it **wide and short** (aspect >= 1.8) and keep the text short: the figure is scaled by ' +
       'column width / canvas width, so a wide canvas makes the text unreadable. The result reports ' +
       '`effectiveNodePt` and `legible` — a single-column figure must stay at or above ' +

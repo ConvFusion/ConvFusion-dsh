@@ -202,6 +202,15 @@ const vBad = S.renderSchematic({ spec: { ...laneSpec, name: 'bad_rowgap', outDir
   edges: [{ from: 'g', to: 'd', route: 'rowgap' }] } })
 ok('rowgap 端点不在车道内时被拒', vBad.ok === false, String(vBad.error ?? '').slice(0, 80))
 
+// 随包发行的样板 spec：别的 agent 靠它知道泳道图怎么写；它必须存在、且真的过校验（防样板腐烂）
+const exPath = join(ROOT, 'assets', 'figures_kit', 'examples', 'lanes_feedback.json')
+ok('样板 spec 随包发行', existsSync(exPath), exPath)
+if (existsSync(exPath)) {
+  const rEx = S.renderSchematic({ spec: { ...JSON.parse(readFileSync(exPath, 'utf8')), outDir: out } })
+  ok('样板 spec 可渲染且过车道校验', rEx.ok === true && rEx.stats?.lanes === 2,
+    rEx.error ?? JSON.stringify(rEx.stats ?? {}))
+}
+
 /* ── 结果 ─────────────────────────────────────────────────────── */
 rmSync(out, { recursive: true, force: true })
 console.log(`\n${failed} failed / ${passed} passed`)

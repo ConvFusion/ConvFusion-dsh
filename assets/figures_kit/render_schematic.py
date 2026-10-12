@@ -38,8 +38,15 @@ r"""科研论文示意图渲染器：由**实测文字尺寸**驱动的布局 + 
 }
 ```
 
-`edges[].route`：`auto`（默认，按两框相对位置直接连）/ `down`（同列向下）/ `back`（从右侧绕行）/
-`over`（`from` 的下边 → 顶部走廊 → `to` 的上边，回边专用）。
+`edges[].route`：`auto`（默认，按两框相对位置直接连）/ `v`（上下叠放的框，竖直相接）/ `down`（同列向下）/
+`back`（从右侧绕行）/ `over`（`from` 的下边 → 顶部走廊 → `to` 的上边，回边专用）。
+
+**泳道（swimlane）**：声明 `lanes:[{id,label}]` 并给框写 `nodes[].lane` —— 车道矩形与车道高由
+**成员框的实测尺寸**推出，画布高度由内容算出（不填坐标）；没有 `lane` 的框构成底部「带」。
+车道感知走线：`rowgap`（跨车道间隙，从**朝向目标的那一面**出发，`enterOffset` 可平移入口）、
+`outer`（车道外侧走廊 + 顶部反馈带，`side`/`belt` 让两条回路各行其道）；两者的净空都从**车道边框**
+起算，因此「车道名压框」「走线贴车道边框」两条出厂断言由构造保证。`points`（英寸）是折点逃生口。
+完整样板：`assets/figures_kit/examples/lanes_feedback.json`（8 框 / 2 泳道 / 两条反馈回路）。
 """
 from __future__ import annotations
 
