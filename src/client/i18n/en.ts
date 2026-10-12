@@ -128,6 +128,7 @@ export const en = {
   'community.tab.signIn': 'Sign in',
   'community.tab.server': 'Server',
   'community.work.title': 'Research work',
+  'community.work.byAuthor': 'by {name}',
   'community.tab.mine': 'Mine',
   'community.tab.mentor': 'Can mentor',
   'community.tab.mentorship': 'Mentorship',

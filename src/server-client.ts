@@ -108,6 +108,16 @@ export interface TokenBalance {
  * 与 `GET /projects/{id}/summary`）：只说"这是什么"，
  * **不含** core idea / hypothesis / method（那些在第二层「简报」、第三层「完整状态」）。
  */
+/**
+ * 研究工作在公开发现列表里的**作者**（服务器的 `owner` 投影）。
+ *
+ * 只有身份与显示名 —— 见 {@link WorkItem.owner} 里"最小公开投影"的理由。
+ */
+export interface WorkOwner {
+  id: string
+  displayName: string
+}
+
 export interface WorkItem {
   projectId: string
   title: string
@@ -120,6 +130,17 @@ export interface WorkItem {
   summary: string | null
   /** 与 owner 的关系（部分响应带）。 */
   updatedAt: string
+  /**
+   * **这项研究属于谁**（服务器 `owner: { id, display_name }`）。
+   *
+   * 2026-10 服务器给 `/discovery/random` 加了这个字段：【可指导】列表要显示作者名，
+   * 否则导师只看到一串标题，分不清是谁的研究。
+   *
+   * ⚠️ 只用**最小公开投影**（`id` + `display_name`）：这是公开发现列表，即使服务器
+   * 将来在 `owner` 里塞了 profile，也不该被这个列表带出去（提案那条路径才有 profile，
+   * 那是另一条授权链）。旧服务器不返回该字段 → `null`，界面不显示。
+   */
+  owner?: WorkOwner | null
   /**
    * **服务器的权威判据**：打开这一项的简报**还会不会再扣 Token**（`brief_paid`）。
    *
@@ -1698,7 +1719,22 @@ function parseWorkItem(raw: unknown): WorkItem {
     // `brief_paid`：打开这项简报还会不会再扣 Token（服务器按支付记录 / owner 判定）。
     // 只有真的是布尔才采信；字段缺失或类型不对 → null（= 不知道，界面会照常提醒）。
     briefPaid: typeof b.brief_paid === 'boolean' ? b.brief_paid : null,
+    owner: parseWorkOwner(b.owner),
   }
+}
+
+/**
+ * 解析公开发现列表里的作者（服务器 `owner`）。
+ *
+ * 缺失 / 结构不对 → `null`（**不猜、不编**：旧服务器没有这个字段，界面就不显示作者）。
+ * `display_name` 为空时回退成 id 短前缀 —— 与提案那条路径同一套回退，至少能区分"是谁"。
+ */
+function parseWorkOwner(raw: unknown): WorkOwner | null {
+  const b = asRecord(raw)
+  const id = b ? asString(b.id) : ''
+  if (!id) return null
+  const displayName = b ? asString(b.display_name) : ''
+  return { id, displayName: displayName || id.slice(0, 8) }
 }
 
 /** 解析简报（第二层）。 */

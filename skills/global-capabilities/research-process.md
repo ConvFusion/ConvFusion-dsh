@@ -36,8 +36,10 @@ stage: planning | 计划管理 | research-planning | method-plan | 可执行的�
 stage: resource | 资源评估 | resource-estimation | resource-estimate | 资源需求、成本与可行性估计（research/plans/）
 stage: decision | 研究决策 | research-decision | decisions | 已记录理由的研究决策（research/decisions/）
 stage: experiment | 实验验证 | experiment | experiments | 实验产物与经确认的结果证据（experiments/<name>/results/）
-stage: writing | 论文写作 | academic-writing | manuscript | 论文正文（papers/<id>/paper.md）
+stage: writing | 论文写作 | academic-writing | manuscript | 手稿正文（papers/<id>/latex/main.tex 及其编译产物 main.pdf）
 ```
+
+**The manuscript of record is the LaTeX file, not the Markdown.** `paper.md` is only a paper's earliest conception. Once a paper has a compiled manuscript (`papers/<id>/latex/main.tex`), that `.tex` is the manuscript of record: every later change — wording, numbers, cutting or merging sections, dropping an appendix — lands on the `.tex`, and the only accepted check is the compiled PDF (0 errors, the intended page count, and the figures actually present in it). After that point, do not edit `paper.md`, do not count a change made only in `paper.md` as a change to the paper, and do not re-run `compose` to "keep the two in sync": `compose` overwrites `main.tex` from the Markdown and discards every edit made in the `.tex`. When a paper exists in more than one version (for example a long version and a conference version), each version has its own `main.tex` and is its own manuscript of record.
 
 A project that has landed every stage is not "finished" — research continues by evolving the same artifacts. The absence of a missing stage is not the absence of work.
 

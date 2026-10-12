@@ -925,6 +925,8 @@ section('[6b] 研究工作：列表 / 摘要 / 简报')
     research_question: 'Can retrieval augment long-context reasoning?',
     summary: 'Retrieval-augmented reasoning.',
     updated_at: '2026-09-18T11:26:31Z',
+    // 2026-10 服务器为 /discovery/random 新增：公开发现列表的作者（【可指导】要显示）
+    owner: { id: 'd9ddbaa6-11a0-44b0-9141-afd4a5fffd18', display_name: 'wen' },
   }
   const BRIEF = {
     ...ITEM,
@@ -957,6 +959,9 @@ section('[6b] 研究工作：列表 / 摘要 / 简报')
   assertEq(listRes.value.items[0].researchQuestion, ITEM.research_question, '带出研究问题')
   assertEq(listRes.value.items[0].stage, 'EXPERIMENT', '带出研究阶段')
   assertEq(listRes.value.items[0].progress, 0.5, '带出进度')
+  // 2026-10 服务器新增 owner：【可指导】列表按它显示作者名
+  assertEq(listRes.value.items[0].owner?.displayName, 'wen', 'owner.display_name → owner.displayName（作者名带出）')
+  assertEq(listRes.value.items[0].owner?.id, ITEM.owner.id, 'owner.id 带出')
   keyLeak(listRes.value, 'work/list')
 
   // 再确认一次：两次调用的 URL **完全一致**（没有本地夹取 / 没有默认条数）

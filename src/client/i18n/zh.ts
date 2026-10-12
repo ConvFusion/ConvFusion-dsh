@@ -131,6 +131,8 @@ export const zh = {
   'community.tab.signIn': '登录',
   'community.tab.server': '服务器设置',
   'community.work.title': '研究工作',
+  // 【可指导】列表行上的作者（服务器 owner 投影；旧服务器无此字段则不显示）
+  'community.work.byAuthor': '作者 {name}',
   'community.tab.mine': '我的',
   'community.tab.mentor': '可指导',
   'community.tab.mentorship': '指导中',

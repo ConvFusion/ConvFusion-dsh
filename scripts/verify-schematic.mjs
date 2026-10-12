@@ -151,9 +151,56 @@ const tools = plugin.defineResearchTools(() => join(ROOT, 'workspace'))
 const tool = tools.find((t) => t.name === 'research_schematic')
 ok('工具已登记', Boolean(tool))
 const props = tool?.parameters?.properties ?? {}
-ok('参数含 nodes/edges/name', Boolean(props.nodes && props.edges && props.name), JSON.stringify(Object.keys(props)))
+ok('参数含 nodes/edges/lanes/name', Boolean(props.nodes && props.edges && props.lanes && props.name), JSON.stringify(Object.keys(props)))
 ok('有明确的使用边界说明', String(tool?.description ?? '').includes('research_diagram'))
 ok('输出可渲染', typeof tool?.output?.render === 'function')
+
+
+/* ── [8] 泳道与车道感知走线 ───────────────────────────────────── */
+console.log('\n[8] 泳道（lanes）与车道感知走线')
+const laneSpec = {
+  name: 'verify_lanes', outDir: out,
+  size: [7.16, 4.0], margin: [0.26, 0.10, 0.26, 0.56],
+  cols: [0.203, 0.427, 0.660, 0.895], nodeWidth: 1.5, swing: 0.35,
+  lanes: [
+    { id: 'model', label: 'model lane, never gated' },
+    { id: 'kernel', label: 'kernel lane, only state mutation passes' },
+  ],
+  nodes: [
+    { id: 'a', lane: 'model', col: 1, label: 'Human', desc: 'instructions enter as Markdown' },
+    { id: 'b', lane: 'model', col: 2, label: 'LLM reasoning', desc: 'interpretation stays free, never gated' },
+    { id: 'c', lane: 'model', col: 3, label: 'Typed proposal', desc: 'one typed diff per step' },
+    { id: 'd', lane: 'kernel', col: 1, label: 'Kernel guards', desc: 'S, E, T and V vs. version R_t' },
+    { id: 'e', lane: 'kernel', col: 2, label: 'Commit R_t+1', desc: 'invariant re-established', role: 'accent' },
+    { id: 'f', lane: 'kernel', col: 3, label: 'Execute', desc: 'committed actions run' },
+    { id: 'h', lane: 'kernel', col: 4, label: 'Rejected + reason', desc: 'state unchanged', role: 'reject' },
+    { id: 'g', x: 3.58, label: 'Typed representation of the research state', desc: 'six typed objects with typed relations', width: 6.6 },
+  ],
+  edges: [
+    { from: 'a', to: 'b' }, { from: 'b', to: 'c' },
+    { from: 'c', to: 'd', route: 'rowgap', enterOffset: -0.35 },
+    { from: 'd', to: 'e', role: 'accent' }, { from: 'e', to: 'f', role: 'accent' },
+    { from: 'd', to: 'h', route: 'rowgap', role: 'reject' },
+    { from: 'h', to: 'c', route: 'outer', side: 'right', belt: 0, role: 'reject', ls: 'dashed' },
+    { from: 'f', to: 'g', route: 'v', ls: 'dashed' }, { from: 'e', to: 'g', route: 'v', role: 'accent' },
+    { from: 'g', to: 'd', route: 'v' },
+    { from: 'g', to: 'c', route: 'outer', side: 'left', belt: 1, ls: 'dashed' },
+  ],
+}
+const rl = S.renderSchematic({ spec: laneSpec })
+ok('成员制车道渲染成功', rl.ok === true, rl.error ?? '')
+ok('车道数报告正确', rl.stats?.lanes === 2, JSON.stringify(rl.stats ?? {}))
+ok('车道名 ↔ 成员框净空 ≥ 0.10in', (rl.stats?.lane_label_clear_in ?? 0) >= 0.10, String(rl.stats?.lane_label_clear_in))
+ok('走线 ↔ 车道边框净空 ≥ 0.04in', (rl.stats?.lane_edge_clear_in ?? 0) >= 0.04, String(rl.stats?.lane_edge_clear_in))
+ok('宽而矮（aspect ≥ 1.8）', (rl.aspect ?? 0) >= 1.8, String(rl.aspect))
+const laneBad = S.renderSchematic({
+  spec: { ...laneSpec, name: 'bad_lane', outDir: out,
+    nodes: laneSpec.nodes.map((n) => (n.id === 'a' ? { ...n, lane: 'nope' } : n)) },
+})
+ok('lane 未声明被拒', laneBad.ok === false, String(laneBad.error ?? '').slice(0, 80))
+const vBad = S.renderSchematic({ spec: { ...laneSpec, name: 'bad_rowgap', outDir: out,
+  edges: [{ from: 'g', to: 'd', route: 'rowgap' }] } })
+ok('rowgap 端点不在车道内时被拒', vBad.ok === false, String(vBad.error ?? '').slice(0, 80))
 
 /* ── 结果 ─────────────────────────────────────────────────────── */
 rmSync(out, { recursive: true, force: true })

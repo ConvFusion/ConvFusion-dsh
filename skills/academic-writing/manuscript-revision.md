@@ -31,6 +31,7 @@ requires: manuscript | 修订的对象是已有正文
 
 ## Research Method
 
+0. **Revise the manuscript of record — `papers/<id>/latex/main.tex` once it exists, not `papers/<id>/paper.md`.** `paper.md` is only the paper's earliest conception; after the first `compose`, every edit lands on the `.tex` and is verified by recompiling it (0 errors, and the revised text actually present in the PDF). A revision made only in the Markdown changes nothing a reader will ever see, and running `compose` to "sync" it would overwrite the `.tex`.
 1. **Revise in a fixed order: terminology and notation, then paragraph-level flow, then sentence register.** Fixing sentences before the term set is settled means doing the work twice.
 2. **Standardise the term set first** — method name, dataset names, metric names, symbols — and apply the chosen form everywhere, including tables and figure captions.
 3. **Rewrite for flow with explicit connectives**, replacing implicit jumps between sentences with contrast, consequence or addition, and giving each paragraph one topic sentence.

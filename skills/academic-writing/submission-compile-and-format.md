@@ -32,14 +32,14 @@ requires: manuscript | 先有正文才谈得上编译成稿
 
 ## Research Method
 
-0. **Drive the `research_paper_latex` tool — do not hand-write LaTeX.** The manuscript stays Markdown (`papers/<paperId>/paper.md`) and is converted, never re-typed:
-   - `action: "compose"` — turns `paper.md` into `papers/<paperId>/latex/main.tex` (+ `main_intermediate.tex`, which keeps raw `[cite_key]` placeholders so you can read what the converter saw). Markdown headings, inline emphasis and stray `%` are handled here; an existing `main.tex` is backed up first. Pick the template at this step: `conference` (IEEEtran, default) or `journal` (IEEEtran journal option).
+0. **Treat `papers/<paperId>/latex/main.tex` as the manuscript of record, and use the `research_paper_latex` tool for the compile loop.** `paper.md` is only the paper's earliest conception: `compose` turns it into `main.tex` **once**, to bootstrap the LaTeX, and from then on every change is made **in `main.tex`** and verified by compiling it. Never re-run `compose` to "sync" or "regenerate" — it overwrites `main.tex` from the Markdown and silently discards everything edited in the `.tex`. The tool's actions:
+   - `action: "compose"` — **bootstrap only.** Turns `paper.md` into `papers/<paperId>/latex/main.tex` (+ `main_intermediate.tex`, which keeps raw `[cite_key]` placeholders so you can read what the converter saw). Markdown headings, inline emphasis and stray `%` are handled here. An existing `main.tex` is backed up first and then **overwritten**, so do not call this once the `.tex` is the manuscript of record. Pick the template at this step: `conference` (IEEEtran, default) or `journal` (IEEEtran journal option).
    - `action: "compile"` — runs Tectonic and produces `main.pdf`; returns `{ success, errors }`.
    - `action: "repair"` — deterministic, LLM-free repair of `main.tex` from the last compile log (escapes stray `%`, fixes double-subscript and math-mode errors). Run it before spending your own effort.
    - `action: "errors"` — structured errors with line numbers **and the surrounding code**, which is what you need to fix what `repair` could not. Then `compile` again.
    - `action: "validate"` — advisory list of unrecognised commands/environments; it is not a gate and a nonzero list is not a failure.
    - `action: "status"` — what is currently in `latex/`.
-   The loop is: `compose` → `compile` → if it fails, `repair` → `compile` → if it still fails, read `errors` and **edit `main.tex` yourself** → `compile`. Stop when `compile` returns `success: true`; do not loop indefinitely.
+   The loop once `main.tex` exists is: `compile` → if it fails, `repair` → `compile` → if it still fails, read `errors` and **edit `main.tex` yourself** → `compile`. Stop when `compile` returns `success: true`; do not loop indefinitely.
 1. **Separate syntax repair from content.** Every fix in this skill is syntactic; if a correction would change a claim, a number or a citation, stop and route it back to the writing skill.
 2. **Fix encoding and escaping first**, because they cascade: escape reserved characters, convert Markdown emphasis and headings into the corresponding LaTeX environments and commands, and replace Unicode math symbols with their commands.
 3. **Balance environments and structure** so every begin has an end, required packages are declared, and no empty environment remains.

@@ -2218,19 +2218,36 @@ export function defineResearchTools(
       nodes: {
         type: 'array',
         description:
-          'Boxes, in reading order. `col`/`row` are 1-based indices into `cols`/`rows`. `label` is the bold ' +
-          'title, `desc` the grey line under it; keep both short.',
+          'Boxes, in reading order. `col`/`row` are 1-based indices into `cols`/`rows` (ignored for a node that ' +
+          'declares `lane`: its row comes from the lane layout). `label` is the bold title, `desc` the grey line ' +
+          'under it; keep both short. Optional `lane` = the lane id this box belongs to, `width` (inches) for a ' +
+          'wide box, `x` (inches) to place it by absolute centre instead of `col`, `role` = normal | accent | reject.',
         items: {
           type: 'object',
           additionalProperties: true,
           description: 'One box.',
         },
       },
+      lanes: {
+        type: 'array',
+        description:
+          'Optional swimlane containers, e.g. `[{id: "model", label: "model lane, never gated"}]`. Give only ' +
+          '`id` and `label` (plus optional `band`): the renderer computes each lane rectangle from the measured ' +
+          'size of its member nodes (`nodes[].lane`), stacks the lanes top-down and computes the canvas height, ' +
+          'so never pass coordinates. Nodes with no `lane` form the bottom belt (one row, e.g. a wide summary box). ' +
+          'With `lanes` present the renderer also enforces the two lane checks (lane name vs member boxes, edge vs ' +
+          'lane border) instead of letting those collisions through.',
+        items: { type: 'object', additionalProperties: true, description: 'One lane container.' },
+      },
       edges: {
         type: 'array',
         description:
-          'Connections between declared node ids. `route`: auto (default) | down | back | over — use `over` ' +
-          'for a feedback edge so it comes back along the top.',
+          'Connections between declared node ids. `route`: auto (default) | v (vertical, for stacked boxes) | ' +
+          'down | back | over (feedback along the top) | rowgap (cross the gap between lanes, entering the target ' +
+          'top; needs `lanes`) | outer (outside corridor plus a feedback belt above the top lane; needs `lanes`, ' +
+          'take `side`: left/right and `belt`: 0/1 so two loops do not overlap) | points (explicit waypoints in ' +
+          'inches, an escape hatch). Optional `enterOffset` (inches, shifts where a `rowgap` edge enters), ' +
+          '`ls` ("-" | "dashed" | "dotted"), `role` = normal | accent | reject.',
         items: { type: 'object', additionalProperties: true, description: 'One connection.' },
       },
       size: {
@@ -2299,7 +2316,13 @@ export function defineResearchTools(
         outDir: paths.dir,
         latexFiguresDir: join(paths.dir, '..', 'latex', 'figures'),
       }
-      const result = renderSchematic({ spec, targetWidthPt: SCHEMATIC_COLUMN_PT })
+      // 全宽图必须按调用者给的实际版面宽度判读性（曾写死单栏 252pt，
+      // 于是 width=\\textwidth 的图被误报 TOO SMALL）。
+      const columnWidthPt =
+        typeof a.column_width_pt === 'number' && a.column_width_pt > 0
+          ? a.column_width_pt
+          : SCHEMATIC_COLUMN_PT
+      const result = renderSchematic({ spec, targetWidthPt: columnWidthPt })
       if (!result.ok) return fail(result.error ?? 'schematic render failed', { tried: result.tried })
       return losslessJson({
         ok: true,

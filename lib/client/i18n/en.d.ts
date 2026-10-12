@@ -125,6 +125,7 @@ export declare const en: {
     readonly 'community.tab.signIn': "Sign in";
     readonly 'community.tab.server': "Server";
     readonly 'community.work.title': "Research work";
+    readonly 'community.work.byAuthor': "by {name}";
     readonly 'community.tab.mine': "Mine";
     readonly 'community.tab.mentor': "Can mentor";
     readonly 'community.tab.mentorship': "Mentorship";

@@ -130,6 +130,7 @@ export declare const dictionaries: {
         'community.tab.signIn': string;
         'community.tab.server': string;
         'community.work.title': string;
+        'community.work.byAuthor': string;
         'community.tab.mine': string;
         'community.tab.mentor': string;
         'community.tab.mentorship': string;
@@ -756,6 +757,7 @@ export declare const dictionaries: {
         readonly 'community.tab.signIn': "Sign in";
         readonly 'community.tab.server': "Server";
         readonly 'community.work.title': "Research work";
+        readonly 'community.work.byAuthor': "by {name}";
         readonly 'community.tab.mine': "Mine";
         readonly 'community.tab.mentor': "Can mentor";
         readonly 'community.tab.mentorship': "Mentorship";

@@ -125,6 +125,7 @@ export declare const zh: {
     'community.tab.signIn': string;
     'community.tab.server': string;
     'community.work.title': string;
+    'community.work.byAuthor': string;
     'community.tab.mine': string;
     'community.tab.mentor': string;
     'community.tab.mentorship': string;

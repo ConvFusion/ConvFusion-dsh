@@ -2332,6 +2332,23 @@ export function createSettingsRpcHandler(
             if (!isResearchWorkspace(root)) continue
             items.push({ id: w.id, title: w.title, path: canonical, root })
           }
+          /*
+           * **当前会话的工作区**（与 `mentor/downloadState` 同一判据）：界面用它把下拉
+           * **默认选中"我正在用的这一个"** —— 导师回传的通常就是手上这份研究，默认落到
+           * 别的工作区会让导师以为传错了。比对走 `realpath`（注册表存的是登记路径，
+           * 可能是符号链接）。`null` = 会话工作区不在可回传列表里（此时界面不预选）。
+           */
+          const sessionId = asString(p.sessionId)
+          const sessionWorkspace = sessionId ? deps.resolveSessionWorkspace?.(sessionId) : undefined
+          let currentCanonical: string | null = null
+          if (sessionWorkspace) {
+            try {
+              currentCanonical = realpathSync(sessionWorkspace)
+            } catch {
+              currentCanonical = null
+            }
+          }
+          const current = currentCanonical ? items.find((it) => it.path === currentCanonical) : undefined
           return {
             ok: true,
             value: {
@@ -2339,6 +2356,8 @@ export function createSettingsRpcHandler(
               // ⚠️ 读不到 ≠ 没有：`reason` 必须说清是"读不到"（否则界面会显示成"本机没有研究工作区"）
               reason: listed?.reason ?? (listed ? null : '宿主未提供工作区注册表读取接口'),
               items,
+              /** 当前会话所在工作区的注册表 id（界面预选用）；`null` = 会话工作区不可回传。 */
+              currentWorkspaceId: current?.id ?? null,
             },
           }
         }

@@ -181,7 +181,7 @@ class Sheet:
             a, b = pts[i], pts[i + 1]
             last = i == len(pts) - 2
             self.ax.add_patch(FancyArrowPatch(a, b, arrowstyle="-|>" if last else "-",
-                                              mutation_scale=8, color=color, lw=lw,
+                                              mutation_scale=9, color=color, lw=lw,
                                               linestyle=ls, zorder=4, shrinkA=0, shrinkB=0))
         self.edges.append((list(pts), None))
 

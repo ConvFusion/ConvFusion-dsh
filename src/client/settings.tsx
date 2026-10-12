@@ -1501,6 +1501,13 @@ function roleText(t: Translate, roles: string[]): string {
 interface HostWork {
   projectId: string
   title: string
+  /**
+   * 作者（服务器 `owner: { id, display_name }` 的投影；宿主 `WorkItem.owner`）。
+   *
+   * 2026-10 服务器为 `/discovery/random` 加了该字段：【可指导】列表按它显示作者名。
+   * `undefined` / `null` = 旧服务器没有（或该项无作者）→ 不显示，而不是编一个名字。
+   */
+  owner?: { id: string; displayName: string } | null
   researchFields: string[]
   stage: string | null
   progress: number
@@ -1617,6 +1624,13 @@ interface HostUploadWorkspace {
   path: string
   root: string
 }
+
+/**
+ * 【上传】对话框里"当前会话的工作区"（宿主 `mentor/uploadState` 的 `currentWorkspaceId`）。
+ *
+ * 与【下载】同一判据：宿主按 `sessionId` 解析出当前工作区，界面据此**默认选中它** ——
+ * 导师回传的通常就是手上这份研究。`null` = 当前会话工作区不在可回传列表里。
+ */
 
 /**
  * 「目标工作区校验」从哪个宿主协议号开始有（见 `src/protocol.ts` 的 `23`）。
@@ -1849,6 +1863,7 @@ function WorkRow({
   stage,
   progress,
   updatedAt,
+  author,
   disabled,
   busy,
   expanded,
@@ -1859,6 +1874,8 @@ function WorkRow({
 }: {
   t: Translate
   title: string
+  /** 作者显示名（【可指导】传；【我的】是自己的研究，不传）。 */
+  author?: string | null
   fields: string[]
   stage: string | null
   progress: number
@@ -1883,6 +1900,7 @@ function WorkRow({
       <div style={{ minWidth: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
         <div style={S.listTitle}>{title}</div>
         <div style={{ ...S.hint, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          {author ? <span>{t('community.work.byAuthor', { name: author })}</span> : null}
           {fields.length ? <span>{fields.join(' · ')}</span> : null}
           {stage ? <span>{enumText(t, STAGE_LABEL_KEYS, stage)}</span> : null}
           <ProgressBar value={progress} />
@@ -3408,6 +3426,7 @@ function UploadDialog({
   workspacesAvailable,
   workspacesReason,
   workspaceId,
+  currentWorkspaceId,
   plan,
   planLoading,
   selection,
@@ -3428,6 +3447,8 @@ function UploadDialog({
   workspacesAvailable: boolean
   workspacesReason: string | null
   workspaceId: string
+  /** 当前会话所在工作区（下拉里加标记）。 */
+  currentWorkspaceId: string | null
   plan: HostMentorUploadPlan | null
   planLoading: boolean
   selection: ReadonlySet<string>
@@ -3499,7 +3520,9 @@ function UploadDialog({
                 <option value="">{t('community.exchange.workspacePlaceholder')}</option>
                 {workspaces.map((w) => (
                   <option key={w.id} value={w.id}>
-                    {w.title}
+                    {currentWorkspaceId === w.id
+                      ? `${w.title}（${t('community.exchange.ws.current')}）`
+                      : w.title}
                   </option>
                 ))}
               </select>
@@ -4049,6 +4072,8 @@ export function CommunityTab({
   )
   /** 选中的工作区 id（空 = 还没选）。 */
   const [uploadWorkspaceId, setUploadWorkspaceId] = React.useState('')
+  /** 当前会话所在工作区的 id（宿主报的；用于默认选中与下拉标记）；`null` = 不可回传。 */
+  const [uploadCurrentWorkspaceId, setUploadCurrentWorkspaceId] = React.useState<string | null>(null)
   /** 选中工作区的文件清单（宿主 `mentor/uploadPlan`；`null` = 还没算）。 */
   const [uploadPlan, setUploadPlan] = React.useState<HostMentorUploadPlan | null>(null)
   const [uploadPlanLoading, setUploadPlanLoading] = React.useState(false)
@@ -4358,34 +4383,6 @@ export function CommunityTab({
    * ⚠️ 这里**不自动拉清单**：清单是一次读盘扫描，用户还没看就扫一个几百 MB 的工作区
    * 是白费力气（下拉选中哪个，才扫哪个）。
    */
-  const openExchange = async (p: HostProposal): Promise<void> => {
-    setExchangeNotice(null)
-    setUploadWorkspaces(null)
-    setUploadRegistry(null)
-    setUploadWorkspaceId('')
-    setUploadPlan(null)
-    setUploadSelected(new Set())
-    setUploadExpanded(new Set())
-    setExchange({ proposal: p, mode: 'upload' })
-    const res = await post('mentor/uploadState', {})
-    if (!res.ok) {
-      // 读不到 ≠ 没有：如实说原因（旧宿主没有这个端点 → unknown-endpoint → 提示重启）
-      setUploadWorkspaces([])
-      setUploadRegistry({
-        available: false,
-        reason:
-          res.error?.code === 'unknown-endpoint'
-            ? t('community.error.hostRestart')
-            : (res.error?.message ?? t('community.error.unknown')),
-      })
-      return
-    }
-    const v = res.value as { available?: boolean; reason?: string | null; items?: HostUploadWorkspace[] }
-    const items = v.items ?? []
-    setUploadWorkspaces(items)
-    setUploadRegistry({ available: v.available ?? false, reason: v.reason ?? null })
-  }
-
   /**
    * 选工作区 → 拉文件清单（宿主扫描研究根，`mentor` 口径）。
    *
@@ -4409,6 +4406,59 @@ export function CommunityTab({
     const v = res.value as HostMentorUploadPlan
     setUploadPlan(v)
     setUploadSelected(new Set(v.plan.defaultSelection))
+  }
+
+  /*
+   * ⚠️ 定义顺序有约束：`openExchange` 要按宿主播报的 `currentWorkspaceId` **默认选中**当前
+   * 会话的工作区，因此会调用下面这个函数。它是 `const`（不是函数声明），定义在 `openExchange`
+   * **之前**才不会踩 TDZ。改动这里时不要把它挪到后面。
+   */
+  const openExchange = async (p: HostProposal): Promise<void> => {
+    setExchangeNotice(null)
+    setUploadWorkspaces(null)
+    setUploadRegistry(null)
+    setUploadWorkspaceId('')
+    setUploadCurrentWorkspaceId(null)
+    setUploadPlan(null)
+    setUploadSelected(new Set())
+    setUploadExpanded(new Set())
+    setExchange({ proposal: p, mode: 'upload' })
+    // 带上 sessionId：宿主据此算出"当前会话的工作区"（界面默认选中它）。
+    // 旧宿主不认这个字段，会照常只返回 items —— 此时不预选，回退到"请选择"。
+    const res = await post('mentor/uploadState', {
+      ...(session?.sessionId ? { sessionId: session.sessionId } : {}),
+    })
+    if (!res.ok) {
+      // 读不到 ≠ 没有：如实说原因（旧宿主没有这个端点 → unknown-endpoint → 提示重启）
+      setUploadWorkspaces([])
+      setUploadRegistry({
+        available: false,
+        reason:
+          res.error?.code === 'unknown-endpoint'
+            ? t('community.error.hostRestart')
+            : (res.error?.message ?? t('community.error.unknown')),
+      })
+      return
+    }
+    const v = res.value as {
+      available?: boolean
+      reason?: string | null
+      items?: HostUploadWorkspace[]
+      currentWorkspaceId?: string | null
+    }
+    const items = v.items ?? []
+    setUploadWorkspaces(items)
+    setUploadCurrentWorkspaceId(v.currentWorkspaceId ?? null)
+    setUploadRegistry({ available: v.available ?? false, reason: v.reason ?? null })
+    /*
+     * 默认选中**当前会话的工作区**（与【下载】同一行为）。选中后立刻拉清单 ——
+     * 与用户自己在下拉里选是同一个动作，走 `selectUploadWorkspace` 同一条路径，
+     * 不另开一条"预设"分支。
+     */
+    const preferred = v.currentWorkspaceId && items.some((w) => w.id === v.currentWorkspaceId)
+      ? v.currentWorkspaceId
+      : ''
+    if (preferred) void selectUploadWorkspace(preferred)
   }
 
   /** 分类级勾选（与发布对话框同一套语义）。 */
@@ -5852,6 +5902,7 @@ export function CommunityTab({
           workspacesAvailable={uploadRegistry?.available ?? false}
           workspacesReason={uploadRegistry?.reason ?? null}
           workspaceId={uploadWorkspaceId}
+          currentWorkspaceId={uploadCurrentWorkspaceId}
           plan={uploadPlan}
           planLoading={uploadPlanLoading}
           selection={uploadSelected}
@@ -6422,6 +6473,7 @@ export function CommunityTab({
                     <WorkRow
                       t={t}
                       title={w.title}
+                      author={w.owner?.displayName ?? null}
                       fields={w.researchFields}
                       stage={w.stage}
                       progress={w.progress}
