@@ -2112,10 +2112,16 @@ export function defineResearchTools(
           ...listClaims(ws).map((c) => c.id),
           ...listEvidence(ws).map((e) => e.id),
         ])
-        // 只在**显式为 true** 时才传该键：否则一个恒为布尔的 false 会让 layout.ts 的
-        // `options.showDescriptions ?? diagram.showDescriptions === true` 永不回退到 IR，
-        // 于是 IR 里的 show_descriptions:true 被静默忽略（实测：每个节点只剩标签，描述全丢）。
-        const options = { ...(a.show_descriptions === true ? { showDescriptions: true } : {}), knownRefs }
+        // 只在调用者**显式给了布尔**时才传该键：
+        //  · 没给 → 不传，于是 layout 回退到 IR 自己的 `show_descriptions`（重渲染得到同一张图）；
+        //  · 给了 true/false → 显式参数优先，能覆盖 IR（layout.ts 声明的优先级）。
+        // 曾经的错法：把 `options.showDescriptions ?? diagram.showDescriptions === true` 里的
+        // 左值恒等布尔化（永远传 false），IR 里的 show_descriptions:true 被静默忽略，
+        // 实测每个节点只剩标签、描述全丢。
+        const options = {
+          ...(typeof a.show_descriptions === 'boolean' ? { showDescriptions: a.show_descriptions } : {}),
+          knownRefs,
+        }
 
         if (action === 'validate') {
           const inspection = inspectDiagram(raw, options)
