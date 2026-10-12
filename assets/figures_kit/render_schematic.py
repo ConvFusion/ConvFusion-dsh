@@ -163,6 +163,38 @@ def _lane_layout(spec: dict, s: "Sheet", ninfo: dict, cx: dict) -> dict | None:
         else:
             _fail(f"节点 {nd.get('id')} 的 lane='{lid}' 未在 lanes[] 中声明")
 
+    # 两种摆放方式：
+    #  · 模式 A（未给 rows）：车道驱动 —— 成员行由车道推、非成员构成底部「带」；
+    #  · 模式 B（给了 rows）：grid 驱动 —— 所有框按 cols/rows 摆放，车道只作**容器**画在成员框外面
+    #    （Paper 2 Fig 1 那种"中列一块守卫带、左右各有框"的图就是模式 B）。
+    if spec.get("rows"):
+        cx2, cy2 = _grid_positions(spec)
+        y: dict[str, float] = {}
+        tops: dict[str, list[float]] = {k: [] for k in ids}
+        bots: dict[str, list[float]] = {k: [] for k in ids}
+        for nd in spec["nodes"]:
+            nid = str(nd["id"])
+            yy = cy2[int(nd.get("row", 1))]
+            y[nid] = yy
+            lid = nd.get("lane")
+            if lid is not None:
+                w, h = ninfo[nid]
+                tops[str(lid)].append(yy + h / 2)
+                bots[str(lid)].append(yy - h / 2)
+        plan = {}
+        for lid, l in ids.items():
+            if not tops[lid]:
+                _fail(f"lane {lid} 没有成员节点（车道高无从推出）")
+            _xl = [_node_x(spec, _nd(spec, n), cx2) - ninfo[n][0] / 2 for n in members[lid]]
+            _xr = [_node_x(spec, _nd(spec, n), cx2) + ninfo[n][0] / 2 for n in members[lid]]
+            plan[lid] = {"label": str(l.get("label", "")), "band": float(l.get("band") or 0.16),
+                         "x0": min(_xl) - LANE_SIDE, "x1": max(_xr) + LANE_SIDE,
+                         "y0": min(bots[lid]) - LANE_PAD_B, "y1": max(tops[lid]) + LANE_PAD_T,
+                         "h": (max(tops[lid]) - min(bots[lid])) + LANE_PAD_T + LANE_PAD_B,
+                         "max_h": max(tops[lid]) - min(bots[lid])}
+            plan[lid]["top"] = plan[lid]["y1"]
+        return {"lanes": plan, "y": y, "H": float((spec.get("size") or [3.3, 1.9])[1]), "belt": []}
+
     # 每个车道：x 由成员框决定，行高由**最高的成员框**决定
     plan: dict[str, dict] = {}
     for lid, l in ids.items():

@@ -202,6 +202,35 @@ const vBad = S.renderSchematic({ spec: { ...laneSpec, name: 'bad_rowgap', outDir
   edges: [{ from: 'g', to: 'd', route: 'rowgap' }] } })
 ok('rowgap 端点不在车道内时被拒', vBad.ok === false, String(vBad.error ?? '').slice(0, 80))
 
+// 模式 B：给了 rows 时，框按 grid 摆、lane 只作容器（Paper 2 Fig 1 的结构）
+const modeB = {
+  name: 'verify_modeb', outDir: out, size: [7.16, 3.7],
+  cols: [0.14, 0.45, 0.80], rows: [0.16, 0.39, 0.62, 0.85],
+  lanes: [{ id: 'band', label: 'guard decision, in evaluation order' }],
+  nodes: [
+    { id: 'cand', col: 1, row: 1, label: 'candidate mutation', desc: 'one typed proposal per step' },
+    { id: 'st', col: 1, row: 4, label: 'state S_t', desc: 'status, requirements, evidence' },
+    { id: 'g1', lane: 'band', col: 2, row: 1, label: 'S structure', desc: 'references resolve' },
+    { id: 'g2', lane: 'band', col: 2, row: 2, label: 'E execution', desc: 'only planned actions' },
+    { id: 'g3', lane: 'band', col: 2, row: 3, label: 'T state', desc: 'consistent' },
+    { id: 'g4', lane: 'band', col: 2, row: 4, label: 'V evidence', desc: 'provenance closed' },
+    { id: 'cm', col: 3, row: 4, label: 'commit S_t+1', desc: 'invariant re-established', role: 'accent' },
+    { id: 'rj', col: 3, row: 2, label: 'rejected + reason', desc: 'returned for revision', role: 'reject' },
+  ],
+  edges: [
+    { from: 'st', to: 'cand', route: 'v' }, { from: 'cand', to: 'g1', role: 'muted' },
+    { from: 'g1', to: 'g2', route: 'v' }, { from: 'g2', to: 'g3', route: 'v' }, { from: 'g3', to: 'g4', route: 'v' },
+    { from: 'g4', to: 'cm', role: 'accent' }, { from: 'g2', to: 'rj', role: 'reject' },
+    { from: 'rj', to: 'cand', route: 'over', ls: 'dashed' },
+  ],
+}
+const rB = S.renderSchematic({ spec: modeB })
+ok('模式 B（grid + 车道容器共存）渲染成功', rB.ok === true, rB.error ?? '')
+ok('模式 B 车道已登记', rB.stats?.lanes === 1, JSON.stringify(rB.stats ?? {}))
+ok('模式 B 车道名不压框 / 走线不贴车道边框',
+  (rB.stats?.lane_label_clear_in ?? 0) >= 0.10 && (rB.stats?.lane_edge_clear_in ?? 0) >= 0.04,
+  `${rB.stats?.lane_label_clear_in} / ${rB.stats?.lane_edge_clear_in}`)
+
 // 随包发行的样板 spec：别的 agent 靠它知道泳道图怎么写；它必须存在、且真的过校验（防样板腐烂）
 const exPath = join(ROOT, 'assets', 'figures_kit', 'examples', 'lanes_feedback.json')
 ok('样板 spec 随包发行', existsSync(exPath), exPath)
