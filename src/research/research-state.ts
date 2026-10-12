@@ -18,11 +18,11 @@
  * 3. **不删除性覆盖**（§22 / §42 Historical Integrity）：每次 Apply 都先归档旧版本到
  *    `research/state-history/`，历史可回答"当时为什么这样判断"。
  *
- * ## State Update 的人工控制点（§20 / §21）
+ * ## State Update 的痕迹链（§21）
  *
- * Agent **不直接改**长期研究状态，而是提出 {@link StateUpdateProposal}，
- * 由用户 `Accept / Edit / Reject`。无论走哪条路，都保留
- * **who / when / based on what**（§21）。
+ * 状态改动以 {@link StateUpdateProposal} 记录，再由 `apply` 应用（原样接受，或带
+ * 成熟度覆盖）。每次都留下 **who / when / based on what** 与处置结果（§21），
+ * 旧版本同时归档到 `research/state-history/`，因此"当时为什么这样判断"仍可回答。
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -262,7 +262,7 @@ function nextProposalId(workspace: string): string {
 }
 
 /**
- * 提出一次状态更新（§20：**Agent 不直接改长期状态**）。
+ * 提出一次状态更新（§21：提案先落盘，`apply` 才改写 Research State）。
  *
  * 提案是**数据**（JSON），不是文件改动 —— 只有 Apply 才会写 Research State。
  */
@@ -362,6 +362,15 @@ export function bumpStateVersion(version: string): string {
   return String(Number.isFinite(n) && n > 0 ? n + 1 : 1)
 }
 
+/** 处置过的提案文件移出待处置队列（处置痕迹已写入 `applied.json`）。 */
+function discardProposalFile(workspace: string, id: string): void {
+  try {
+    rmSync(join(workspace, PROPOSALS_DIR, `${id}.json`))
+  } catch {
+    /* 不存在也无妨 */
+  }
+}
+
 /**
  * 应用一次状态更新（§21 `Execution → Proposal → User Review → Apply`）。
  *
@@ -392,6 +401,9 @@ export function applyStateUpdate(
       toVersion: fromVersion,
       by: options.by ?? 'user',
     })
+    // 处置过就必须移出待处置队列，否则被拒的提案永远算 pending、每次 list 都重新出现
+    // （先前这里直接 return，跳过了函数末尾的清理）。
+    discardProposalFile(workspace, proposal.id)
     return current
   }
 
@@ -431,11 +443,7 @@ export function applyStateUpdate(
   })
 
   // 待处置的提案文件移除（处置记录已在 applied.json）
-  try {
-    rmSync(join(workspace, PROPOSALS_DIR, `${proposal.id}.json`))
-  } catch {
-    /* 不存在也无妨 */
-  }
+  discardProposalFile(workspace, proposal.id)
 
   const next = loadResearchState(workspace)
   return next ?? { error: '应用后解析失败。' }

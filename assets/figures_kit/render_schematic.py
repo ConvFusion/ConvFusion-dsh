@@ -63,11 +63,12 @@ import matplotlib.pyplot as plt  # noqa: E402
 # 仓库内联的 kit（随插件发行，见 assets/figures_kit/）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from figures_kit import BOX_PAD, INK, MUT, ACC, REJ, Sheet  # noqa: E402
+    from figures_kit import BOX_PAD, INK, MUT, ACC, ACC2, REJ, ROLES, Sheet, register_roles  # noqa: E402
 except ImportError:  # pragma: no cover - 交给上层报错
     raise SystemExit("figures_kit.py 未随包发行：找不到 assets/figures_kit/figures_kit.py")
 
-ROLES = {"normal": INK, "accent": ACC, "reject": REJ, "muted": MUT}
+# ROLES 不再是本文件的常量，而是 figures_kit 里可扩展的注册表；
+# 调用者用 register_role()/register_roles()，或按图写 spec["palette"]（见 render()）。
 RESULT_PREFIX = "@@SCHEMATIC@@ "
 
 
@@ -246,6 +247,10 @@ def _lane_of(spec: dict, nid: str) -> str | None:
 
 
 def render(spec: dict) -> dict:
+    # 按图声明扩展角色表（spec["palette"]）。配色是图的性质，调用者不该为加一种
+    # 语义色去改 kit 源码；overwrite=True 让同一进程内重复渲染时后者说了算。
+    register_roles(spec.get("palette") or {}, overwrite=True)
+
     nodes = spec.get("nodes") or []
     if not nodes:
         _fail("nodes 为空：没有要画的节点")

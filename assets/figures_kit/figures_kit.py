@@ -35,6 +35,9 @@ from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 HERE = Path(__file__).resolve().parent
 LATEX = HERE.parent / "latex" / "figures"
 INK, MUT, ACC, REJ = "#1b1b1f", "#5b5b63", "#1565c0", "#b3261e"
+# 一对部署目标色（蓝 / 橙）：白底上都醒目，互为对立色，且对色觉障碍友好。
+# 图中只把"这是被考核的目标"涂色，其余节点一律近黑 —— 颜色必须有单一含义。
+ACC2 = "#c2410c"
 FS_LAB, FS_DESC = 8.6, 7.0
 PAD, LH = 0.075, 1.42          # 内边距(英寸)、行高系数
 BOX_PAD = 0.012                # 节点框 boxstyle pad：视觉边框比登记矩形外扩这么多
@@ -44,6 +47,40 @@ LANE_BAND = 0.16               # 车道名默认保留带高度（车道名文�
 LANE_LABEL_CLEAR = 0.06        # 车道名文字矩形 ↔ 任一节点框 的最小净空
 LANE_EDGE_CLEAR = 0.04         # 近水平/近垂直连线 ↔ 车道边框 的最小净空（共线重叠即违规）
 LANE_EDGE_EPS = 0.02           # 判定「近水平 / 近垂直」的斜率阈值
+
+# 角色注册表：role 名 -> 颜色，节点与连线都按它上色。
+# 调用者可用 register_role()/register_roles() 追加自己的语义色，不必改本文件；
+# spec 也可以写顶层 "palette" 字段按图声明，render_schematic 会代其注册。
+ROLES: dict[str, str] = {
+    "normal": INK,
+    "muted": MUT,
+    "accent": ACC,
+    "accent2": ACC2,
+    "reject": REJ,
+}
+
+
+def register_role(name: str, color: str, *, overwrite: bool = False) -> None:
+    """注册一个 role 色，供 spec 里节点/边的 role 字段引用。
+
+    name        角色名，必须是非空字符串
+    color       颜色，形如 "#c2410c" 或 "#abc"
+    overwrite   已存在的角色默认拒绝覆盖，避免静默改掉既有语义色
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("role 名必须是非空字符串")
+    if not (isinstance(color, str) and color.startswith("#") and len(color) in (4, 7)):
+        raise ValueError(f"role '{name}' 的颜色须为 #rgb 或 #rrggbb，收到 {color!r}")
+    key = name.strip()
+    if key in ROLES and not overwrite:
+        raise ValueError(f"role '{key}' 已注册为 {ROLES[key]}；确要覆盖请传 overwrite=True")
+    ROLES[key] = color
+
+
+def register_roles(mapping, *, overwrite: bool = False) -> None:
+    """批量注册，键为角色名、值为颜色（spec 的 palette 字段走这里）。"""
+    for name, color in (mapping or {}).items():
+        register_role(name, color, overwrite=overwrite)
 
 
 def wrap(text: str, max_lines: int = 3, max_chars: int = 26) -> list[str]:

@@ -8,8 +8,9 @@
  *
  * 1. **ID 与引用关系会漂移**：`E001` 的分配、`supports` 与 `evidence` 的双向引用、
  *    `supersedes` 关系，靠模型手写迟早不一致；
- * 2. **State 会被直接覆盖**：§20 明确要求 Agent **只能提出 proposal**，
- *    由用户 `Accept / Edit / Reject`。若模型直接写 `research-state.md`，这个控制点就没了。
+ * 2. **State 的改动要留痕**：状态更新以 proposal（`S###.json`）记录，再由 `apply`
+ *    应用；每次处置都写进 `applied.json`。直接手写 `research-state.md` 会绕过这条
+ *    痕迹链 —— 改了什么都查不到。
  *
  * 因此本模块提供一组**窄接口**工具，让正确的事容易做、错误的事做不出来：
  *
@@ -19,14 +20,12 @@
  * | `research_claim` | 建立 Claim 并关联证据 | 状态由证据汇总（不凭感觉标 verified） |
  * | `research_decision` | 记录研究决策 | **必须有 reason 或 evidence** |
  * | `research_state_read` | 读取当前研究状态 | 只读 |
- * | `research_state_propose` | **提出**状态更新 | **只提案，绝不自动应用**（§20 / §21） |
+ * | `research_state_propose` | 提出 / 列出 / **应用**状态更新 | 应用即写 Research State；处置痕迹记入 `applied.json` |
  * | `research_project` | 查询/更新研究主题 | 主题**必须**带理由与依据；初始输入永久保留，只动 frontmatter |
  * | `research_ir` | Typed Research IR：提案/校验/增量变更/状态推进 | 三层验证不过不落盘；**不写** `research-state.md`；历史不删除 |
  *
  * ## 不允许出现的工具（重要的"没有"）
  *
- * - **没有** `research_state_apply`：应用必须由用户处置（§21）。
- *   用户在接受时通过 `/research` 或直接编辑文件完成。
  * - **没有**任何执行类工具：真实执行仍走 Harness 原生工具（§42 Native Harness）。
  */
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';

@@ -409,9 +409,16 @@ export function ResearchProgressPanel({ sessionId, t }: PanelProps): JSX.Element
 
   // 面板文字色/次要色/等宽字体都用 DSH 真实 token（每个都带兜底）
   const muted = 'var(--dsw-alias-label-tertiary, #81858c)'
+  /**
+   * 整块面板**不设字号**，与 DSH 其他面板一致地继承宿主值。
+   *
+   * 此前这里混用了三种字号：`mono` / `sectionTitle` 的 11.5px、`tab` 的 12px，以及
+   * 聚合表格、`<strong>`、列表项等**未设字号**的元素（继承宿主值）—— 同一屏里大小
+   * 不一。层级改由**字重与颜色**表达：`sectionTitle` 用 600 + 次要色，`mono` 只负责
+   * 等宽字体，不再动字号。
+   */
   const mono: React.CSSProperties = {
     fontFamily: 'var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace)',
-    fontSize: '11.5px',
   }
   if (probe.kind !== 'shown') {
     return (
@@ -446,7 +453,6 @@ export function ResearchProgressPanel({ sessionId, t }: PanelProps): JSX.Element
   }
   const sectionTitle: React.CSSProperties = {
     color: muted,
-    fontSize: '11.5px',
     letterSpacing: '0.04em',
     fontWeight: 600,
     marginBottom: '7px',
@@ -477,7 +483,6 @@ export function ResearchProgressPanel({ sessionId, t }: PanelProps): JSX.Element
     padding: '4px 9px 6px',
     marginBottom: '-1px',
     fontWeight: active ? 600 : 400,
-    fontSize: '12px',
     lineHeight: 1.4,
     fontFamily: 'inherit',
     maxWidth: '180px',
@@ -848,7 +853,7 @@ export function ResearchProgressPanel({ sessionId, t }: PanelProps): JSX.Element
         <div style={{ marginTop: '8px', color: muted }}>{t('progress.noReport')}</div>
       )}
 
-      <div style={{ marginTop: '10px', color: muted, fontSize: '11.5px' }}>{t('progress.footnote')}</div>
+      <div style={{ marginTop: '10px', color: muted }}>{t('progress.footnote')}</div>
     </div>
   )
 }
