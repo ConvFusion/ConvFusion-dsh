@@ -70,7 +70,10 @@ export const zh = {
   'community.notice.tokens': '{tokens} Token',
   'community.notice.files': '{count} 附件',
   'community.notice.oversize': '{count} 个超大未传',
+  'community.notice.renameFailed': '⚠️ 名字未更新：{reason}',
   'community.publish.title': '发布 {title}',
+  // 对话框标题里是**要发布的名字**（这项工作自己的名字）；与本机工作区名不同时指认一下
+  'community.publish.workspaceHint': '本机工作区：{workspace}',
   'community.publish.cost': '花费 {tokens} Token : ConvFusion.com',
   'community.publish.costUnknown': '成本未知',
   'community.publish.unknown': '未知',
@@ -119,6 +122,17 @@ export const zh = {
   'upload.reason.large-files': '单个文件 ≥10 MB：默认不上传，确认有用再勾选',
   'upload.reason.others': '未归类的文件：默认不上传',
   'community.action.seekMentor': '寻找指导',
+  // ── 出题模式（v0.6.0）：一个工作区可在两个方向上发布 ──────────────
+  // 两个按钮上下排列，顺序由角色定（导师 → 寻找学生在上）；已发布过则变「更新…」。
+  'community.action.seekStudent': '寻找学生',
+  'community.action.republishMentor': '更新指导',
+  'community.action.republishStudent': '更新学生',
+  'community.tip.publishTopic': '把这项选题发布到 ConvFusion.com，让学生能发现并出价加入。研究方法不会被上传。',
+  // 学生侧的动作（【可加入】列表行）
+  'community.action.bid': '出价',
+  'community.action.viewStudent': '学生',
+  'community.tip.bid': '向这个选题出价（免费，导师接受后才冻结押金）',
+  'community.tip.bidded': '已经出过价：正在等待导师响应',
   'community.action.republish': '更新',
   'community.action.publishing': '发布中…',
   'community.badge.inNetwork': '已在网络中',
@@ -135,6 +149,9 @@ export const zh = {
   'community.work.byAuthor': '作者 {name}',
   'community.tab.mine': '我的',
   'community.tab.mentor': '可指导',
+  // 【可加入】= 导师发布的选题（学生视角）。研究者只看得到 我的/可加入/指导中，
+  // 导师四个都看得到（2026-10 用户拍板）。
+  'community.tab.joinable': '可加入',
   'community.tab.mentorship': '指导中',
   'community.login.keyLabel': 'API Key 登录',
   'community.server.address': '服务器地址',
@@ -157,7 +174,6 @@ export const zh = {
   'community.badge.sample': '示例数据',
   'community.badge.charged': '已计费',
   'community.badge.registryUnavailable': '注册表不可用',
-  'community.badge.mentorRequired': '需要导师角色',
   'community.badge.signInRequired': '需要登录',
   'community.badge.addressChanged': '地址未保存',
   // 两级披露的界面术语（对齐业务：先免费判断相关性，再付费深入了解）：
@@ -197,6 +213,12 @@ export const zh = {
   'community.mentor.proposeTitle': '发起指导申请',
   'community.mentor.proposeFree': '发起免费',
   'community.mentor.proposeDone': '已发起，等待对方响应。',
+  // 学生侧的同一个对话框（【可加入】点【出价】）—— 逻辑一样，只是要写清
+  // "冻结的是**你**的押金"：两个方向都是学生出钱，但出价的人不同。
+  'community.mentor.bidTitle': '出价加入',
+  'community.mentor.bidNote':
+    '押金 {percent}%（{deposit} Token）由**你**在导师接受时冻结，成功条件由双方确认，其余 {success} Token 成果验证后支付。',
+  'community.mentor.bidDone': '已出价，等待导师响应。',
   // 导师侧只填总费用：押金比例由平台定（界面按平台建议算比例，不写死 20%）
   'community.mentor.feeTotal': '总费用',
   // 一段话说完"钱怎么分 + 成功条件谁定"：分两行会让对话框多一行高（2026-09 用户微调）
@@ -207,7 +229,10 @@ export const zh = {
   'community.tip.proposed': '已经发起过：这条申请正在等待对方响应',
   // 导师信息（Profile）：接受之前总得知道要跟谁合作
   'community.mentor.profileTitle': '导师信息',
+  // 方向 B（导师出题）里要判断人的是**导师**，看的是出价学生 —— 同一套结构、换个说法
+  'community.mentor.profileTitleResearcher': '学生信息',
   'community.mentor.profileEmpty': '该导师尚未填写研究简介。',
+  'community.mentor.profileEmptyResearcher': '该学生尚未填写研究简介。',
   'community.mentor.profileBio': '简介',
   'community.mentor.profileFields': '研究领域',
   'community.mentor.profileInterests': '研究兴趣',
@@ -215,18 +240,26 @@ export const zh = {
   'community.mentor.unknownParty': '未知用户',
   'community.mentor.untitledProject': '未命名项目',
   'community.mentor.mentorIs': '导师：{name}',
+  // 方向 B 里要判断/确认的对象是出价的学生
+  'community.mentor.researcherIs': '学生：{name}',
   // 「指导中」只留状态 + 费用数字：描述性文字（指导范围 / 成功条件 / 简介 / 机构）全部去掉
   'community.mentor.feeText': '{total} Token（押金 {deposit} · 成功 {success}）',
-  // 关系建立之后的**进展**（提案状态接受后就不再变了，光看它永远是"已接受"）：
-  // 按角色换称呼 —— 导师看自己的行不该写"导师已指导"。
+  // 关系建立之后的**进展**（提案状态接受后就不再变了，光看它永远是"已接受"）。
+  // `review_files` 数的是**非 owner 那一侧**：方向 A 是导师的指导产物，方向 B 是学生的交付 ——
+  // 所以四个说法都要有，不能只用"导师/学生"这两个词。
   'community.mentor.progress.studentWaiting': '等待指导意见',
   'community.mentor.progress.studentGot': '导师已指导',
   'community.mentor.progress.mentorWaiting': '待我指导',
   'community.mentor.progress.mentorDone': '我已指导',
-  // 「学生更新了 → 重新下载」的两态（判据：时间戳变大 / 文件数变，见 sync-watermarks.ts）
-  'community.mentor.studentNeverDownloaded': '还没下载过这个工作区，先下载一次',
-  'community.mentor.studentUpdated': '学生更新了文件，需要重新下载',
-  'community.mentor.studentDeleted': '学生删除了文件，需要重新下载',
+  'community.mentor.progress.iToDeliver': '待我交付',
+  'community.mentor.progress.iDelivered': '我已交付',
+  'community.mentor.progress.studentToDeliver': '等待学生交付',
+  'community.mentor.progress.studentDelivered': '学生已交付',
+  // 「对方更新了 → 重新下载」的两态（判据：时间戳变大 / 文件数变，见 sync-watermarks.ts）。
+  // 水位记的是 **owner 侧**，所以只有"下载 owner 侧"的一方（= 非 owner）看得到：措辞用"对方"。
+  'community.mentor.peerNeverDownloaded': '还没下载过这份工作区，先下载一次',
+  'community.mentor.peerUpdated': '对方更新了文件，需要重新下载',
+  'community.mentor.peerDeleted': '对方删除了文件，需要重新下载',
   'community.mentor.status.PROPOSED': '等待响应',
   'community.mentor.status.ACCEPTED': '已接受',
   'community.mentor.status.REJECTED': '已拒绝',
@@ -241,13 +274,19 @@ export const zh = {
   'community.mentor.badgeDone': '已处理',
   'community.mentor.badgeFailed': '未完成',
   'community.mentor.acceptDone': '已接受指导，冻结押金 {deposit} Token。',
+  // 方向 B：接受的人是导师，冻的是**学生**的押金（回执与 402 都不能写成"你的余额不足"）
+  'community.mentor.acceptDoneOther': '已接受，冻结学生的押金 {deposit} Token。',
   'community.mentor.acceptNoTokens': '可用 Token 不足 {deposit}，先获取 Token 再试。',
+  'community.mentor.acceptNoTokensOther': '学生的可用 Token 不足 {deposit}，无法接受；请学生充值后再试。',
   'community.mentor.rejectDone': '已拒绝这次申请。',
   // 接受指导的确认框（押金冻结 = 真正动 Token，不能点击即生效）
   'community.mentor.acceptConfirmTitle': '接受指导会冻结押金',
+  'community.mentor.acceptConfirmTitleOther': '接受会冻结学生的押金',
   'community.mentor.acceptConfirmBadge': '冻结 {deposit} Token',
+  'community.mentor.acceptConfirmBadgeOther': '学生冻结 {deposit} Token',
   'community.mentor.acceptConfirm': '确认接受',
   'community.mentor.acceptFreezeNote': '接受后冻结押金 {deposit} Token（仍是你的，只是暂不可用）。',
+  'community.mentor.acceptFreezeNoteOther': '接受后从**学生**的账户冻结押金 {deposit} Token；学生余额不足时会失败。',
   'community.mentor.acceptBalance': '当前可用余额：{balance} Token',
   // 指导闭环的文件交换（关系建立之后）
   // 下载 = 把服务器上的工作区快照 **只当成一个 ZIP 存下来**，写进用户选的 DSH 工作区
@@ -372,7 +411,7 @@ export const zh = {
   'community.tip.download': '下载这个项目的工作区快照（ZIP）',
   'community.tip.upload': '把我这一份工作区传回服务器，学生下载后继续',
   'community.hint.mentorSignIn': '登录后可发起或接受指导。',
-  'community.hint.mentorEmpty': '还没有指导申请 —— 在【可指导】里发起。',
+  'community.hint.mentorEmpty': '还没有指导申请 —— 在【可指导】里发起，或在【可加入】里出价。',
   'community.error.readMentor': '读取指导申请失败。',
 
   // 扣费确认：点【详情】先弹这个对话框，点「确认读取」才真的发请求、才扣费
@@ -420,7 +459,9 @@ export const zh = {
   'community.hint.mismatchProduction': '当前是生产环境，但地址指向本机 —— 你多半连的是自己电脑上的开发服务器。',
   'community.hint.mismatchDevelopment': '当前是开发环境，但地址指向线上服务器 —— 在开发机上操作线上数据有风险，请确认这是你想要的。',
   'community.hint.sampleFootnote': '示例数据，登录后可浏览并操作网络上的研究工作。',
-  'community.hint.mentorRequiresRole': '浏览可指导的研究工作需要导师角色（当前：{roles}）。',
+  // 【可指导】没有导师角色时**不再显示这个 Tab**（v0.6.0 用户要求），所以
+  // "需要导师角色"那条说明连同它的徽章一起删掉 —— 留着就是没人用的死文案。
+  'community.hint.noJoinable': '还没有导师发布选题。',
   'community.hint.registryUnavailable': '这台 DSH 没有提供工作区注册表。',
   'community.hint.loading': '正在读取…',
   'community.hint.loadingWork': '正在读取研究工作…',

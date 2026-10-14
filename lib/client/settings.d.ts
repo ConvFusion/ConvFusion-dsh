@@ -224,6 +224,15 @@ export declare function loadSettingsState(send?: SettingsSend, options?: {
     timeoutMs?: number;
 }, t?: Translate): Promise<SettingsLoad>;
 export declare function ConvFusionProjectSettings({ scope, t, send, }: ConvFusionSettingsProps): JSX.Element;
+/** **本机**研究工作（宿主 `LocalWorkItem` 的镜像）—— 数据来自磁盘，不需要登录。 */
+/**
+ * 一项研究工作的**方向**（宿主 `ProjectDirection` 的镜像）。
+ *
+ * 两个方向共用同一套项目 / 提案 / 合同结构，差别只在谁拥有项目、谁发起、谁接受
+ * （两个方向都是学生出钱、论文主体是学生）。缺字段 → 宿主已归一到 `SEEK_MENTOR`
+ * （= 今天唯一存在的行为）。
+ */
+type HostProjectDirection = 'SEEK_MENTOR' | 'SEEK_STUDENT';
 /**
  * 一个**候选下载目标工作区**的校验结果（宿主 `mentor/downloadState` 的 `items[]` 镜像）。
  *
@@ -271,12 +280,28 @@ interface HostProposalParty {
     profile?: HostMentorProfile | null;
 }
 type HostProposalStatus = 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED';
-/** 一条指导提案：我发起的（我是 mentor）/ 我收到的（我是 researcher）。 */
+/** 一条指导提案：我发起的 / 我收到的（两个方向共用这个结构）。 */
 interface HostProposal {
     id: string;
     projectId: string;
-    /** 项目标题（后端 enrich 后才有；缺 → null，界面写"未命名项目"）。 */
+    /**
+     * 这条提案所属的方向（服务器的 `direction`）。
+     *
+     * ⚠️ 界面**必须**靠它（而不是"我是什么角色"）判断：谁能接受、我上传落在哪一侧、
+     * 进展文案怎么称呼。旧服务器缺字段 → 宿主已归一到 `SEEK_MENTOR`。
+     */
+    direction: HostProjectDirection;
+    /**
+     * 谁发起了这次提案（服务器的 `proposed_by_id`）。
+     *
+     * `null` = 旧服务器不返回 → 界面按方向推断（`SEEK_MENTOR` → 导师发起；
+     * `SEEK_STUDENT` → 学生发起）。"谁能接受"= **未发起的那一方**。
+     */
+    proposedById: string | null;
+    /** 项目标题（后端 enrich 后才有；缺 → null）—— 旧服务器的兜底，见 {@link HostProposal.workName}。 */
     projectTitle: string | null;
+    /** **这项研究工作的名字**（服务器的 `work_name`）：列表该显示的就是它。 */
+    workName?: string | null;
     mentor: HostProposalParty | null;
     researcher: HostProposalParty | null;
     guidanceScope: string;
@@ -289,36 +314,66 @@ interface HostProposal {
     };
     status: HostProposalStatus;
     /**
-     * 关系建立（ACCEPTED）后，导师已上传的指导结果条数（`review/` 下的文件数）。
+     * 关系建立（ACCEPTED）后，**非 owner 那一侧**交付的文件数（服务器 `review_files`）。
      *
-     * 提案状态接受之后就不再变了，而用户要看的是**指导进展**；这个事实只在项目
-     * 文件里。宿主在 `mentor/list` 里补齐；`null` = 没查到（未知），不是"没有"。
+     * 提案状态接受之后就不再变了，而用户要看的是**指导进展**；这个事实只在项目文件里。
+     * 宿主在 `mentor/list` 里补齐；`null` = 没查到（未知），不是"没有"。
+     *
+     * ⚠️ v0.6.0：它是**非 owner 侧**的计数 —— 方向 A 下是导师的指导产物，
+     * **方向 B 下是学生的交付**（项目 owner 是导师）。所以进展文案要按方向换称呼。
      */
     reviewFiles?: number | null;
+    /** **owner 那一侧**当前的文件数（服务器 `workspace_files`；与上面同一套三态）。 */
+    workspaceFiles?: number | null;
+    /** **owner 那一侧**最后一次上传的时间（服务器 `workspace_updated_at`）。 */
+    workspaceUpdatedAt?: string | null;
     /**
-     * **宿主算好的**："导师手里这份工作区是不是最新"（判别联合，见 `sync-watermarks.ts`）。
+     * **非 owner 那一侧**最后一次上传的时间（服务器 `counterpart_updated_at`）。
      *
-     * - `{ neverDownloaded: true }` —— 本地没有水位 = **从没成功下载过** → 提示"先下载"；
-     * - `{ changed: true, reason: 'uploaded' | 'deleted' }` —— 下载过、学生又动过 → 提示重新下载；
+     * 与 `workspaceUpdatedAt` 配对，只是**另一侧**：方向 B 下导师靠它发现
+     * "学生又交付了"。界面不直接用它 —— 宿主把它比进 `syncBySide.mentor`。
+     */
+    counterpartUpdatedAt?: string | null;
+    /**
+     * **宿主算好的**"我要下载的那一侧变了吗"，**按侧给**（判别联合，见 `sync-watermarks.ts`）。
+     *
+     * - `{ neverDownloaded: true }` —— 本地没有**这一侧**的水位 = 从没下载过这一侧 → 提示"先下载"；
+     * - `{ changed: true, reason: 'uploaded' | 'deleted' }` —— 下载过、对方又动过 → 提示重新下载；
      * - `{ changed: false }` —— 下载过、两个判据都说没动；
      * - `null` —— **无从判断**（旧服务器不给字段 / 服务器说不可知 / 只有一半判据可用）。
      *
-     * ⚠️ `undefined` = 旧宿主不返回这个字段（协议 <22）→ 界面**不提示**，
-     * 但那不等于"没更新"，所以只能按"拿不到就不提示"处理，不许编成 false。
+     * ⚠️ 为什么两侧都要：界面取**自己下载的那一侧**（`otherSide`），而那是哪一侧由**方向**决定
+     *   —— 方向 A 的导师下 `owner` 侧，方向 B 的导师下 `mentor` 侧。
      *
-     * ⚠️ **"从没下载过"与"无从判断"必须分开**（2026-10 用户指出）：前者手里没副本，
-     * 该提示下载；后者是判不出来，不该编造。早先两者都在 `null` 里 → 导师第一次进
-     * 【指导中】一声不吭，而学生明明更新过了。
+     * ⚠️ `undefined` = 旧宿主不返回这个字段 → 界面**不提示**（那不等于"没更新"），
+     * 不许编成 false。
      */
-    sync?: {
-        neverDownloaded: true;
-    } | {
-        changed: boolean;
-        reason: 'uploaded' | 'deleted' | null;
+    syncBySide?: {
+        owner: HostSyncCheck;
+        mentor: HostSyncCheck;
     } | null;
+    /**
+     * **旧形状**（协议 < 25）：只有 owner 侧这一个判读结果；界面为兼容继续认它。
+     *
+     * 只在 `syncBySide` 缺失时读 —— 两份都在时以 `syncBySide` 为准。
+     */
+    sync?: HostSyncCheck;
     expiresAt: string;
     createdAt: string;
 }
+/**
+ * 一侧的"变了吗"判读结果（宿主 `checkSideChange` 的镜像）。
+ *
+ * ⚠️ **"从没下载过"与"无从判断"必须分开**（2026-10 用户指出）：前者手里没副本、
+ * 该提示下载；后者是判不出来，不该编造。早先两者都在 `null` 里 → 导师第一次进
+ * 【指导中】一声不吭，而学生明明更新过了。
+ */
+type HostSyncCheck = {
+    neverDownloaded: true;
+} | {
+    changed: boolean;
+    reason: 'uploaded' | 'deleted' | null;
+} | null;
 /**
  * 复制文本到剪贴板。
  *

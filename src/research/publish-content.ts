@@ -21,7 +21,18 @@
  *                       Open Questions  open_problems
  * research/evidence/    id/name/status  evidence[]（资产清单）
  * 「研究进展」快照       阶段 / 成熟度    stage / progress
+ * 论文（latex/main.tex  论文标题          paper.title + **work_name**
+ *  优先，其次 paper.md）
+ * project.md            Topic           work_name（没有论文时）
  * ```
+ *
+ * ## `work_name`：这项研究工作的名字
+ *
+ * 网络里的列表（【可指导】/【可加入】/【指导中】）显示的"研究工作名称"来自**服务器**
+ * ——看那些列表的人本机不一定有这份 workspace，所以名字只能由发布方在上送时给。
+ * 取值规则（`research/work-name.ts`）：**有论文用论文标题，否则用确定的研究主题**，
+ * 都没有才退回本机工作区名。服务端把它投影成 `work_name`（见
+ * `dev-notes/v0.6.0-work-name-api.md`）。
  *
  * ## 两条硬规则
  *
@@ -35,6 +46,7 @@
  */
 
 import { loadProjectFile } from './project.js'
+import { researchWorkName, type WorkNameSource } from './work-name.js'
 import type { ResearchProject } from './data.js'
 import { loadResearchState } from './research-state.js'
 import { listEvidence } from './evidence.js'
@@ -81,6 +93,13 @@ export const PUBLISH_EVIDENCE_LIMIT = 50
 /** 服务器的内容 Envelope（只列我们真正会填的字段）。 */
 export interface PublishContent {
   schema_version: 1
+  /**
+   * **这项研究工作的名字**：有论文用论文标题，否则用确定的研究主题。
+   *
+   * 服务端把它投影成列表里的 `work_name`（内容 Envelope 是 `extra="allow"`，
+   * 所以这个字段今天就能收；投影需要后端配合，见 `dev-notes/v0.6.0-work-name-api.md`）。
+   */
+  work_name?: string
   research_question?: string
   summary?: string
   motivation?: string
@@ -89,7 +108,13 @@ export interface PublishContent {
   method_overview?: string
   open_problems?: string[]
   evidence?: Array<{ id: string; name: string; status: string }>
-  paper?: { present: boolean }
+  /**
+   * 论文。`present` = 有没有论文正文；`title` = 论文标题（有则给）。
+   *
+   * ⚠️ `paper` 本来就是 `dict` 字段（服务器不解释内容），所以 `title` 是**事实**
+   * 而非新接口；网页端将来想显示"有论文：<标题>"可以直接用。
+   */
+  paper?: { present: boolean; title?: string }
   research_fields?: string[]
   stage?: ServerStage
   progress?: number
@@ -117,6 +142,13 @@ export interface PublishContentInput {
   progress: WorkspaceProgress
   /** 组装时刻（ISO）。 */
   generatedAt: string
+  /**
+   * 研究工作名（可注入；不给就按 `research/work-name.ts` 的规则从磁盘推导）。
+   *
+   * 之所以可注入：① 单测要能钉住"有论文用论文标题"这条规则而不造一堆文件；
+   * ② 发布流程已经算过一次的东西不该在这里再算一遍（同一份事实两个来源会漂）。
+   */
+  workName?: string
   /** 注入点（测试用；缺省从磁盘读）。 */
   project?: ResearchProject | null
   state?: ResearchStateDocument | null
@@ -143,6 +175,10 @@ function dimension(state: ResearchStateDocument | null, name: string): string {
 export function buildPublishContent(input: PublishContentInput): {
   content: PublishContent
   missing: string[]
+  /** 这项研究工作的名字（`content.work_name` 的同一个值；发布流程用它当项目标题）。 */
+  workName: string
+  /** 名字是从哪来的（`paper` / `topic` / `fallback`）—— 回执与诊断要能说清。 */
+  workNameSource: WorkNameSource
 } {
   const project = input.project === undefined ? loadProjectFile(input.researchRoot) : input.project
   const state = input.state === undefined ? loadResearchState(input.researchRoot) : input.state
@@ -186,8 +222,17 @@ export function buildPublishContent(input: PublishContentInput): {
   const stageId = input.progress.progress.stage?.id ?? null
   const stage = stageId ? PROCESS_STAGE_TO_SERVER_STAGE[stageId] : undefined
 
+  /*
+   * 这项研究工作的名字。**随内容一起上送**，因为网络列表读的是服务器上的数据 ——
+   * 看列表的人本机不一定有这份 workspace（见文件头）。
+   */
+  const work = input.workName
+    ? { name: input.workName, source: 'fallback' as WorkNameSource }
+    : researchWorkName(input.researchRoot, input.workspaceTitle)
+
   const content: PublishContent = {
     schema_version: 1,
+    work_name: work.name,
     ...(researchQuestion ? { research_question: researchQuestion } : {}),
     ...(project?.topic ? { summary: clip(project.topic, PUBLISH_SUMMARY_LIMIT) } : {}),
     ...(motivation ? { motivation } : {}),
@@ -198,7 +243,11 @@ export function buildPublishContent(input: PublishContentInput): {
     ...(evidence.length
       ? { evidence: evidence.slice(0, PUBLISH_EVIDENCE_LIMIT).map((e) => ({ id: e.id, name: e.name, status: e.status })) }
       : {}),
-    paper: { present: input.progress.paper },
+    paper: {
+      present: input.progress.paper,
+      // 论文标题只在**确实读到**时给（`work.source === 'paper'`）——不编
+      ...(work.paperTitle ? { title: work.paperTitle } : {}),
+    },
     ...(fields.length ? { research_fields: fields } : {}),
     ...(stage ? { stage } : {}),
     progress: Math.min(Math.max(input.progress.overall, 0), 1),
@@ -229,5 +278,5 @@ export function buildPublishContent(input: PublishContentInput): {
   if (!coreIdea) missing.push('core_idea')
   if (!methodOverview) missing.push('method_overview')
   if (!fields.length) missing.push('research_fields')
-  return { content, missing }
+  return { content, missing, workName: work.name, workNameSource: work.source }
 }

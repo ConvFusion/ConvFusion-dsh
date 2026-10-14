@@ -8,8 +8,20 @@
  * **新建一个项目** —— 网络里很快会出现同一个研究的一堆副本，而且没有一个能持续更新。
  *
  * ```text
- * <研究根目录（realpath）>  →  { projectId, serverUrl, accountId, version, … }
+ * <研究根目录（realpath）> + <方向>  →  { projectId, serverUrl, accountId, version, … }
  * ```
+ *
+ * ## 为什么键里还有**方向**（v0.6.0）
+ *
+ * 一个工作区可以在**两个方向**上发布，而且是**两个不同的服务器项目**：
+ *
+ * - `SEEK_MENTOR`：学生把自己的研究发布出去求指导（【我的】→【寻找指导】）；
+ * - `SEEK_STUDENT`：导师把自己的选题发布出去招学生（【我的】→【寻找学生】）。
+ *
+ * 早先一条工作区只存一条记录 —— 在同一台上先点【寻找指导】再点【寻找学生】，
+ * 后者会**复用前者的 `project_id`**，把"学生求指导的研究"顶成"导师招学生的选题"。
+ * 所以键是 `(研究根目录, 方向)`；旧文件里的记录没有方向，读作 `SEEK_MENTOR`
+ * （那时只有这一个方向）。
  *
  * ## 为什么存在 `$DSH_HOME` 而不是工作区里
  *
@@ -29,8 +41,24 @@
  * 与定制文件同款：坏 JSON / 非对象 / 值类型不对 → 当作空表（**绝不**让插件起不来），
  * 写入用「临时文件 + rename」，避免半截文件。
  */
+import type { ProjectDirection } from '../server-client.js';
 /** 一条"已发布到服务器"的记录。 */
 export interface PublishedRecord {
+    /**
+     * 这条记录属于哪个方向（见 `ProjectDirection`）。
+     *
+     * ⚠️ 旧的落盘文件里没有这个字段 → 读作 `SEEK_MENTOR`（那时只有这一个方向），
+     * 不丢记录、也不把它误判成导师出题。
+     */
+    direction: ProjectDirection;
+    /**
+     * 上次发布时用的**研究工作名**（项目标题）。
+     *
+     * 名字会随"论文起名 / 主题演进"变化，而项目标题只在建项目时写过一次 ——
+     * 下次发布时拿它比一比，不同就 `PUT` 改名（见 `work/publish`）。
+     * 旧记录没有这个字段 → 无从比较 → 会改名一次并记下来。
+     */
+    title?: string;
     /** 服务器上的 Research Project id。 */
     projectId: string;
     /** 发布时用的服务器地址（归一后的根地址）。 */
@@ -69,14 +97,21 @@ export interface PublishedRecord {
      */
     selection?: string[];
 }
+/** 组装表键（落盘 / 遍历用）。 */
+export declare function publishedStoreKey(researchRoot: string, direction: ProjectDirection): string;
+/** 拆表键；不带分隔符的旧键 → 研究根本身 + `SEEK_MENTOR`（旧文件只有这一个方向）。 */
+export declare function parsePublishedStoreKey(key: string): {
+    researchRoot: string;
+    direction: ProjectDirection;
+};
 export interface PublishedStore {
-    /** 读一条记录（研究根目录 → 记录）。 */
-    get(researchRoot: string): PublishedRecord | undefined;
-    /** 写一条记录（整表落盘）。 */
+    /** 读一条记录（研究根目录 + 方向 → 记录）。方向省略 = `SEEK_MENTOR`（今天的行为）。 */
+    get(researchRoot: string, direction?: ProjectDirection): PublishedRecord | undefined;
+    /** 写一条记录（整表落盘）；方向取自 `record.direction`。 */
     set(researchRoot: string, record: PublishedRecord): void;
     /** 删一条记录（例如服务器上项目已不存在时）。 */
-    remove(researchRoot: string): void;
-    /** 全部记录（只读快照）。 */
+    remove(researchRoot: string, direction?: ProjectDirection): void;
+    /** 全部记录（只读快照）；键是 {@link publishedStoreKey} —— 同一个根**可以出现两次**。 */
     all(): Record<string, PublishedRecord>;
     /** 落盘位置（设置页/日志展示用）。 */
     readonly path: string;
@@ -87,6 +122,11 @@ export interface PublishedStore {
  * @param resolvePath 延迟求值（与 Skill 定制同款：设置里改了目录立刻生效）
  */
 export declare function createFilePublishedStore(resolvePath: () => string): PublishedStore;
-/** 内存存储（离线验证 / 精简环境）。 */
+/**
+ * 内存存储（离线验证 / 精简环境）。
+ *
+ * `seed` 的键可以是**裸研究根**（旧写法，按 `SEEK_MENTOR` 收）或
+ * {@link publishedStoreKey} 的完整键；记录自己带的 `direction` 优先。
+ */
 export declare function createMemoryPublishedStore(seed?: Record<string, PublishedRecord>): PublishedStore;
 //# sourceMappingURL=published-store.d.ts.map

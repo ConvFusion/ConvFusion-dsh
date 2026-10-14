@@ -8,8 +8,20 @@
  * **新建一个项目** —— 网络里很快会出现同一个研究的一堆副本，而且没有一个能持续更新。
  *
  * ```text
- * <研究根目录（realpath）>  →  { projectId, serverUrl, accountId, version, … }
+ * <研究根目录（realpath）> + <方向>  →  { projectId, serverUrl, accountId, version, … }
  * ```
+ *
+ * ## 为什么键里还有**方向**（v0.6.0）
+ *
+ * 一个工作区可以在**两个方向**上发布，而且是**两个不同的服务器项目**：
+ *
+ * - `SEEK_MENTOR`：学生把自己的研究发布出去求指导（【我的】→【寻找指导】）；
+ * - `SEEK_STUDENT`：导师把自己的选题发布出去招学生（【我的】→【寻找学生】）。
+ *
+ * 早先一条工作区只存一条记录 —— 在同一台上先点【寻找指导】再点【寻找学生】，
+ * 后者会**复用前者的 `project_id`**，把"学生求指导的研究"顶成"导师招学生的选题"。
+ * 所以键是 `(研究根目录, 方向)`；旧文件里的记录没有方向，读作 `SEEK_MENTOR`
+ * （那时只有这一个方向）。
  *
  * ## 为什么存在 `$DSH_HOME` 而不是工作区里
  *
@@ -32,9 +44,25 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import type { ProjectDirection } from '../server-client.js'
 
 /** 一条"已发布到服务器"的记录。 */
 export interface PublishedRecord {
+  /**
+   * 这条记录属于哪个方向（见 `ProjectDirection`）。
+   *
+   * ⚠️ 旧的落盘文件里没有这个字段 → 读作 `SEEK_MENTOR`（那时只有这一个方向），
+   * 不丢记录、也不把它误判成导师出题。
+   */
+  direction: ProjectDirection
+  /**
+   * 上次发布时用的**研究工作名**（项目标题）。
+   *
+   * 名字会随"论文起名 / 主题演进"变化，而项目标题只在建项目时写过一次 ——
+   * 下次发布时拿它比一比，不同就 `PUT` 改名（见 `work/publish`）。
+   * 旧记录没有这个字段 → 无从比较 → 会改名一次并记下来。
+   */
+  title?: string
   /** 服务器上的 Research Project id。 */
   projectId: string
   /** 发布时用的服务器地址（归一后的根地址）。 */
@@ -74,14 +102,37 @@ export interface PublishedRecord {
   selection?: string[]
 }
 
+/**
+ * 表键 = `<研究根目录>\u0000<方向>`。
+ *
+ * 用 NUL 而不是 `/` 或 `|`：研究根是**绝对路径**，任何可打印字符都可能出现在里面，
+ * 而 NUL 不可能出现在路径里（`realpath` 的结果里不会带它）。
+ */
+const KEY_SEP = '\u0000'
+
+/** 组装表键（落盘 / 遍历用）。 */
+export function publishedStoreKey(researchRoot: string, direction: ProjectDirection): string {
+  return `${researchRoot}${KEY_SEP}${direction}`
+}
+
+/** 拆表键；不带分隔符的旧键 → 研究根本身 + `SEEK_MENTOR`（旧文件只有这一个方向）。 */
+export function parsePublishedStoreKey(key: string): { researchRoot: string; direction: ProjectDirection } {
+  const at = key.indexOf(KEY_SEP)
+  if (at < 0) return { researchRoot: key, direction: 'SEEK_MENTOR' }
+  return {
+    researchRoot: key.slice(0, at),
+    direction: key.slice(at + KEY_SEP.length) === 'SEEK_STUDENT' ? 'SEEK_STUDENT' : 'SEEK_MENTOR',
+  }
+}
+
 export interface PublishedStore {
-  /** 读一条记录（研究根目录 → 记录）。 */
-  get(researchRoot: string): PublishedRecord | undefined
-  /** 写一条记录（整表落盘）。 */
+  /** 读一条记录（研究根目录 + 方向 → 记录）。方向省略 = `SEEK_MENTOR`（今天的行为）。 */
+  get(researchRoot: string, direction?: ProjectDirection): PublishedRecord | undefined
+  /** 写一条记录（整表落盘）；方向取自 `record.direction`。 */
   set(researchRoot: string, record: PublishedRecord): void
   /** 删一条记录（例如服务器上项目已不存在时）。 */
-  remove(researchRoot: string): void
-  /** 全部记录（只读快照）。 */
+  remove(researchRoot: string, direction?: ProjectDirection): void
+  /** 全部记录（只读快照）；键是 {@link publishedStoreKey} —— 同一个根**可以出现两次**。 */
   all(): Record<string, PublishedRecord>
   /** 落盘位置（设置页/日志展示用）。 */
   readonly path: string
@@ -100,6 +151,9 @@ function parseRecord(raw: unknown): PublishedRecord | undefined {
   const version = typeof raw.version === 'number' && Number.isFinite(raw.version) ? raw.version : 0
   if (!projectId || !serverUrl) return undefined
   return {
+    // 缺方向 = 旧记录（那时只有 SEEK_MENTOR 一个方向），不猜成导师出题
+    direction: raw.direction === 'SEEK_STUDENT' ? 'SEEK_STUDENT' : 'SEEK_MENTOR',
+    ...(typeof raw.title === 'string' && raw.title.trim() ? { title: raw.title.trim() } : {}),
     projectId,
     serverUrl,
     accountId,
@@ -133,9 +187,11 @@ function parseTable(text: string): Record<string, PublishedRecord> {
   }
   if (!isRecord(data)) return {}
   const out: Record<string, PublishedRecord> = {}
-  for (const [root, value] of Object.entries(data)) {
+  for (const [key, value] of Object.entries(data)) {
     const record = parseRecord(value)
-    if (record) out[root] = record
+    // ⚠️ 键用**解析后**的规范形式回写：旧文件（裸研究根做键）读进来后落到
+    // `(root, SEEK_MENTOR)` 上，于是"再存一次就带上方向了"，不会两套键并存。
+    if (record) out[publishedStoreKey(parsePublishedStoreKey(key).researchRoot, record.direction)] = record
   }
   return out
 }
@@ -163,16 +219,17 @@ export function createFilePublishedStore(resolvePath: () => string): PublishedSt
     renameSync(tmp, path)
   }
   return {
-    get: (root) => load()[root],
+    get: (root, direction = 'SEEK_MENTOR') => load()[publishedStoreKey(root, direction)],
     set: (root, record) => {
       const table = load()
-      table[root] = record
+      table[publishedStoreKey(root, record.direction)] = record
       save(table)
     },
-    remove: (root) => {
+    remove: (root, direction = 'SEEK_MENTOR') => {
       const table = load()
-      if (!(root in table)) return
-      delete table[root]
+      const key = publishedStoreKey(root, direction)
+      if (!(key in table)) return
+      delete table[key]
       save(table)
     },
     all: () => load(),
@@ -182,16 +239,26 @@ export function createFilePublishedStore(resolvePath: () => string): PublishedSt
   }
 }
 
-/** 内存存储（离线验证 / 精简环境）。 */
+/**
+ * 内存存储（离线验证 / 精简环境）。
+ *
+ * `seed` 的键可以是**裸研究根**（旧写法，按 `SEEK_MENTOR` 收）或
+ * {@link publishedStoreKey} 的完整键；记录自己带的 `direction` 优先。
+ */
 export function createMemoryPublishedStore(seed: Record<string, PublishedRecord> = {}): PublishedStore {
-  const table: Record<string, PublishedRecord> = { ...seed }
+  const table: Record<string, PublishedRecord> = {}
+  for (const [key, record] of Object.entries(seed)) {
+    const parsed = parsePublishedStoreKey(key)
+    const direction = record.direction ?? parsed.direction
+    table[publishedStoreKey(parsed.researchRoot, direction)] = { ...record, direction }
+  }
   return {
-    get: (root) => table[root],
+    get: (root, direction = 'SEEK_MENTOR') => table[publishedStoreKey(root, direction)],
     set: (root, record) => {
-      table[root] = record
+      table[publishedStoreKey(root, record.direction)] = record
     },
-    remove: (root) => {
-      delete table[root]
+    remove: (root, direction = 'SEEK_MENTOR') => {
+      delete table[publishedStoreKey(root, direction)]
     },
     all: () => ({ ...table }),
     path: '(memory)',

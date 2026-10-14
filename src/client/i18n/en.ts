@@ -68,7 +68,11 @@ export const en = {
   'community.notice.tokens': '{tokens} Token',
   'community.notice.files': '{count} attachment(s)',
   'community.notice.oversize': '{count} too large to upload',
+  'community.notice.renameFailed': '⚠️ Name not updated: {reason}',
   'community.publish.title': 'Publish {title}',
+  // The dialog head carries the **name being published** (the work's own name); when it
+  // differs from the local workspace name, say which workspace this is.
+  'community.publish.workspaceHint': 'Local workspace: {workspace}',
   'community.publish.cost': 'Costs {tokens} Token : ConvFusion.com',
   'community.publish.costUnknown': 'Cost unknown',
   'community.publish.unknown': 'unknown',
@@ -116,6 +120,18 @@ export const en = {
   'upload.reason.large-files': 'Single files ≥10 MB: not uploaded by default; select if genuinely useful',
   'upload.reason.others': 'Unclassified files: not uploaded by default',
   'community.action.seekMentor': 'Find a mentor',
+  // ── Topic mode (v0.6.0): one workspace can be published in two directions ──
+  // The two buttons are stacked, order decided by role (mentor → "Find students" on top);
+  // once published in a direction the button turns into "Update …".
+  'community.action.seekStudent': 'Find students',
+  'community.action.republishMentor': 'Update mentor post',
+  'community.action.republishStudent': 'Update topic post',
+  'community.tip.publishTopic': 'Publish this topic to ConvFusion.com so students can discover it and bid to join. Research methods are never uploaded.',
+  // Student-side actions (rows in "Joinable")
+  'community.action.bid': 'Bid',
+  'community.action.viewStudent': 'Student',
+  'community.tip.bid': 'Bid on this topic (free; the deposit is only frozen if the mentor accepts)',
+  'community.tip.bidded': 'Already bid: awaiting the mentor’s response',
   'community.action.republish': 'Update',
   'community.action.publishing': 'Publishing…',
   'community.badge.inNetwork': 'On the network',
@@ -131,6 +147,9 @@ export const en = {
   'community.work.byAuthor': 'by {name}',
   'community.tab.mine': 'Mine',
   'community.tab.mentor': 'Can mentor',
+  // "Joinable" = topics published by mentors (student view). A researcher only sees
+  // Mine / Joinable / Mentorship; a mentor sees all four.
+  'community.tab.joinable': 'Joinable',
   'community.tab.mentorship': 'Mentorship',
   'community.login.keyLabel': 'Sign in with API key',
   'community.server.address': 'Server address',
@@ -152,7 +171,6 @@ export const en = {
   'community.badge.sample': 'Sample data',
   'community.badge.charged': 'Charged',
   'community.badge.registryUnavailable': 'Registry unavailable',
-  'community.badge.mentorRequired': 'Mentor role required',
   'community.badge.signInRequired': 'Sign-in required',
   'community.badge.addressChanged': 'Address not saved',
   // Two disclosure levels, named for what the reader is doing:
@@ -188,6 +206,12 @@ export const en = {
   'community.mentor.proposeTitle': 'Offer mentorship',
   'community.mentor.proposeFree': 'Free to offer',
   'community.mentor.proposeDone': 'Offered; waiting for their response.',
+  // The student side of the same dialog (bid on a mentor-published topic): same logic,
+  // but it must say plainly that the deposit frozen on acceptance is **theirs**.
+  'community.mentor.bidTitle': 'Bid to join',
+  'community.mentor.bidNote':
+    'A {percent}% deposit ({deposit} Token) is frozen from **your** account when the mentor accepts, the two sides confirm the success condition, and the remaining {success} Token is paid once the outcome is verified.',
+  'community.mentor.bidDone': 'Bid placed; waiting for the mentor’s response.',
   // The mentor only sets the total: the deposit ratio is platform policy
   'community.mentor.feeTotal': 'Total fee',
   'community.mentor.feeNote':
@@ -196,7 +220,11 @@ export const en = {
   'community.tip.propose': 'Offer to mentor this work (free; the deposit is only frozen if they accept)',
   'community.tip.proposed': 'Already offered: this request is awaiting their response',
   'community.mentor.profileTitle': 'Mentor profile',
+  // In the mentor-topic direction the person being judged is the **mentor**, and the
+  // party they look at is the bidding student — same structure, different wording.
+  'community.mentor.profileTitleResearcher': 'Student profile',
   'community.mentor.profileEmpty': 'This mentor has not filled in a research profile yet.',
+  'community.mentor.profileEmptyResearcher': 'This student has not filled in a research profile yet.',
   'community.mentor.profileBio': 'About',
   'community.mentor.profileFields': 'Research fields',
   'community.mentor.profileInterests': 'Research interests',
@@ -204,15 +232,25 @@ export const en = {
   'community.mentor.unknownParty': 'Unknown user',
   'community.mentor.untitledProject': 'Untitled project',
   'community.mentor.mentorIs': 'Mentor: {name}',
+  'community.mentor.researcherIs': 'Student: {name}',
   // The Mentorship tab keeps only status + fee numbers
   'community.mentor.feeText': '{total} Token (deposit {deposit} · success {success})',
+  // Progress after the relationship exists. `review_files` counts the **non-owner**
+  // side: in direction A that is the mentor's guidance, in direction B the student's
+  // delivery — so all four phrasings are needed, not just mentor/student.
   'community.mentor.progress.studentWaiting': 'Awaiting guidance',
   'community.mentor.progress.studentGot': 'Mentor has given guidance',
   'community.mentor.progress.mentorWaiting': 'Guidance pending',
   'community.mentor.progress.mentorDone': 'Guidance delivered',
-  'community.mentor.studentNeverDownloaded': 'Not downloaded yet — fetch the workspace first.',
-  'community.mentor.studentUpdated': 'Student updated files — re-download.',
-  'community.mentor.studentDeleted': 'Student deleted files — re-download.',
+  'community.mentor.progress.iToDeliver': 'I still need to deliver',
+  'community.mentor.progress.iDelivered': 'I have delivered',
+  'community.mentor.progress.studentToDeliver': 'Waiting for the student to deliver',
+  'community.mentor.progress.studentDelivered': 'Student has delivered',
+  // The watermark is on the **owner** side, so only the party that downloads that side
+  // (the non-owner) sees these — hence "the other side", not "the student".
+  'community.mentor.peerNeverDownloaded': 'This workspace has not been downloaded yet — download it first.',
+  'community.mentor.peerUpdated': 'The other side updated files — re-download.',
+  'community.mentor.peerDeleted': 'The other side deleted files — re-download.',
   'community.mentor.status.PROPOSED': 'Awaiting response',
   'community.mentor.status.ACCEPTED': 'Accepted',
   'community.mentor.status.REJECTED': 'Declined',
@@ -227,12 +265,19 @@ export const en = {
   'community.mentor.badgeDone': 'Done',
   'community.mentor.badgeFailed': 'Failed',
   'community.mentor.acceptDone': 'Mentorship accepted; {deposit} Token deposit frozen.',
+  // Direction B: the acceptor is the mentor and the deposit frozen is the **student's**
+  // (neither the receipt nor the 402 may read as "your balance is too low").
+  'community.mentor.acceptDoneOther': 'Accepted; the student’s {deposit} Token deposit is frozen.',
   'community.mentor.acceptNoTokens': 'Need {deposit} more available Tokens; get Tokens and retry.',
+  'community.mentor.acceptNoTokensOther': 'The student has fewer than {deposit} available Tokens — cannot accept; ask them to top up.',
   'community.mentor.rejectDone': 'Request declined.',
   'community.mentor.acceptConfirmTitle': 'Accepting freezes a deposit',
+  'community.mentor.acceptConfirmTitleOther': 'Accepting freezes the student’s deposit',
   'community.mentor.acceptConfirmBadge': 'Freeze {deposit} Token',
+  'community.mentor.acceptConfirmBadgeOther': 'Freeze {deposit} Token from the student',
   'community.mentor.acceptConfirm': 'Confirm accept',
   'community.mentor.acceptFreezeNote': 'Accepting freezes a {deposit} Token deposit (still yours, just unavailable).',
+  'community.mentor.acceptFreezeNoteOther': 'Accepting freezes a {deposit} Token deposit from the **student**’s account; it fails if the student lacks the balance.',
   'community.mentor.acceptBalance': 'Available balance: {balance} Token',
   'community.exchange.downloadTitle': 'Download into a workspace',
   'community.exchange.sizeBadge': '{files} files · {size}',
@@ -348,7 +393,7 @@ Boundary: only touch paths inside this workspace; do not delete the archive itse
   'community.tip.download': 'Download this project workspace snapshot (ZIP)',
   'community.tip.upload': 'Send my copy of the workspace back so the student can continue',
   'community.hint.mentorSignIn': 'Sign in to send or accept mentorship requests.',
-  'community.hint.mentorEmpty': 'No mentorship requests yet — offer one under Mentorable.',
+  'community.hint.mentorEmpty': 'No mentorship requests yet — offer one under Can mentor, or bid under Joinable.',
   'community.error.readMentor': 'Failed to load mentorship requests.',
 
   // Charged-action confirmation: clicking Brief only opens this dialog; the request (and the charge) happens on confirm
@@ -395,7 +440,9 @@ Boundary: only touch paths inside this workspace; do not delete the archive itse
   'community.hint.mismatchProduction': 'This is the production environment but the address points at localhost — you are most likely connected to a development server on this machine.',
   'community.hint.mismatchDevelopment': 'This is the development environment but the address points at the live server — acting on live data from a development machine is risky; please confirm this is intended.',
   'community.hint.sampleFootnote': 'Sample data; sign in to browse and act on research work from the network.',
-  'community.hint.mentorRequiresRole': 'Browsing mentorable research work requires the mentor role (current: {roles}).',
+  // "Can mentor" is hidden entirely without the mentor role (v0.6.0), so the
+  // "mentor role required" note and its badge are gone with it.
+  'community.hint.noJoinable': 'No mentor-published topics yet.',
   'community.hint.registryUnavailable': 'This DSH instance does not provide the workspace registry.',
   'community.hint.loading': 'Loading…',
   'community.hint.loadingWork': 'Loading research work…',

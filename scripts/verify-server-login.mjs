@@ -46,6 +46,18 @@ const PROD_URL = 'https://convfusion.apibrowser.com:4747'
  */
 const TEST_ENV = { CONVFUSION_ENV: 'development' }
 
+/**
+ * 从 `work/mine` 的一条发布状态里取某个方向的那一条（v0.6.0 起 `published` 是**数组**）。
+ *
+ * 一个工作区可以同时在两个方向上发布（服务器上是两个项目），所以断言必须**点名方向**
+ * ——`published[0]` 之类的写法会在两个方向都发布时变成"看运气"。
+ */
+const pubOf = (item, direction = 'SEEK_MENTOR') =>
+  (item?.published ?? []).find((r) => r.direction === direction) ?? null
+
+/** 从落盘存储里取某个方向的一条记录（键是 `(研究根, 方向)`）。 */
+const storedRecord = (store, root, direction = 'SEEK_MENTOR') => store.get(root, direction)
+
 /** 造一个受控的环境（读哪份配置文件、什么环境名，全部显式）。 */
 function withEnv(extra) {
   return { ...TEST_ENV, ...extra }
@@ -1683,6 +1695,10 @@ section('[6e] 发布本机研究（work/publish）')
       if (url.endsWith('/projects/srv-project-1/publish')) {
         return failPublish ? json(500, err('INTERNAL_ERROR', 'boom')) : json(200, { project_id: 'srv-project-1', visibility: 'PUBLISHED', charged_tokens: 1 })
       }
+      // 改名（v0.6.0 起"更新"时会按需 PUT 项目标题）—— 真实服务器一直有这个端点
+      if (url.endsWith('/projects/srv-project-1') && method === 'PUT') {
+        return json(200, { id: 'srv-project-1', title: JSON.parse(init.body).title, visibility: 'PRIVATE', status: 'ACTIVE', updated_at: '' })
+      }
       return json(404, err('RESOURCE_NOT_FOUND', 'nope'))
     }
     return { fetchImpl, calls, state: () => stateVersion }
@@ -1842,8 +1858,9 @@ section('[6e] 发布本机研究（work/publish）')
     const servers = { fetchImpl: async () => { throw new Error('work/mine 不该联网') } }
     const h = makePubHost(servers, store)
     const mine = await h('work/mine', {})
-    assertEq(mine.value.items[0].published?.projectId, 'srv-project-1', '列表项带出已发布的 project_id')
-    assertEq(mine.value.items[0].published?.version, 4, '带出版本号')
+    assertEq(pubOf(mine.value.items[0])?.projectId, 'srv-project-1', '列表项带出已发布的 project_id')
+    assertEq(pubOf(mine.value.items[0])?.version, 4, '带出版本号')
+    assertEq(pubOf(mine.value.items[0])?.direction, 'SEEK_MENTOR', '带出方向（缺方向的老记录读作求指导）')
   }
 
   fs.rmSync(HOME3, { recursive: true, force: true })
@@ -2350,8 +2367,8 @@ section('[6h] 「已在网络中」以服务器为准')
     const server = makeServer6({ project: 'PUBLISHED' })
     const res = await makeHost6(server, store)('work/mine', {})
     assert(res.ok, 'work/mine 可用')
-    assertEq(res.value.items[0].published?.projectId, 'srv-9', '服务器说可见 → 保留「已在网络中」')
-    const rec = store.all()[fs.realpathSync(root)]
+    assertEq(pubOf(res.value.items[0])?.projectId, 'srv-9', '服务器说可见 → 保留「已在网络中」')
+    const rec = storedRecord(store, fs.realpathSync(root))
     assertEq(rec.serverVisibility, 'PUBLISHED', '本地记录回写了服务器状态（PUBLISHED）')
     assert(typeof rec.checkedAt === 'string' && rec.checkedAt.length > 0, '本地记录记下核对时刻')
     assertEq(rec.files['project.md'], 'sha256:aa', '核对**不动**"我传过什么"（files 指纹保留）')
@@ -2362,8 +2379,8 @@ section('[6h] 「已在网络中」以服务器为准')
   {
     const store = PUB.createMemoryPublishedStore({ [fs.realpathSync(root)]: seededRecord() })
     const res = await makeHost6(makeServer6({ project: 'PRIVATE' }), store)('work/mine', {})
-    assertEq(res.value.items[0].published, null, '服务器说不可见 → 不显示标记')
-    const rec = store.all()[fs.realpathSync(root)]
+    assertEq(pubOf(res.value.items[0]), null, '服务器说不可见 → 不显示标记')
+    const rec = storedRecord(store, fs.realpathSync(root))
     assert(rec, '记录保留（项目还在，下次发布仍复用同一个）')
     assertEq(rec.serverVisibility, 'PRIVATE', '回写 PRIVATE')
   }
@@ -2372,16 +2389,16 @@ section('[6h] 「已在网络中」以服务器为准')
   {
     const store = PUB.createMemoryPublishedStore({ [fs.realpathSync(root)]: seededRecord() })
     const res = await makeHost6(makeServer6({ project: 404 }), store)('work/mine', {})
-    assertEq(res.value.items[0].published, null, '项目已删 → 不显示标记')
-    assertEq(store.all()[fs.realpathSync(root)], undefined, '死掉的映射被删掉（否则永远撞死 project_id）')
+    assertEq(pubOf(res.value.items[0]), null, '项目已删 → 不显示标记')
+    assertEq(storedRecord(store, fs.realpathSync(root)), undefined, '死掉的映射被删掉（否则永远撞死 project_id）')
   }
 
   // ── 查不通（离线）：不下结论 —— 保留本地记录，界面照旧显示 ──
   {
     const store = PUB.createMemoryPublishedStore({ [fs.realpathSync(root)]: seededRecord() })
     const res = await makeHost6(makeServer6({ project: 'offline' }), store)('work/mine', {})
-    assertEq(res.value.items[0].published?.projectId, 'srv-9', '读不到 ≠ 服务器上没有：保留标记')
-    assertEq(store.all()[fs.realpathSync(root)].checkedAt, undefined, '核对失败不回写任何状态')
+    assertEq(pubOf(res.value.items[0])?.projectId, 'srv-9', '读不到 ≠ 服务器上没有：保留标记')
+    assertEq(storedRecord(store, fs.realpathSync(root)).checkedAt, undefined, '核对失败不回写任何状态')
   }
 
   // ── 未登录 / 记录属于别的服务器：一个请求都不发 ──
@@ -2389,7 +2406,7 @@ section('[6h] 「已在网络中」以服务器为准')
     const store = PUB.createMemoryPublishedStore({ [fs.realpathSync(root)]: seededRecord() })
     const server = makeServer6({ project: 'PUBLISHED' })
     const res = await makeHost6(server, store, { withKey: false })('work/mine', {})
-    assertEq(res.value.items[0].published?.projectId, 'srv-9', '没有凭据时按本地记录显示')
+    assertEq(pubOf(res.value.items[0])?.projectId, 'srv-9', '没有凭据时按本地记录显示')
     assertEq(server.calls.length, 0, '没有凭据就不联网（离线也不会更慢）')
 
     const other = PUB.createMemoryPublishedStore({
@@ -2404,7 +2421,7 @@ section('[6h] 「已在网络中」以服务器为准')
      * 否则用户看到的和服务实际连的不是同一台。
      */
     assertEq(
-      swapped.value.items[0].published,
+      pubOf(swapped.value.items[0]),
       null,
       '记录属于别的服务器 → 这里**不算**「已在网络中」（换服务器后状态要跟着换）',
     )
@@ -2469,13 +2486,360 @@ section('[6h] 「已在网络中」以服务器为准')
     assert(res.ok, 'work/list 可用')
     assertEq(res.value.items.length, 2, '列表来自服务器')
     assertEq(
-      store.all()[fs.realpathSync(root)].serverVisibility,
+      storedRecord(store, fs.realpathSync(root)).serverVisibility,
       'PUBLISHED',
       '命中的本地记录被服务器的可见性刷新',
     )
   }
 
   fs.rmSync(HOME6, { recursive: true, force: true })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 6i. 出题模式：**两个方向**
+ *
+ * 一个工作区可以在两个方向上各发布一次（服务器上是**两个项目**）：
+ *   `SEEK_MENTOR`  学生发布研究求指导（= 今天唯一存在的行为）
+ *   `SEEK_STUDENT` 导师发布选题招学生
+ *
+ * 这一节把"方向必须全程带着走"钉住 —— 少带一处就会静默出错，而且错得很像成功：
+ *   · 建项目不带方向 → 选题被发布成"求指导"，出现在**导师**的列表里；
+ *   · 查记录不带方向 → 用另一个方向的指纹做增量，附件被漏传；
+ *   · 回写记录不带方向 → 两个方向互相覆盖，界面上少一个「更新」。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[6i] 出题模式：两个方向（求指导 / 招学生）')
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const PUB = await import(lib('research/published-store.js'))
+  const HOME7 = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-dir-'))
+  const ws = path.join(HOME7, 'proj')
+  const root = path.join(ws, 'workspace')
+  fs.mkdirSync(path.join(root, 'research'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'project.md'), '# 选题\n\n一个可证伪的问题\n')
+  fs.writeFileSync(path.join(root, 'research-state.md'), '## Problem\n\n动机\n')
+
+  const lister = async () => ({
+    available: true,
+    items: [{ id: 'ws-dir', title: '出题工作区', path: ws, updatedAt: '' }],
+  })
+  const K = fs.realpathSync(root)
+
+  /** 按方向发不同 project_id 的假服务器：能验出"两个方向真的是两个项目"。 */
+  const makeDirServer = () => {
+    const calls = []
+    const fetchImpl = async (url, init) => {
+      const method = init?.method ?? 'GET'
+      calls.push({ url, method, headers: init?.headers ?? {}, body: init?.body })
+      const json = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body })
+      if (url.endsWith('/api/v1/auth/me')) {
+        return json(200, { id: 'acc-1', email: 'me@example.com', status: 'ACTIVE', roles: ['MENTOR'] })
+      }
+      if (url.endsWith('/api/v1/projects') && method === 'POST') {
+        const direction = JSON.parse(init.body).direction
+        return json(201, {
+          id: direction === 'SEEK_STUDENT' ? 'topic-1' : 'seek-1',
+          title: 'x',
+          visibility: 'PRIVATE',
+          status: 'ACTIVE',
+          updated_at: '',
+        })
+      }
+      if (/\/projects\/(topic-1|seek-1)\/state$/.test(url) && method === 'GET') {
+        return json(404, err('RESOURCE_NOT_FOUND', 'no state'))
+      }
+      if (/\/projects\/(topic-1|seek-1)\/state$/.test(url) && method === 'POST') {
+        const id = url.includes('topic-1') ? 'topic-1' : 'seek-1'
+        return json(201, { project_id: id, version: 1, content_hash: 'sha256:abc', content: {} })
+      }
+      if (/\/projects\/(topic-1|seek-1)\/files$/.test(url) && method === 'POST') {
+        return json(201, [])
+      }
+      if (/\/projects\/(topic-1|seek-1)\/publish$/.test(url)) {
+        return json(200, { visibility: 'PUBLISHED', charged_tokens: 1 })
+      }
+      if (url.includes('/discovery/random')) return json(200, { items: [] })
+      // `work/mine` 会按记录回查项目（判据是服务器，不是本地映射）→ 这里如实说"可见"
+      if (/\/projects\/(topic-1|seek-1)$/.test(url) && method === 'GET') {
+        return json(200, { id: 'x', title: 'x', visibility: 'PUBLISHED', status: 'ACTIVE', updated_at: '' })
+      }
+      return json(404, err('RESOURCE_NOT_FOUND', 'nope'))
+    }
+    return { fetchImpl, calls }
+  }
+
+  const makeDirHost = (server, store) =>
+    RPC.createSettingsRpcHandler({
+      getConfig: () =>
+        CFG.resolveConfig({
+          customizationFile: 'x.json',
+          customizationDir: HOME7,
+          convfusionApiKey: KEY,
+          serverUrl: 'http://localhost:8000',
+        }),
+      store: CUST.createMemoryCustomizationStore(),
+      listLocalWorkspaces: lister,
+      publishedStore: store,
+      fetchImpl: server.fetchImpl,
+    })
+
+  // ── 不带 direction：请求体里也**不该有**这个字段（默认方向归服务器所有）──
+  {
+    const server = makeDirServer()
+    const store = PUB.createMemoryPublishedStore()
+    const res = await makeDirHost(server, store)('work/publish', { id: 'ws-dir' })
+    assert(res.ok, '默认方向发布成功')
+    const create = server.calls.find((c) => c.method === 'POST' && c.url.endsWith('/api/v1/projects'))
+    assert(!('direction' in JSON.parse(create.body)), '不带方向时不发 direction（默认值由服务器拥有）')
+    assertEq(res.value.published.direction, 'SEEK_MENTOR', '回执带出实际方向')
+    assertEq(storedRecord(store, K, 'SEEK_MENTOR')?.projectId, 'seek-1', '记录写在"求指导"方向下')
+    assertEq(storedRecord(store, K, 'SEEK_STUDENT'), undefined, '另一个方向没有被误写')
+  }
+
+  // ── 同一工作区两个方向：**两个项目**、两条记录，互不复用 ──
+  {
+    const server = makeDirServer()
+    const store = PUB.createMemoryPublishedStore()
+    const h = makeDirHost(server, store)
+    const seek = await h('work/publish', { id: 'ws-dir' })
+    const topic = await h('work/publish', { id: 'ws-dir', direction: 'SEEK_STUDENT' })
+    assert(seek.ok && topic.ok, '两个方向都发布成功')
+    assertEq(
+      server.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/api/v1/projects')).length,
+      2,
+      '两个方向各建一个项目（不复用对方的 project_id）',
+    )
+    const topicCreate = server.calls
+      .filter((c) => c.method === 'POST' && c.url.endsWith('/api/v1/projects'))
+      .map((c) => JSON.parse(c.body))
+      .find((b) => b.direction === 'SEEK_STUDENT')
+    assert(topicCreate, '招学生方向的建项目请求带上了 direction=SEEK_STUDENT')
+    assertEq(storedRecord(store, K, 'SEEK_MENTOR')?.projectId, 'seek-1', '求指导记录')
+    assertEq(storedRecord(store, K, 'SEEK_STUDENT')?.projectId, 'topic-1', '招学生记录')
+    assertEq(storedRecord(store, K, 'SEEK_STUDENT')?.direction, 'SEEK_STUDENT', '记录里带方向')
+    // `work/mine` 两个方向各一条
+    const mine = await h('work/mine', {})
+    assertEq(pubOf(mine.value.items[0], 'SEEK_MENTOR')?.projectId, 'seek-1', '我的：求指导方向在')
+    assertEq(pubOf(mine.value.items[0], 'SEEK_STUDENT')?.projectId, 'topic-1', '我的：招学生方向也在')
+  }
+
+  // ── 上传计划按方向找记录：另一个方向的"记住的选择"不能拿来用 ──
+  {
+    const server = makeDirServer()
+    const store = PUB.createMemoryPublishedStore()
+    const h = makeDirHost(server, store)
+    await h('work/publish', { id: 'ws-dir', direction: 'SEEK_STUDENT' })
+    const plan = await h('work/uploadPlan', { id: 'ws-dir', direction: 'SEEK_STUDENT' })
+    assert(plan.ok, '招学生方向的上传计划可读')
+    assertEq(plan.value.direction, 'SEEK_STUDENT', '计划回显方向（对话框标题要用它）')
+    assertEq(plan.value.remembered, true, '读的是**这个方向**的记录（记住过选择）')
+    const other = await h('work/uploadPlan', { id: 'ws-dir', direction: 'SEEK_MENTOR' })
+    assertEq(other.value.remembered, false, '另一个方向没有记录（不能拿对方的选择当自己的）')
+  }
+
+  // ── `work/list` 的方向转成查询参数；`work/summary` / `work/brief` 不受影响 ──
+  {
+    const server = makeDirServer()
+    const store = PUB.createMemoryPublishedStore()
+    const h = makeDirHost(server, store)
+    await h('work/list', { direction: 'SEEK_STUDENT' })
+    assert(
+      server.calls.some((c) => c.url.includes('/discovery/random?direction=SEEK_STUDENT')),
+      '【可加入】带 ?direction=SEEK_STUDENT',
+    )
+    const server2 = makeDirServer()
+    const h2 = makeDirHost(server2, PUB.createMemoryPublishedStore())
+    await h2('work/list', {})
+    const listCall = server2.calls.find((c) => c.url.includes('/discovery/random'))
+    assertEq(listCall.url.includes('?direction='), false, '不传方向 → 不带查询参数（服务器默认求指导）')
+  }
+
+  // ── 解析纪律：字段缺失 = 今天的行为，不许猜成"招学生" ──
+  {
+    const asWork = SC.parseDirection
+    assertEq(asWork(undefined), 'SEEK_MENTOR', '缺 direction → SEEK_MENTOR（旧服务器）')
+    assertEq(asWork('SEEK_MENTOR'), 'SEEK_MENTOR', 'SEEK_MENTOR 原样')
+    assertEq(asWork('SEEK_STUDENT'), 'SEEK_STUDENT', 'SEEK_STUDENT 原样')
+    assertEq(asWork('WHATEVER'), 'SEEK_MENTOR', '未知取值 → 退回默认（不编第三态）')
+
+    const items = await SC.fetchProposals(
+      'http://localhost:8000',
+      KEY,
+      { fetchImpl: async () => ({ ok: true, status: 200, json: async () => ([
+        { id: 'p1', project_id: 'x', mentor_id: 'm', researcher_id: 'r', status: 'PROPOSED', direction: 'SEEK_STUDENT', proposed_by_id: 'r' },
+        { id: 'p2', project_id: 'y', mentor_id: 'm', researcher_id: 'r', status: 'PROPOSED' },
+      ]) }) },
+    )
+    assertEq(items[0].direction, 'SEEK_STUDENT', '提案带出方向')
+    assertEq(items[0].proposedById, 'r', '提案带出"谁发起的"（决定谁能接受）')
+    assertEq(items[1].direction, 'SEEK_MENTOR', '旧服务器（没有该字段）→ 求指导')
+    assertEq(items[1].proposedById, null, '没有 proposed_by_id → null（界面按方向推断，不编）')
+  }
+
+  // ── 存盘纪律：旧文件（没有方向的记录）读作"求指导"，且两个方向能并存 ──
+  {
+    const legacy = PUB.createMemoryPublishedStore({
+      [K]: { projectId: 'old-1', serverUrl: 'http://localhost:8000', accountId: 'acc-1', version: 1, publishedAt: 'x', updatedAt: 'x' },
+    })
+    assertEq(storedRecord(legacy, K, 'SEEK_MENTOR')?.projectId, 'old-1', '老记录（裸键、无方向）读作求指导')
+    assertEq(storedRecord(legacy, K, 'SEEK_STUDENT'), undefined, '老记录不会被当成招学生')
+
+    const both = PUB.createMemoryPublishedStore({
+      [K]: { direction: 'SEEK_MENTOR', projectId: 'seek-1', serverUrl: 'http://localhost:8000', accountId: 'acc-1', version: 1, publishedAt: 'x', updatedAt: 'x' },
+      [`${K}\u0000SEEK_STUDENT`]: { direction: 'SEEK_STUDENT', projectId: 'topic-1', serverUrl: 'http://localhost:8000', accountId: 'acc-1', version: 2, publishedAt: 'x', updatedAt: 'y' },
+    })
+    assertEq(Object.keys(both.all()).length, 2, '同一个根可以有两条记录（两个方向并存）')
+    assertEq(storedRecord(both, K, 'SEEK_STUDENT')?.projectId, 'topic-1', '招学生那条读得到')
+    both.remove(K, 'SEEK_STUDENT')
+    assertEq(storedRecord(both, K, 'SEEK_STUDENT'), undefined, '删只删这个方向')
+    assertEq(storedRecord(both, K, 'SEEK_MENTOR')?.projectId, 'seek-1', '另一个方向不受影响')
+  }
+
+  fs.rmSync(HOME7, { recursive: true, force: true })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 6j. 研究工作的**名字**（v0.6.0）
+ *
+ * 网络里那三个列表（【可指导】/【可加入】/【指导中】）该显示的是**这项工作自己的名字**：
+ * 有论文用论文标题，否则用工作确定的主题；都没有才退回本机工作区名。
+ *
+ * 为什么必须上送到服务器：看那些列表的人**本机不一定有这份 workspace**
+ * （导师看学生的研究、学生看导师的选题），名字只能来自服务器上的数据。
+ * 这一节钉两件事：① 名字怎么取；② 它真的被送进了项目与内容里。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[6j] 研究工作的名字（论文标题 > 主题 > 兜底）')
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const WN = await import(lib('research/work-name.js'))
+  const PUB = await import(lib('research/published-store.js'))
+  const HOME8 = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-name-'))
+  const ws = path.join(HOME8, 'proj')
+  const root = path.join(ws, 'workspace')
+  fs.mkdirSync(root, { recursive: true })
+
+  const paper = (id, body) => {
+    fs.mkdirSync(path.join(root, 'papers', id), { recursive: true })
+    fs.writeFileSync(path.join(root, 'papers', id, 'paper.md'), body)
+  }
+  const latex = (id, body) => {
+    fs.mkdirSync(path.join(root, 'papers', id, 'latex'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'papers', id, 'latex', 'main.tex'), body)
+  }
+
+  // ① 什么都没有 → 兜底（注册表名）：宁可显示"本机还叫这个名字"也不显示空
+  assertEq(WN.researchWorkName(root, '低算力 VL 方向'), { name: '低算力 VL 方向', source: 'fallback' }, '① 无论文无主题 → 兜底')
+
+  // ② 只有 project.md 的 topic（= 这项工作已采纳的主题）
+  fs.writeFileSync(
+    path.join(root, 'project.md'),
+    ['---', 'type: research-project', 'topic: 低算力视觉语言方向的可证伪问题', '---', '', '# Research Project', ''].join('\n'),
+  )
+  assertEq(WN.researchWorkName(root, '低算力 VL 方向'), { name: '低算力视觉语言方向的可证伪问题', source: 'topic' }, '② 有主题 → 用主题（不是本机工作区名）')
+
+  // ③ 有论文（paper.md 的 H1）→ **论文标题优先**
+  paper('paper-main', '# Hierarchical Memory: Information-Theoretic Guarantees\n\n正文\n')
+  assertEq(
+    WN.researchWorkName(root, '低算力 VL 方向'),
+    { name: 'Hierarchical Memory: Information-Theoretic Guarantees', source: 'paper', paperId: 'paper-main', paperTitle: 'Hierarchical Memory: Information-Theoretic Guarantees' },
+    '③ 有论文 → 用论文标题（主题退居其次）',
+  )
+
+  // ④ `latex/main.tex` 的 `\title{}` **优先于** paper.md 的 H1（正文以 main.tex 为准），
+  //    且要能吃下花括号、`\&`、`---` 这些真实标题里会有的东西
+  latex('paper-main', '\\documentclass{article}\n\\title{Attention \\& Memory: {A} Study---Part II}\n\\begin{document}\n')
+  const withLatex = WN.researchWorkName(root, '低算力 VL 方向')
+  assertEq(withLatex.name, 'Attention & Memory: A Study—Part II', '④ main.tex 的 \\title 优先，且转义/花括号/破折号都还原')
+  assertEq(withLatex.source, 'paper', '④ 仍然算"来自论文"')
+
+  // ⑤ 模板占位标题不算名字（刚用模板建的论文 H1 就是 `Title`）
+  fs.rmSync(path.join(root, 'papers', 'paper-main', 'latex'), { recursive: true, force: true })
+  paper('paper-main', '# Title\n\n<!-- 还没起名 -->\n')
+  assertEq(WN.researchWorkName(root, '低算力 VL 方向').name, '低算力视觉语言方向的可证伪问题', '⑤ 模板占位 Title 不算名字 → 退回主题')
+
+  // ── ⑥ 上送：工作名进**项目标题**，也进**内容**（服务端据此投影 work_name）──
+  const calls = []
+  const makeServer = () => ({
+    fetchImpl: async (url, init) => {
+      const method = init?.method ?? 'GET'
+      calls.push({ url, method, body: init?.body })
+      const json = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body })
+      if (url.endsWith('/api/v1/auth/me')) return json(200, { id: 'acc-1', email: 'me@example.com', status: 'ACTIVE', roles: ['RESEARCHER'] })
+      if (url.endsWith('/api/v1/projects') && method === 'POST') {
+        return json(201, { id: 'name-1', title: 'x', visibility: 'PRIVATE', status: 'ACTIVE', updated_at: '' })
+      }
+      if (/\/projects\/name-1\/state$/.test(url) && method === 'GET') return json(404, err('RESOURCE_NOT_FOUND', 'no state'))
+      if (/\/projects\/name-1\/state$/.test(url) && method === 'POST') {
+        return json(201, { project_id: 'name-1', version: 1, content_hash: 'sha256:x', content: {} })
+      }
+      if (/\/projects\/name-1\/files$/.test(url) && method === 'POST') return json(201, [])
+      if (/\/projects\/name-1\/publish$/.test(url)) return json(200, { visibility: 'PUBLISHED', charged_tokens: 1 })
+      if (/\/projects\/name-1$/.test(url) && method === 'PUT') {
+        return json(200, { id: 'name-1', title: JSON.parse(init.body).title, visibility: 'PRIVATE', status: 'ACTIVE', updated_at: '' })
+      }
+      return json(404, err('RESOURCE_NOT_FOUND', 'nope'))
+    },
+  })
+
+  const store = PUB.createMemoryPublishedStore()
+  const server = makeServer()
+  const h = RPC.createSettingsRpcHandler({
+    getConfig: () =>
+      CFG.resolveConfig({
+        customizationFile: 'x.json',
+        customizationDir: HOME8,
+        convfusionApiKey: KEY,
+        serverUrl: 'http://localhost:8000',
+      }),
+    store: CUST.createMemoryCustomizationStore(),
+    listLocalWorkspaces: async () => ({
+      available: true,
+      items: [{ id: 'ws-name', title: '低算力 VL 方向', path: ws, updatedAt: '' }],
+    }),
+    publishedStore: store,
+    fetchImpl: server.fetchImpl,
+  })
+
+  // 把论文换成真标题（⑤ 用的是占位标题）
+  paper('paper-main', '# Hierarchical Memory: Information-Theoretic Guarantees\n\n正文\n')
+  const pub1 = await h('work/publish', { id: 'ws-name' })
+  assert(pub1.ok, `⑥ 发布成功${pub1.ok ? '' : `（${pub1.error?.code}）`}`)
+  const createCall = calls.find((c) => c.method === 'POST' && c.url.endsWith('/api/v1/projects'))
+  assertEq(JSON.parse(createCall.body).title, 'Hierarchical Memory: Information-Theoretic Guarantees', '⑥ 项目标题 = **论文标题**（不是本机工作区名）')
+  const stateCall = calls.find((c) => c.method === 'POST' && c.url.endsWith('/state'))
+  const content = JSON.parse(stateCall.body).content
+  assertEq(content.work_name, 'Hierarchical Memory: Information-Theoretic Guarantees', '⑥ 内容里带 `work_name`（服务端据此投影列表显示的名字）')
+  assertEq(content.paper.title, 'Hierarchical Memory: Information-Theoretic Guarantees', '⑥ 论文标题也作为事实带上（`paper.title`）')
+  assertEq(typeof content.paper.present, 'boolean', '⑥ `paper.present` 仍是布尔（进度快照说了算，这里不钉它的值）')
+  assertEq(pub1.value.published.title, 'Hierarchical Memory: Information-Theoretic Guarantees', '⑥ 回执带出这次网络里用的名字')
+  assertEq(store.get(fs.realpathSync(root))?.title, 'Hierarchical Memory: Information-Theoretic Guarantees', '⑥ 记录里存下名字（下次据此判断要不要改名）')
+
+  // ── ⑦ 名字变了 → **复用项目时改名**（PUT）；没变 → 不发这个请求 ──
+  calls.length = 0
+  const pub2 = await h('work/publish', { id: 'ws-name' })
+  assert(pub2.ok, '⑦ 再发布一次成功（名字没变）')
+  assertEq(calls.filter((c) => c.method === 'PUT').length, 0, '⑦ 名字没变 → 不发 PUT（不多一次往返）')
+  assertEq(calls.filter((c) => c.method === 'POST' && c.url.endsWith('/api/v1/projects')).length, 0, '⑦ 复用同一个项目（不新建）')
+
+  paper('paper-main', '# Hierarchical Memory: Theory and Practice\n\n正文\n')
+  calls.length = 0
+  const pub3 = await h('work/publish', { id: 'ws-name' })
+  assert(pub3.ok, '⑦ 论文改名后再发布成功')
+  const puts = calls.filter((c) => c.method === 'PUT')
+  assertEq(puts.length, 1, '⑦ 名字变了 → 恰好一次 PUT 改名（网络里那个名字不能永远停在第一次发布）')
+  assertEq(JSON.parse(puts[0].body).title, 'Hierarchical Memory: Theory and Practice', '⑦ PUT 带的是新名字')
+  assertEq(store.get(fs.realpathSync(root))?.title, 'Hierarchical Memory: Theory and Practice', '⑦ 记录里的名字跟着更新')
+
+  // ── ⑧ 上传计划：对话框头部显示**要发布的名字**，另给本机工作区名以便指认 ──
+  const plan = await h('work/uploadPlan', { id: 'ws-name' })
+  assertEq(plan.value.title, 'Hierarchical Memory: Theory and Practice', '⑧ 计划里的 `title` = 要发布的名字')
+  assertEq(plan.value.workspaceTitle, '低算力 VL 方向', '⑧ 另给本机工作区名（两者不同时界面用一行提示指认）')
+  assertEq(plan.value.workNameSource, 'paper', '⑧ 名字来源 = paper（诊断用）')
+
+  fs.rmSync(HOME8, { recursive: true, force: true })
 }
 
 /* ════════════════════════════════════════════════════════════════════════

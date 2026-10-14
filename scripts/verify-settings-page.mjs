@@ -330,12 +330,13 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   // 账号行的【刷新】【登出】是**图标按钮**：宽度可预测，账号行不会被文案挤成两行。
   // 代价是失去可见文案 → title 与 aria-label 缺一不可（读屏与悬浮都靠它）。
   assert(/iconBtn: \{[\s\S]{0,320}?width: 26,[\s\S]{0,80}?height: 26,/.test(src), '有固定方形的图标按钮样式')
-  // 刷新抽成一个组件，五处共用（账号行 + 研究工作三个 Tab + Token 余额弹窗）
+  // 刷新抽成一个组件：账号行 + 研究工作**四个** Tab（我的 / 可指导 / 可加入 / 指导中）
+  // + Token 余额弹窗 = 6 处
   assert(src.includes('function RefreshIconButton('), '刷新图标按钮是独立组件')
   assertEq(
     (src.match(/<RefreshIconButton /g) ?? []).length,
-    5,
-    '五处都在用它（账号 + 我的 + 可指导 + 指导中 + 余额弹窗）',
+    6,
+    '六处都在用它（账号 + 四个 Tab + 余额弹窗）',
   )
   assert(
     /title=\{busy \? t\('community\.action\.loading'\) : t\('community\.action\.refresh'\)\}[\s\S]{0,120}?aria-label=\{t\('community\.action\.refresh'\)\}/.test(src),
@@ -385,15 +386,36 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   assert(/community\.login\.keyLabel/.test(firstCard), '登录表单在第一张卡片内')
   assert(/S\.accountName/.test(firstCard), '账号信息和登录表单在同一张卡片（登录后同一个位置）')
 
-  // ── 研究工作：两个视图（我的 / 可指导，2026-09 用户定稿）──────────────
-  assert(/workTab === 'mine'/.test(community) && /workTab === 'mentor'/.test(community), '研究工作卡片分两个视图')
+  // ── 研究工作：四个视图（我的 / 可指导 / 可加入 / 指导中，v0.6.0）──────────
+  assert(/workTab === 'mine'/.test(community) && /workTab === 'mentor'/.test(community), '研究工作卡片有多个视图')
+  /*
+   * Tab 顺序按**卡片头里实际渲染的 MiniTab**判定，不用 indexOf 比字符串 ——
+   * 早先那种写法会被别处（例如"角色变了就回落到我的"那个 effect）里的
+   * `workTab === 'mentor'` 提前命中，断言的其实不是顺序。
+   */
+  {
+    const tabOrder = [...community.matchAll(/<MiniTab active=\{workTab === '(\w+)'\}/g)].map((m) => m[1])
+    assertEq(tabOrder, ['mine', 'mentor', 'joinable', 'mentorship'], 'Tab 顺序：我的 → 可指导 → 可加入 → 指导中')
+  }
+  // ⚠️ 【可指导】**只对导师显示**（v0.6.0 用户要求：研究者只看得到 我的/可加入/指导中）
   assert(
-    community.indexOf("workTab === 'mine'") < community.indexOf("workTab === 'mentor'"),
-    '「我的」在「可指导」之前（所有人都可能被指导，先看自己的）',
+    /\{canMentor \? \(\s*<MiniTab active=\{workTab === 'mentor'\}/.test(community),
+    '【可指导】按导师角色显示（没有导师角色就不显示这个 Tab）',
+  )
+  assert(
+    /workTab === 'mentor' && !canMentor/.test(community),
+    '角色变化后当前 Tab 不可见 → 回落到【我的】（否则顶栏一个选中态都没有）',
   )
   assert(/work\/mine/.test(community), '「我的」走 work/mine（本机研究项目）')
   assert(/canMentor/.test(community) && /MENTOR/.test(community), '「可指导」需要导师角色')
-  dictHas('community.hint.mentorRequiresRole', '需要导师角色', 'mentor role', '没有角色时如实说明权限')
+  // 【可加入】：导师发布的选题（`SEEK_STUDENT`），所有人都看得到
+  assert(/workTab === 'joinable'/.test(community), '有【可加入】视图')
+  assert(
+    /loadWorks\('SEEK_STUDENT'\)/.test(community) && /loadWorks\('SEEK_MENTOR'\)/.test(community),
+    '两个列表按方向拉（可指导 = SEEK_MENTOR，可加入 = SEEK_STUDENT）',
+  )
+  dictHas('community.tab.joinable', '可加入', 'Joinable', '第四个 Tab')
+  dictHas('community.hint.noJoinable', '还没有导师发布选题', 'No mentor-published topics', '【可加入】空态')
   dictHas('community.hint.mineEmpty', '本机还没有研究项目', 'No local research projects yet', '本机为空时的空状态')
   // ⚠️ 铁律：读失败**不能**显示成"没有研究项目"（实测踩过：端点不存在时界面说"本机还没有研究项目"）
   assert(/mineError/.test(community), '「我的」有独立的失败态')
@@ -1491,7 +1513,11 @@ console.log('\n[10] 扣费操作必须二次确认（简报 1 Token）')
 
   // ① 组件存在，且列表的【简报】不再直连扣费
   assert(src.includes('function BriefConfirmDialog('), '存在简报扣费确认对话框组件')
-  assert(inlineCount(src, 'onBrief={() => requestBrief(w)}') === 1, '列表【简报】走 requestBrief（不是直接扣费）')
+  assertEq(
+    inlineCount(src, 'onBrief={() => requestBrief(w)}'),
+    2,
+    '两个列表（可指导 / 可加入）的【详情】都走 requestBrief（不是直接扣费）',
+  )
   assert(!src.includes('onBrief={() => void toggleBrief('), '列表不再把【简报】直连到 toggleBrief')
 
   // ② requestBrief 只对"会扣费"的情形弹确认；已展开的那一项直接收起
@@ -1646,15 +1672,23 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
   const zhDict = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
 
   // ① 三个 Tab：workTab 类型含 'mentorship'，且有对应 MiniTab
-  assert(src.includes("useState<'mine' | 'mentor' | 'mentorship'>"), 'workTab 类型含第三个视图')
+  assert(
+    src.includes("useState<'mine' | 'mentor' | 'joinable' | 'mentorship'>"),
+    'workTab 类型含四个视图（我的 / 可指导 / 可加入 / 指导中）',
+  )
   assert(inlineCount(src, "setWorkTab('mentorship')") === 1, '有「指导中」Tab 按钮')
   assert(src.includes("t('community.tab.mentorship')"), 'Tab 文案走 i18n（指导中）')
 
   // ② **一个**列表跟踪状态（用户拍板：不再分「我收到的 / 我发起的」）
-  assert(src.includes('const trackItems = ['), '两方向合成一个统一列表')
+  assert(src.includes('const trackItems = React.useMemo('), '两个方向合成一个统一列表')
   assert(!src.includes("t('community.mentor.incomingTitle')"), '没有「我收到的」分栏标题')
   assert(!src.includes("t('community.mentor.outgoingTitle')"), '没有「我发起的」分栏标题')
-  assert(/trackItems\.map\(\(\{ p, incoming \}, i\)/.test(src), '统一列表每行带方向标记')
+  // 每行都带**算好的方向视角**（谁能接受 / 我上传落在哪一侧 / 进展怎么称呼都从它来）
+  assert(
+    /trackItems\.map\(\(\{ p, view \}, i\)/.test(src) && /proposalView\(p, myAccountId\)/.test(src),
+    '统一列表每行带方向视角（proposalView）',
+  )
+  assert(src.includes('function proposalView('), '方向视角有独立函数（不在 JSX 里现推）')
   // 排序：还要动作的顶上去
   assert(/PROPOSED: 0, ACCEPTED: 1/.test(src), '按"还要不要动作"排序（等待响应在前）')
   // 只留状态 + 费用数字：描述性文字必须消失
@@ -1665,7 +1699,7 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
    * 判据是"三者都在同一个竖排左列里"，不是它们隔多少字符。
    */
   assert(
-    /flexDirection: 'column',\s*gap: 2,[\s\S]{0,700}?S\.listTitle[\s\S]{0,700}?feeText\(p\)/.test(src),
+    /flexDirection: 'column',\s*gap: 2,[\s\S]{0,1400}?S\.listTitle[\s\S]{0,1400}?feeText\(p\)/.test(src),
     '名称 / 补充行 / 费用竖排（左侧自己消化宽度）',
   )
   // 右侧（状态 + 操作）整组不许被压、不许换行
@@ -1679,15 +1713,41 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
   // 状态不再永远停在「已接受」：关系建立后按"导师传了没有"分两个**进展**状态，
   // 并按角色换称呼（导师看自己的行不该写"导师已指导"）。
   assert(src.includes('function progressLabelKey('), 'ACCEPTED 有独立的进展文案')
+  /*
+   * ⚠️ v0.6.0：`review_files` 数的是**非 owner 那一侧** —— 方向 A 下那是导师的
+   * 指导产物，方向 B 下那是**学生的交付**。所以文案有**四组**，按
+   * "我在哪一侧 + 项目哪个方向"选，不能只用"导师 / 学生"两个词。
+   */
   assert(
-    /if \(incoming\) return hasReview \? 'community\.mentor\.progress\.studentGot' : 'community\.mentor\.progress\.studentWaiting'/.test(src),
-    '学生侧：等待指导意见 / 导师已指导',
+    /if \(!view\.iAmOwner\) \{/.test(src) && /if \(view\.iAmOwner\) return true/.test(src),
+    '文案与下载可用性都按"我在哪一侧"（owner 侧 = 项目所有者）判',
   )
   assert(
-    /hasReview \? 'community\.mentor\.progress\.mentorDone' : 'community\.mentor\.progress\.mentorWaiting'/.test(src),
-    '导师侧：我已指导 / 待我指导',
+    /return hasDelivered \? 'community\.mentor\.progress\.studentGot' : 'community\.mentor\.progress\.studentWaiting'/.test(src),
+    '方向 A 非 owner 侧（学生）：等待指导意见 / 导师已指导',
   )
-  for (const k of ['studentWaiting', 'studentGot', 'mentorWaiting', 'mentorDone']) {
+  assert(
+    /return hasDelivered \? 'community\.mentor\.progress\.mentorDone' : 'community\.mentor\.progress\.mentorWaiting'/.test(src),
+    '方向 A owner 侧（导师）：我已指导 / 待我指导',
+  )
+  assert(
+    /return hasDelivered \? 'community\.mentor\.progress\.iDelivered' : 'community\.mentor\.progress\.iToDeliver'/.test(src),
+    '方向 B 非 owner 侧（学生）：我已交付 / 待我交付',
+  )
+  assert(
+    /return hasDelivered \? 'community\.mentor\.progress\.studentDelivered' : 'community\.mentor\.progress\.studentToDeliver'/.test(src),
+    '方向 B owner 侧（导师）：学生已交付 / 等待学生交付',
+  )
+  for (const k of [
+    'studentWaiting',
+    'studentGot',
+    'mentorWaiting',
+    'mentorDone',
+    'iToDeliver',
+    'iDelivered',
+    'studentToDeliver',
+    'studentDelivered',
+  ]) {
     assert(zhDict.includes(`'community.mentor.progress.${k}'`), `进展文案有中文：${k}`)
   }
   /*
@@ -1697,37 +1757,75 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
    * 区分用的那一半另起一行（粗体那行是 nowrap+ellipsis，挤进去会被截掉）。
    */
   assert(
-    /const line = incoming\s*\?\s*\(p\.projectTitle \?\? t\('community\.mentor\.untitledProject'\)\)\s*:\s*\(p\.researcher\?\.displayName \?\? ''\)/.test(
+    /const line = view\.iAmAcceptor\s*\?\s*\(proposalWorkLabel\(p\) \?\? t\('community\.mentor\.untitledProject'\)\)\s*:\s*\(view\.counterparty\?\.displayName \?\? ''\)/.test(
       src,
     ),
-    '【指导中】的行给出"哪份研究工作"（学生侧）与"对方是谁"（导师侧）',
+    '【指导中】的行给出"哪份研究工作"（该我接受时）与"对方是谁"（我发起时）',
+  )
+  /*
+   * v0.6.0：显示的名字是**这项工作自己的名字**（服务器的 `work_name`：有论文就是论文标题，
+   * 否则是工作确定的主题），`project_title` 只作旧服务器的兜底 —— 看列表的人本机不一定
+   * 有那份 workspace，所以名字只能来自服务器。
+   */
+  assert(
+    /function proposalWorkLabel\(p: HostProposal\): string \| null \{\s*return p\.workName\?\.trim\(\) \|\| p\.projectTitle/.test(src),
+    '【指导中】显示名：`work_name` 优先，`project_title` 只作兜底',
   )
   assert(
-    /incoming\s*\?\s*\(p\.mentor\?\.displayName \?\? t\('community\.mentor\.unknownParty'\)\)/.test(src),
-    '粗体那行仍是"对方"（导师名 / 工作名），补充行不抢主次',
+    /function workLabelOf\(source: \{ workName\?: string \| null; title: string \}\): string \{\s*return source\.workName\?\.trim\(\) \|\| source\.title/.test(src),
+    '【可指导】/【可加入】显示名：`work_name` 优先，`title` 只作兜底',
   )
+  assertEq(
+    (src.match(/title=\{workLabelOf\(w\)\}/g) ?? []).length,
+    2,
+    '两个列表（可指导 / 可加入）都用 `workLabelOf` 取名字',
+  )
+  assert(
+    /community\.publish\.workspaceHint/.test(src) && /data\.workspaceTitle !== data\.title/.test(src),
+    '发布对话框：标题是**要发布的名字**，本机工作区名另用一行指认（两者不同时才出现）',
+  )
+  assert(
+    /community\.notice\.renameFailed/.test(src),
+    '改名失败要如实说一句（否则回执显示新名字、网络里还是旧名字）',
+  )
+  assert(
+    /view\.iAmAcceptor\s*\?\s*\(view\.counterparty\?\.displayName \?\? t\('community\.mentor\.unknownParty'\)\)/.test(src),
+    '粗体那行仍是"对方"，补充行不抢主次',
+  )
+  /*
+   * ⚠️ 用 `iAmAcceptor`（谁该接受）而不是"我是不是学生"：方向 B 里该接受的是
+   * **导师**，主次的行序也要跟着翻。
+   */
+  assert(src.includes('iAmAcceptor: !iProposed'), '"该我接受"= 我不是发起人（两个方向同一判据）')
 
   // 动作只长在「我收到的 + 等待响应」那一行（其余状态纯跟踪）
   assert(
-    /\{incoming && p\.status === 'PROPOSED' \? \(/.test(src),
+    /\{view\.iAmAcceptor && p\.status === 'PROPOSED' \? \(/.test(src),
     '只有"等我处理"的那条给接受/拒绝按钮',
   )
   // 学生侧要能看清"是谁在申请指导我"：查看导师信息 → Profile 介绍
-  assert(src.includes("t('community.action.viewMentor')"), '有【查看导师信息】按钮')
+  assert(src.includes("'community.action.viewMentor'"), '有【查看导师信息】按钮')
+  assert(src.includes("'community.action.viewStudent'"), '方向 B 里是【查看学生信息】（同一个动作、换个称呼）')
   assert(
-    /\{incoming \? \(\s*<button[\s\S]{0,300}?setProfileTarget\(p\)/.test(src),
-    '【导师】按钮只在我作为学生的那一侧',
+    /view\.counterparty\?\.profile !== undefined \? \(\s*<button[\s\S]{0,900}?setProfileTarget\(\{ proposal: p, view/.test(src),
+    '资料按钮只在服务器**给了**对方 profile 键时出现（哪一方由服务器按方向投影）',
   )
-  assert(src.includes('function MentorProfileDialog('), '存在导师信息对话框')
-  assert(src.includes("t('community.mentor.profileTitle')"), '对话框标题走 i18n')
-  assert(src.includes("t('community.mentor.profileEmpty')"), '导师没填 profile 时如实说明（不编内容）')
+  assert(src.includes('function PartyProfileDialog('), '存在对方资料对话框（不是"导师专用"）')
+  assert(
+    /isMentor \? 'community\.mentor\.profileTitle' : 'community\.mentor\.profileTitleResearcher'/.test(src),
+    '对话框标题按对方角色换（导师信息 / 学生信息）',
+  )
+  assert(
+    /isMentor \? 'community\.mentor\.profileEmpty' : 'community\.mentor\.profileEmptyResearcher'/.test(src),
+    '对方没填 profile 时如实说明（不编内容）',
+  )
   for (const f of ['profileBio', 'profileFields', 'profileInterests', 'profileExpertise']) {
     assert(src.includes(`community.mentor.${f}`), `Profile 字段有展示位：${f}`)
   }
-  assert(/<MentorProfileDialog t=\{t\} proposal=\{profileTarget\}/.test(src), '对话框被渲染')
-  // 导师信息来自提案内嵌的 profile → 不该为它多发一次请求
-  const mp = src.slice(src.indexOf('function MentorProfileDialog('), src.indexOf('function CommunityTab('))
-  assert(!mp.includes('post('), '导师信息不额外发请求（数据已在提案响应里）')
+  assert(/<PartyProfileDialog[\s\S]{0,200}?party=\{profileTarget\.party\}/.test(src), '对话框被渲染')
+  // 资料来自提案内嵌的 profile → 不该为它多发一次请求
+  const mp = src.slice(src.indexOf('function PartyProfileDialog('), src.indexOf('function CommunityTab('))
+  assert(!mp.includes('post('), '对方资料不额外发请求（数据已在提案响应里）')
 
   // 【接受】用与【发起指导】同一个品牌色风格，不用实心主按钮（用户：不要黑色）
   assert(
@@ -1768,7 +1866,15 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
   // 确认框必须说清"冻多少"（只说"确认？"等于没提醒）
   assert(src.includes('acceptFreezeNote'), '确认框说明冻结语义（钱还是你的，只是不可用）')
   assert(src.includes('acceptBalance'), '确认框显示当前可用余额')
-  assert(src.includes("t('community.mentor.acceptConfirmBadge'"), '确认框角标写明冻结数量')
+  assert(
+    src.includes("'community.mentor.acceptConfirmBadge'") &&
+      src.includes("'community.mentor.acceptConfirmBadgeOther'"),
+    '确认框角标写明冻结数量（且分清"冻我的"与"冻学生的"）',
+  )
+  assert(
+    src.includes('acceptFreezeNoteOther') && src.includes('iPayer ? ('),
+    '方向 B：接受的人不是付款人 → 说明冻的是**学生**的钱，且不显示自己的余额',
+  )
 
   // ④ 幂等键：接受也复用（402 押金不足后重试不重复冻结）
   const ca = src.slice(src.indexOf('const confirmAccept ='), src.indexOf('const rejectProposal ='))
@@ -1789,7 +1895,10 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
   assert(src.includes("t('community.action.propose')"), '有【发起指导】按钮（入口不能再丢）')
   assert(src.includes("post('mentor/propose'"), '发起走 mentor/propose')
   assert(src.includes('function ProposeDialog('), '存在提案对话框组件')
-  assert(src.includes("t('community.mentor.proposeTitle')"), '对话框标题走 i18n')
+  assert(
+    src.includes("'community.mentor.proposeTitle'") && src.includes("'community.mentor.bidTitle'"),
+    '对话框标题走 i18n（且两个方向各有一个标题：发起指导 / 出价加入）',
+  )
   // 第二行插槽：挂在 WorkRow 的按钮**下面**
   assert(src.includes('below={'), 'WorkRow 有第二行动作插槽')
   assert(src.includes('{below}'), 'WorkRow 真的渲染这个插槽')
@@ -1831,21 +1940,48 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
   assert(zhDict.includes('读后可发起指导'), '详情 tooltip 说明读后可发起指导')
 
   // 已发起过 → 按钮禁用 + 状态角标（不发第二次，服务器也会 409）
-  assert(/const mine = myProposalByProject\.get\(w\.projectId\)/.test(src), '按项目索引我发起的提案')
-  assert(src.includes('disabled={Boolean(mine) || proposeBusy}'), '已发起过 → 按钮禁用')
-  assert(/mine \? \(\s*<Badge tone=\{proposalTone\(mine\.status\)\}>/.test(src), '发起后显示状态角标')
+  /*
+   * 两套索引，各取**自己那一边且是我发起**的提案：
+   * 【可指导】里我是导师（我出价），【可加入】里我是学生（我出价）——
+   * 合成一个 Map 会让"我导师身份对别人的工作发起的提案"混进我的出价记录。
+   */
+  assert(
+    /const myMentorProposalByProject = proposalsByProject\('mentor'\)/.test(src) &&
+      /const myResearcherProposalByProject = proposalsByProject\('researcher'\)/.test(src),
+    '两套"我发起的提案"索引（导师侧 / 学生侧各一套）',
+  )
+  assert(
+    /if \(view\.myRole !== from \|\| !view\.iProposed\) continue/.test(src),
+    '索引里同时要求"我在这一边"且"这次是我发起的"',
+  )
+  assert(
+    /const proposed = myMentorProposalByProject\.get\(w\.projectId\)/.test(src),
+    '【可指导】按项目索引我发起的提案',
+  )
+  assert(
+    /const bidded = myResearcherProposalByProject\.get\(w\.projectId\)/.test(src),
+    '【可加入】按项目索引我出过的价',
+  )
+  assert(src.includes('disabled={Boolean(proposed) || proposeBusy}'), '已发起过 → 按钮禁用')
+  assert(src.includes('disabled={Boolean(bidded) || proposeBusy}'), '已出过价 → 按钮禁用')
+  assert(/'community\.action\.bid'/.test(src) && /openPropose\(w\)/.test(src), '【可加入】的行给【出价】')
+  assert(/proposed \? \(\s*<Badge tone=\{proposalTone\(proposed\.status\)\}>/.test(src), '发起后显示状态角标')
   // 角标在**前**、按钮在**后**（发起过之后按钮只是灰掉的残影，先给信息）
   assert(
-    /mine \? \(\s*<Badge[\s\S]{0,200}?<\/Badge>\s*\) : null\}\s*\{canPropose \? \(/.test(src),
+    /proposed \? \(\s*<Badge[\s\S]{0,600}?<\/Badge>\s*\) : null\}\s*\{canPropose \? \(/.test(src),
     '状态角标排在【发起指导】按钮之前',
   )
-  // 这里的 mine 恒为"我发起"（我是导师）→ 也要用进展文案，不能停在「已接受」
+  // 这里的提案恒为"我发起"→ 也要用进展文案，不能停在「已接受」
   assert(
-    /translateOr\(t, progressLabelKey\(mine, false\), mine\.status\)/.test(src),
+    /progressLabelKey\(proposed, proposalView\(proposed, myAccountId\)\)/.test(src),
     '【可指导】的角标同样用进展文案（待我指导 / 我已指导）',
   )
+  assert(
+    /progressLabelKey\(bidded, proposalView\(bidded, myAccountId\)\)/.test(src),
+    '【可加入】的角标同样用进展文案',
+  )
   // 刷新【可指导】时顺带刷新提案，否则角标一刷新就丢
-  assert(/post\('mentor\/list'[\s\S]{0,240}?setProposals/.test(src), '刷新可指导时回填提案状态（角标不丢）')
+  assert(/post\('mentor\/list'[\s\S]{0,400}?setProposals/.test(src), '刷新列表时回填提案状态（角标不丢）')
   // 费用建议是**开框之后**才到的（fetch 要一次往返），useState 初值只算一次 ——
   // 必须有个 effect 把它同步进去，否则预填永远是兜底的 100/20。
   assert(
@@ -1892,7 +2028,7 @@ console.log('\n[13] 指导闭环：下载 / 上传')
 
   // ① 两个动作都长在 **ACCEPTED** 的行上
   assert(
-    /canDownloadProposal\(p, incoming\) \? \(\s*<button[\s\S]{0,260}?requestDownload\(p\)/.test(src),
+    /canDownloadProposal\(p, view\) \? \(\s*<button[\s\S]{0,260}?requestDownload\(p\)/.test(src),
     '【下载】按 canDownloadProposal 显示',
   )
   // ⚠️ 学生侧：导师还没传东西时不该能点（下回来的就是自己已发布的那份）
@@ -1904,12 +2040,12 @@ console.log('\n[13] 指导闭环：下载 / 上传')
   )
   assert(/return p\.reviewFiles > 0/.test(src), '确认没有指导结果 → 不给【下载】')
   assert(
-    /if \(!incoming\) return true/.test(src),
-    '导师侧始终可下载（它要的是学生的工作区，关系一建立就该能用）',
+    /if \(view\.iAmOwner\) return true/.test(src),
+    'owner 侧始终可下载（它要的是对方的工作区，关系一建立就该能用）',
   )
   assert(
-    /p\.status === 'ACCEPTED' && !incoming \? \(\s*<button[\s\S]{0,300}?openExchange\(p\)/.test(src),
-    '【上传】只在导师侧（学生的工作区本来就在服务器上）',
+    /p\.status === 'ACCEPTED' && !view\.iAmOwner \? \(\s*<button[\s\S]{0,300}?openExchange\(p\)/.test(src),
+    '【上传】只在非 owner 侧（项目所有者用【我的】里的更新）',
   )
   // 下载现在**必须有**对话框（选工作区在那里）
   assert(src.includes('function DownloadDialog('), '下载有工作区选择器对话框')
@@ -1969,17 +2105,36 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     /community\.exchange\.downloadDone[\s\S]{0,600}?await loadProposals\(\)/.test(src),
     '下载成功后刷新提案（"学生更新了"的提示当场消失，而不是等下次刷新）',
   )
+  /*
+   * ⚠️ 下载提示**按侧**取（v0.6.0，服务器 `counterpart_updated_at` 落地后）：
+   * 服务器两侧各有自己的水位与计数 —— `workspace_*` 跟 owner 侧、
+   * `counterpart_updated_at` / `review_files` 跟另一方那一侧；而**方向决定我下载哪一侧**
+   * （方向 A 的导师下 owner 侧，方向 B 的导师下另一方那一侧）。
+   * 所以判据是 `view.otherSide`，**不是**角色 —— 早先按"非 owner"判会让方向 B 的导师
+   * 看不到"学生又交付了"。
+   */
   assert(
-    /!incoming && studentSyncHint\(t, p\.sync\)/.test(src),
-    '提示只在**导师侧**显示（学生自己知道他更新过）',
+    /p\.syncBySide \? p\.syncBySide\[view\.otherSide\] : p\.sync/.test(src),
+    '下载提示取**自己下载的那一侧**（旧宿主退回单值 sync = owner 侧）',
   )
   assert(
-    /studentSyncHint\(t, p\.sync\)/.test(src) && /'neverDownloaded' in sync/.test(src),
+    /sideSyncHint\(t, p, view\)/.test(src) && /'neverDownloaded' in sync/.test(src),
     '下载提示的三态各有说法：没下载过（先下载）/ 更新了 / 删除了',
   )
   assert(
-    /sync\.reason === 'deleted' \? 'community\.mentor\.studentDeleted' : 'community\.mentor\.studentUpdated'/.test(src),
+    /sync\.reason === 'deleted' \? 'community\.mentor\.peerDeleted' : 'community\.mentor\.peerUpdated'/.test(src),
     '两态文案分开：更新 / 删除（判据不同，说的也该不同）',
+  )
+  // "那一侧还是空的"就不催下载（与 canDownloadProposal 的判据一致，否则让用户下空包）
+  assert(
+    /const count = view\.otherSide === 'owner' \? p\.workspaceFiles : p\.reviewFiles/.test(src) &&
+      /if \(typeof count !== 'number' \|\| count === 0\) return null/.test(src),
+    '那一侧没有文件时不催【下载】（命令用户下一个空快照没意义）',
+  )
+  // 资料入口按"服务器**给没给** profile 键"判，不是按"值非空"
+  assert(
+    /view\.counterparty\?\.profile !== undefined \?/.test(src),
+    '资料按钮按 profile **键在不在**判（null = 投影了但没填 → 仍给入口，点开说"尚未填写"）',
   )
   assert(
     /if \(!res\.ok\)[\s\S]{0,400}?tone: 'error'[\s\S]{0,100}?return/.test(src),
@@ -2056,11 +2211,12 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     '预检的预计文件名在导师侧带 -mentor 后缀（与学生自己那份区分）',
   )
   assert(
-    /const mySide = \(p: HostProposal\)/.test(src) && /source: mySide\(target\)/.test(src),
-    '界面按**自己的角色**选上传侧（比对自己那一侧）',
+    /const viewOf = \(p: HostProposal\): HostProposalView => proposalView\(p, myAccountId\)/.test(src) &&
+      /source: viewOf\(target\)\.mySide/.test(src),
+    '上传侧按**方向**选（owner 侧 = 项目所有者，不是"我是不是导师"）',
   )
   assert(
-    /const source = otherSide\(p\)/.test(src) && /source: target\.source/.test(src),
+    /const source = viewOf\(p\)\.otherSide/.test(src) && /source: target\.source/.test(src),
     '下载读**对方那一侧**，且预检与下载同一侧（否则"预检有 3 个、点下去 404"）',
   )
   assert(/uploadTimeoutForBytes\(/.test(rpc), '按批次体积估超时（慢 ≠ 死）')
@@ -2099,9 +2255,9 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     'community.exchange.uploading',
     'community.exchange.uploadNoChange',
     // 协议 v21/v22：导师侧下载提示的三态
-    'community.mentor.studentNeverDownloaded',
-    'community.mentor.studentUpdated',
-    'community.mentor.studentDeleted',
+    'community.mentor.peerNeverDownloaded',
+    'community.mentor.peerUpdated',
+    'community.mentor.peerDeleted',
   ]) {
     assert(zhDict.includes(`'${k}'`), `中文字典含 ${k}`)
   }

@@ -1421,14 +1421,97 @@ function proposalTone(status: HostProposalStatus): 'brand' | 'success' | 'warn' 
  *
  * | 事实 | 学生看到 | 导师看到 |
  * |---|---|---|
- * | `review/` 还没有文件 | 等待指导意见 | 待我指导 |
- * | `review/` 有文件 | 导师已指导 | 我已指导 |
+ * | 对方那一侧还没有文件 | 等待指导意见 | 待我指导 |
+ * | 对方那一侧有文件 | 导师已指导 | 我已指导 |
  */
-function progressLabelKey(p: HostProposal, incoming: boolean): string {
+
+/**
+ * 一条指导提案**在我眼里**是什么（方向 + 当事人 id 推出的派生量）。
+ *
+ * ## 为什么要有这一层（v0.6.0 出题模式的核心）
+ *
+ * 早先界面用一个 `incoming = (我是 researcher)` 同时表达了四件事：我要不要动作、
+ * 我上传落在哪一侧、进展文案怎么称呼、谁的资料该给我看。**方向 B（导师出题）里
+ * 这四件事不再一致** —— 项目 owner 是导师、发起人是学生、接受人是导师，
+ * 继续用"我是不是 researcher"判断会在每一处都反过来。
+ *
+ * 所以统一在这里算清楚，其余地方只读这些派生量：
+ *
+ * | 派生量 | 方向 A（学生出题） | 方向 B（导师出题） |
+ * |---|---|---|
+ * | `iAmOwner`（服务器 `owner` 侧） | 我是学生 | 我是导师 |
+ * | `mySide` | 学生 → `owner` | 导师 → `owner` |
+ * | `iProposed` | 导师 | 学生 |
+ * | `iAmAcceptor`（该我接受/拒绝） | 学生 | 导师 |
+ */
+interface HostProposalView {
+  /** 我在这条关系里是导师还是研究者。 */
+  myRole: 'mentor' | 'researcher'
+  /** 项目 owner 侧是不是我（服务器按"谁写的"分两侧，owner 侧 = 项目所有者写的）。 */
+  iAmOwner: boolean
+  /** 我上传时要与自己比对的那一侧（服务器 `?source=`）。 */
+  mySide: HostFileSide
+  /** 对方的侧（下载读它）。 */
+  otherSide: HostFileSide
+  /** 这次提案是我发起的吗。 */
+  iProposed: boolean
+  /** 该我接受 / 拒绝吗（`PROPOSED` 且不是我发起的）。 */
+  iAmAcceptor: boolean
+  /** 要判断的那个人（对方）。 */
+  counterparty: HostProposalParty | null
+  /** 对方是导师吗（决定资料框的标题与措辞）。 */
+  counterpartyIsMentor: boolean
+}
+
+/**
+ * 从提案算出 {@link HostProposalView}。
+ *
+ * "谁发起了"优先用服务器的 `proposed_by_id`；旧服务器不返回时**按方向推断**
+ * （A 由导师发起、B 由学生发起）—— 这是那个方向的定义，不是猜测。
+ * `myAccountId` 缺失（未登录 / 旧宿主）时按"我是研究者"兜底：那种情况下这些行
+ * 本来也不渲染（【指导中】要求登录），兜底只为不崩。
+ */
+function proposalView(p: HostProposal, myAccountId: string | null): HostProposalView {
+  const myRole: 'mentor' | 'researcher' =
+    myAccountId && p.mentor?.id === myAccountId ? 'mentor' : 'researcher'
+  const iAmOwner = p.direction === 'SEEK_MENTOR' ? myRole === 'researcher' : myRole === 'mentor'
+  const proposerRole: 'mentor' | 'researcher' = p.direction === 'SEEK_MENTOR' ? 'mentor' : 'researcher'
+  const iProposed =
+    p.proposedById != null ? p.proposedById === myAccountId : myRole === proposerRole
+  const counterparty = myRole === 'mentor' ? p.researcher : p.mentor
+  return {
+    myRole,
+    iAmOwner,
+    mySide: iAmOwner ? 'owner' : 'mentor',
+    otherSide: iAmOwner ? 'mentor' : 'owner',
+    iProposed,
+    iAmAcceptor: !iProposed,
+    counterparty,
+    counterpartyIsMentor: myRole === 'researcher',
+  }
+}
+
+/**
+ * 「指导中」那一行的**进展文案**（`ACCEPTED` 之后）。
+ *
+ * `reviewFiles`（服务器口径）数的是**非 owner 那一侧**的去重文件数：
+ * 方向 A 下那是导师的指导产物，方向 B 下那是**学生的交付**（项目 owner 是导师）。
+ * 所以同一个数在两个方向下要换一套称呼 —— 而且按"是我传的还是对方传的"分。
+ */
+function progressLabelKey(p: HostProposal, view: HostProposalView): string {
   if (p.status !== 'ACCEPTED') return PROPOSAL_STATUS_KEYS[p.status] ?? p.status
-  const hasReview = typeof p.reviewFiles === 'number' && p.reviewFiles > 0
-  if (incoming) return hasReview ? 'community.mentor.progress.studentGot' : 'community.mentor.progress.studentWaiting'
-  return hasReview ? 'community.mentor.progress.mentorDone' : 'community.mentor.progress.mentorWaiting'
+  const hasDelivered = typeof p.reviewFiles === 'number' && p.reviewFiles > 0
+  // 非 owner 那一侧 = 我 → 文案说"我"；否则说对方
+  if (!view.iAmOwner) {
+    if (p.direction === 'SEEK_STUDENT') {
+      return hasDelivered ? 'community.mentor.progress.iDelivered' : 'community.mentor.progress.iToDeliver'
+    }
+    return hasDelivered ? 'community.mentor.progress.studentGot' : 'community.mentor.progress.studentWaiting'
+  }
+  if (p.direction === 'SEEK_STUDENT') {
+    return hasDelivered ? 'community.mentor.progress.studentDelivered' : 'community.mentor.progress.studentToDeliver'
+  }
+  return hasDelivered ? 'community.mentor.progress.mentorDone' : 'community.mentor.progress.mentorWaiting'
 }
 
 /**
@@ -1439,34 +1522,49 @@ function progressLabelKey(p: HostProposal, incoming: boolean): string {
  *
  * `reviewFiles` 为 `null`（查不到）时**保留按钮**：拿不到 ≠ 没有，不能因为一次探测
  * 失败就把一个可能可用的动作藏起来。
+ *
+ * ⚠️ v0.6.0：这个"学生侧"= **非 owner 的那一方**（方向 B 下就是学生）—— 判据换成
+ * `view.iAmOwner`，不再看角色。owner 侧（方向 A 的学生 / 方向 B 的导师）下载的是
+ * 对方那一侧的工作区，关系一建立就该能用。
  */
-function canDownloadProposal(p: HostProposal, incoming: boolean): boolean {
+function canDownloadProposal(p: HostProposal, view: HostProposalView): boolean {
   if (p.status !== 'ACCEPTED') return false
-  // 导师侧：下载的是**学生的工作区**，关系一建立就该能用（分析的前提）
-  if (!incoming) return true
+  if (view.iAmOwner) return true
   if (p.reviewFiles === null || p.reviewFiles === undefined) return true
   return p.reviewFiles > 0
 }
 
 /**
- * 导师侧那行下载提示该说什么（没有该说的 → `null`，界面就不显示）。
+ * "我要下载的那一侧变了吗"该说的话（没有该说的 → `null`，界面就不显示）。
  *
- * 抽成函数而不是行内三元：判别联合有**三个**分支（从没下载过 / 学生动过 / 没动），
- * 塞进 JSX 的行内三元会变成"读三遍才知道显示什么"。
+ * 判据由宿主按侧算好（`syncBySide`），这里只做三件事：
+ *   ① **取自己那一侧** —— `view.otherSide`（我下载对方那一侧：方向 A 的导师取 `owner`，
+ *      方向 B 的导师取 `mentor`，方向 B 的学生取 `owner`）；
+ *   ② 旧宿主（协议 <25）只有 `sync` 一个（含义是 owner 侧）→ 兜底认它；
+ *   ③ 把 `neverDownloaded` 与"那一侧还是空的"分开：命令用户下载一个**空的**快照
+ *      没意义（与 `canDownloadProposal` 的判据保持一致）。
  *
  * | `sync` | 文案 |
  * |---|---|
- * | `{ neverDownloaded: true }` | 先下载（手里没副本） |
- * | `{ changed: true, reason: 'uploaded' }` | 学生更新了文件，需要重新下载 |
- * | `{ changed: true, reason: 'deleted' }` | 学生删除了文件，需要重新下载 |
+ * | `{ neverDownloaded: true }` 且那一侧有内容 | 先下载（手里没副本） |
+ * | `{ changed: true, reason: 'uploaded' }` | 对方更新了文件，需要重新下载 |
+ * | `{ changed: true, reason: 'deleted' }` | 对方删除了文件，需要重新下载 |
  * | `{ changed: false }` / `null` / `undefined` | 不提示（没动 / 无从判断 / 旧宿主） |
  */
-function studentSyncHint(t: Translate, sync: HostProposal['sync']): string | null {
+function sideSyncHint(t: Translate, p: HostProposal, view: HostProposalView): string | null {
+  // 新旧形状二选一：`syncBySide` 在就按侧取，否则退回旧的单值（它记的是 owner 侧）。
+  // `undefined` 两种都算"这个字段不存在"（旧宿主）→ 无从判断，与 `null` 同处。
+  const sync: HostSyncCheck | undefined = p.syncBySide ? p.syncBySide[view.otherSide] : p.sync
   // 三态纪律：`null`/`undefined` = 无从判断（旧服务器、不可知、旧宿主）→ 不编造
   if (!sync) return null
-  if ('neverDownloaded' in sync) return t('community.mentor.studentNeverDownloaded')
+  if ('neverDownloaded' in sync) {
+    const count = view.otherSide === 'owner' ? p.workspaceFiles : p.reviewFiles
+    // 那一侧还没有任何文件 → 没有可下载的东西，别催（下载按钮此时也是隐藏的）
+    if (typeof count !== 'number' || count === 0) return null
+    return t('community.mentor.peerNeverDownloaded')
+  }
   if (!sync.changed) return null
-  return t(sync.reason === 'deleted' ? 'community.mentor.studentDeleted' : 'community.mentor.studentUpdated')
+  return t(sync.reason === 'deleted' ? 'community.mentor.peerDeleted' : 'community.mentor.peerUpdated')
 }
 
 /**
@@ -1500,7 +1598,29 @@ function roleText(t: Translate, roles: string[]): string {
 /** 一项研究工作的展示行（宿主 `WorkItem` 的镜像）。 */
 interface HostWork {
   projectId: string
+  /**
+   * **这次发布的名字**（服务器的 `title`）。
+   *
+   * ⚠️ 它历史上是发布方的本机工作区名 —— 列表要显示的是 {@link HostWork.workName}，
+   * 这里只作旧服务器的兜底。
+   */
   title: string
+  /**
+   * **这项研究工作的名字**（服务器的 `work_name`）—— 列表**该显示的名字**：
+   * 有论文就是论文标题，否则是工作确定的主题。
+   *
+   * 为什么必须由服务器给：看这三个列表的人**本机不一定有那份 workspace**
+   * （导师看学生的研究、学生看导师的选题），名字只能来自服务器上的数据。
+   *
+   * `undefined` = 旧服务器还没有这个字段 → 退回 `title`（不编造）。
+   */
+  workName?: string | null
+  /**
+   * 这一项属于哪个方向：【可指导】是学生发布的研究（`SEEK_MENTOR`），
+   * 【可加入】是导师发布的选题（`SEEK_STUDENT`）。缺字段时宿主已归一到
+   * `SEEK_MENTOR`，界面不必再兜底。
+   */
+  direction: HostProjectDirection
   /**
    * 作者（服务器 `owner: { id, display_name }` 的投影；宿主 `WorkItem.owner`）。
    *
@@ -1532,6 +1652,15 @@ interface HostWork {
 }
 
 /** **本机**研究工作（宿主 `LocalWorkItem` 的镜像）—— 数据来自磁盘，不需要登录。 */
+/**
+ * 一项研究工作的**方向**（宿主 `ProjectDirection` 的镜像）。
+ *
+ * 两个方向共用同一套项目 / 提案 / 合同结构，差别只在谁拥有项目、谁发起、谁接受
+ * （两个方向都是学生出钱、论文主体是学生）。缺字段 → 宿主已归一到 `SEEK_MENTOR`
+ * （= 今天唯一存在的行为）。
+ */
+type HostProjectDirection = 'SEEK_MENTOR' | 'SEEK_STUDENT'
+
 interface HostLocalWork {
   id: string
   title: string
@@ -1543,17 +1672,64 @@ interface HostLocalWork {
   overall: number
   /** 可数资产：稳定 key + 计数 + 结构化 detail。 */
   counts: Array<{ key: string; value: number; detail?: { code: string; count: number } }>
-  /** 已发布到 ConvFusion.com 的本地记录（读本地映射；null = 还没发布过）。 */
-  published: {
+  /**
+   * 这个工作区在**两个方向**上的发布记录，一个方向一条（`[]` = 还没发布过）。
+   *
+   * ⚠️ 为什么是数组：同一份工作区可以既发布成"学生求指导"、又发布成"导师招学生"
+   * —— 服务器上是两个不同的项目。界面按 `direction` 找自己那一条，
+   * 找不到就把按钮显示成「寻找…」而不是「更新…」。
+   */
+  published: Array<{
+    /** 这条属于哪个方向。 */
+    direction: HostProjectDirection
     projectId: string
     version: number
     updatedAt: string
     serverUrl: string
     accountId: string
-  } | null
+  }>
   paper: boolean
   clarity: 'clear' | 'ambiguous' | 'blocked' | 'unknown'
   updatedAt: string
+}
+
+/**
+ * 列表里该显示的**研究工作名**。
+ *
+ * 服务器的 `work_name` 优先（有论文就是论文标题，否则是工作确定的主题）；
+ * 旧服务器（没有这个字段）才退回 `title`/`project_title` —— 那正是"目录名"的老行为，
+ * 但**不编造**：拿不到工作名时显示旧字段，而不是空着或瞎猜一个。
+ */
+function workLabelOf(source: { workName?: string | null; title: string }): string {
+  return source.workName?.trim() || source.title
+}
+
+/** 提案行上的研究工作名（`projectTitle` 只作旧服务器兜底；两者都没有 → `null`）。 */
+function proposalWorkLabel(p: HostProposal): string | null {
+  return p.workName?.trim() || p.projectTitle
+}
+
+/** 这个工作区在**某个方向**上已发布过吗（有则返回那条记录，`null` = 该方向还没发布）。 */
+function publishedIn(
+  w: HostLocalWork,
+  direction: HostProjectDirection,
+): HostLocalWork['published'][number] | null {
+  return w.published.find((r) => r.direction === direction) ?? null
+}
+
+/**
+ * 【我的】里两个发布按钮的**上下顺序**（v0.6.0 用户拍板）：
+ *
+ * - 导师（`MENTOR`/`ADMIN`）→ 【寻找学生】在上（他这一版的主要动作是出题）；
+ * - 其余（研究者 / 未登录 / 角色未知）→ 【寻找指导】在上。
+ *
+ * 两个按钮**都在**（双按钮），变的只是顺序 —— 所以这是一个纯粹的排序问题，
+ * 不要写成"只显示一个"。
+ */
+function publishButtonOrder(canMentor: boolean): [HostProjectDirection, HostProjectDirection] {
+  return canMentor
+    ? ['SEEK_STUDENT', 'SEEK_MENTOR']
+    : ['SEEK_MENTOR', 'SEEK_STUDENT']
 }
 
 /**
@@ -1565,7 +1741,14 @@ interface HostLocalWork {
 interface HostUploadPlan {
   projectId: string
   root: string
+  /** **要发布到网络的名字** = 这项研究工作自己的名字（有论文用论文标题）。 */
   title: string
+  /** 本机工作区名（注册表标题）—— 与 `title` 不同时对话框用一行提示指认是哪个工作区。 */
+  workspaceTitle: string
+  /** 名字从哪来的（`paper` / `topic` / `fallback`）。 */
+  workNameSource: 'paper' | 'topic' | 'fallback'
+  /** 这次要发布到哪个方向（宿主回显；对话框标题据此显示「寻找指导 / 寻找学生」）。 */
+  direction: HostProjectDirection
   plan: {
     categories: Array<{
       id: string
@@ -1719,12 +1902,28 @@ interface HostProposalParty {
 
 type HostProposalStatus = 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED'
 
-/** 一条指导提案：我发起的（我是 mentor）/ 我收到的（我是 researcher）。 */
+/** 一条指导提案：我发起的 / 我收到的（两个方向共用这个结构）。 */
 interface HostProposal {
   id: string
   projectId: string
-  /** 项目标题（后端 enrich 后才有；缺 → null，界面写"未命名项目"）。 */
+  /**
+   * 这条提案所属的方向（服务器的 `direction`）。
+   *
+   * ⚠️ 界面**必须**靠它（而不是"我是什么角色"）判断：谁能接受、我上传落在哪一侧、
+   * 进展文案怎么称呼。旧服务器缺字段 → 宿主已归一到 `SEEK_MENTOR`。
+   */
+  direction: HostProjectDirection
+  /**
+   * 谁发起了这次提案（服务器的 `proposed_by_id`）。
+   *
+   * `null` = 旧服务器不返回 → 界面按方向推断（`SEEK_MENTOR` → 导师发起；
+   * `SEEK_STUDENT` → 学生发起）。"谁能接受"= **未发起的那一方**。
+   */
+  proposedById: string | null
+  /** 项目标题（后端 enrich 后才有；缺 → null）—— 旧服务器的兜底，见 {@link HostProposal.workName}。 */
   projectTitle: string | null
+  /** **这项研究工作的名字**（服务器的 `work_name`）：列表该显示的就是它。 */
+  workName?: string | null
   mentor: HostProposalParty | null
   researcher: HostProposalParty | null
   guidanceScope: string
@@ -1734,31 +1933,65 @@ interface HostProposal {
   successCondition: { type: string; description: string | null }
   status: HostProposalStatus
   /**
-   * 关系建立（ACCEPTED）后，导师已上传的指导结果条数（`review/` 下的文件数）。
+   * 关系建立（ACCEPTED）后，**非 owner 那一侧**交付的文件数（服务器 `review_files`）。
    *
-   * 提案状态接受之后就不再变了，而用户要看的是**指导进展**；这个事实只在项目
-   * 文件里。宿主在 `mentor/list` 里补齐；`null` = 没查到（未知），不是"没有"。
+   * 提案状态接受之后就不再变了，而用户要看的是**指导进展**；这个事实只在项目文件里。
+   * 宿主在 `mentor/list` 里补齐；`null` = 没查到（未知），不是"没有"。
+   *
+   * ⚠️ v0.6.0：它是**非 owner 侧**的计数 —— 方向 A 下是导师的指导产物，
+   * **方向 B 下是学生的交付**（项目 owner 是导师）。所以进展文案要按方向换称呼。
    */
   reviewFiles?: number | null
+  /** **owner 那一侧**当前的文件数（服务器 `workspace_files`；与上面同一套三态）。 */
+  workspaceFiles?: number | null
+  /** **owner 那一侧**最后一次上传的时间（服务器 `workspace_updated_at`）。 */
+  workspaceUpdatedAt?: string | null
   /**
-   * **宿主算好的**："导师手里这份工作区是不是最新"（判别联合，见 `sync-watermarks.ts`）。
+   * **非 owner 那一侧**最后一次上传的时间（服务器 `counterpart_updated_at`）。
    *
-   * - `{ neverDownloaded: true }` —— 本地没有水位 = **从没成功下载过** → 提示"先下载"；
-   * - `{ changed: true, reason: 'uploaded' | 'deleted' }` —— 下载过、学生又动过 → 提示重新下载；
+   * 与 `workspaceUpdatedAt` 配对，只是**另一侧**：方向 B 下导师靠它发现
+   * "学生又交付了"。界面不直接用它 —— 宿主把它比进 `syncBySide.mentor`。
+   */
+  counterpartUpdatedAt?: string | null
+  /**
+   * **宿主算好的**"我要下载的那一侧变了吗"，**按侧给**（判别联合，见 `sync-watermarks.ts`）。
+   *
+   * - `{ neverDownloaded: true }` —— 本地没有**这一侧**的水位 = 从没下载过这一侧 → 提示"先下载"；
+   * - `{ changed: true, reason: 'uploaded' | 'deleted' }` —— 下载过、对方又动过 → 提示重新下载；
    * - `{ changed: false }` —— 下载过、两个判据都说没动；
    * - `null` —— **无从判断**（旧服务器不给字段 / 服务器说不可知 / 只有一半判据可用）。
    *
-   * ⚠️ `undefined` = 旧宿主不返回这个字段（协议 <22）→ 界面**不提示**，
-   * 但那不等于"没更新"，所以只能按"拿不到就不提示"处理，不许编成 false。
+   * ⚠️ 为什么两侧都要：界面取**自己下载的那一侧**（`otherSide`），而那是哪一侧由**方向**决定
+   *   —— 方向 A 的导师下 `owner` 侧，方向 B 的导师下 `mentor` 侧。
    *
-   * ⚠️ **"从没下载过"与"无从判断"必须分开**（2026-10 用户指出）：前者手里没副本，
-   * 该提示下载；后者是判不出来，不该编造。早先两者都在 `null` 里 → 导师第一次进
-   * 【指导中】一声不吭，而学生明明更新过了。
+   * ⚠️ `undefined` = 旧宿主不返回这个字段 → 界面**不提示**（那不等于"没更新"），
+   * 不许编成 false。
    */
-  sync?: { neverDownloaded: true } | { changed: boolean; reason: 'uploaded' | 'deleted' | null } | null
+  syncBySide?: {
+    owner: HostSyncCheck
+    mentor: HostSyncCheck
+  } | null
+  /**
+   * **旧形状**（协议 < 25）：只有 owner 侧这一个判读结果；界面为兼容继续认它。
+   *
+   * 只在 `syncBySide` 缺失时读 —— 两份都在时以 `syncBySide` 为准。
+   */
+  sync?: HostSyncCheck
   expiresAt: string
   createdAt: string
 }
+
+/**
+ * 一侧的"变了吗"判读结果（宿主 `checkSideChange` 的镜像）。
+ *
+ * ⚠️ **"从没下载过"与"无从判断"必须分开**（2026-10 用户指出）：前者手里没副本、
+ * 该提示下载；后者是判不出来，不该编造。早先两者都在 `null` 里 → 导师第一次进
+ * 【指导中】一声不吭，而学生明明更新过了。
+ */
+type HostSyncCheck =
+  | { neverDownloaded: true }
+  | { changed: boolean; reason: 'uploaded' | 'deleted' | null }
+  | null
 
 /** 费用建议（`mentor/fee-suggestion`）。 */
 interface HostFeeSuggestion {
@@ -2258,8 +2491,20 @@ function PublishDialog({
         }}
       >
         <div style={S.cardHead}>
-          {/* 标题直接带工作区名：不再重复写 ConvFusion.com，也省掉下面那行标题 */}
+          {/*
+            标题里是**要发布到网络的名字**（这项工作自己的名字：有论文就是论文标题），
+            而不是本机工作区名 —— 用户点完就能对上网络里会出现什么。
+            本机工作区名在下面用一行提示指认（两者不同时才出现）。
+          */}
           {t('community.publish.title', { title: data.title })}
+          {/*
+            这一版有两个发布方向，**必须**在确认框里说清发到哪一边 ——
+            否则用户在同一个对话框里分不出自己点的是【寻找指导】还是【寻找学生】，
+            而两者的后果（出现在谁的列表里）完全不同。
+          */}
+          <Badge tone="neutral">
+            {t(data.direction === 'SEEK_STUDENT' ? 'community.action.seekStudent' : 'community.action.seekMentor')}
+          </Badge>
           <span style={{ flex: '1 1 auto' }} />
           {data.usage ? (
             <Badge tone={data.usage.nextPublishCost > 0 ? 'brand' : 'neutral'}>
@@ -2270,6 +2515,13 @@ function PublishDialog({
           )}
         </div>
         <div style={{ ...S.cardBody, gap: 12 }}>
+          {/*
+            名字与本机工作区名不同 → 指认一下是**哪个本机工作区**（对话框是从某一行打开的，
+            但那行显示的是注册表标题，与上面的名字不一样，不说一句会让人以为点错了）。
+          */}
+          {data.workspaceTitle && data.workspaceTitle !== data.title ? (
+            <div style={S.hint}>{t('community.publish.workspaceHint', { workspace: data.workspaceTitle })}</div>
+          ) : null}
           <div style={S.hint}>
             {t('community.publish.storage', {
               selected: formatBytes(selectedBytes),
@@ -2396,25 +2648,37 @@ function BriefConfirmDialog({
  * 接受指导的**确认对话框**。
  *
  * ⚠️ 为什么必须有它：接受会把押金从 `available` 转到 `frozen` —— 这是真正动 Token 的
- * 操作。用户规则是"所有扣费操作都要先提醒，不能点击即生效"。所以点【接受指导】只是
+ * 操作。用户规则是"所有扣费操作都要先提醒，不能点击即生效"。所以点【接受】只是
  * 打开这个框；点了「确认接受」才发请求。
  *
- * 框里必须说清三件事：跟谁合作（导师 + 机构）、冻多少钱（押金）、冻完还剩多少（余额）。
+ * 框里必须说清三件事：跟谁合作（对方 + 机构）、冻多少钱（押金）、**冻的是谁的钱**。
+ *
+ * ⚠️ `iPayer`（v0.6.0）：两个方向都是**学生**出钱，但接受的人不同 ——
+ * 方向 A 由学生接受（冻的是我自己的，要显示我的余额），方向 B 由导师接受
+ * （冻的是**学生**的，显示导师自己的余额是误导，所以不显示）。
  */
 function AcceptConfirmDialog({
   t,
   proposal,
+  party,
+  partyIsMentor,
+  iPayer,
   balance,
   onCancel,
   onConfirm,
 }: {
   t: Translate
   proposal: HostProposal
+  /** 对方（方向 A 是导师、方向 B 是学生）。 */
+  party: HostProposalParty
+  partyIsMentor: boolean
+  /** 押金是不是从我自己的账户冻结（= 我就是学生）。 */
+  iPayer: boolean
   balance: number | null
   onCancel: () => void
   onConfirm: () => void
 }): JSX.Element {
-  const affiliation = [proposal.mentor?.profile?.institution, proposal.mentor?.profile?.department]
+  const affiliation = [party.profile?.institution, party.profile?.department]
     .filter(Boolean)
     .join(' · ')
   return (
@@ -2425,13 +2689,21 @@ function AcceptConfirmDialog({
     >
       <div style={{ ...S.card, width: 'min(460px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
         <div style={S.cardHead}>
-          {t('community.mentor.acceptConfirmTitle')}
+          {t(iPayer ? 'community.mentor.acceptConfirmTitle' : 'community.mentor.acceptConfirmTitleOther')}
           <span style={{ flex: '1 1 auto' }} />
-          <Badge tone="brand">{t('community.mentor.acceptConfirmBadge', { deposit: proposal.depositAmount })}</Badge>
+          <Badge tone="brand">
+            {t(
+              iPayer ? 'community.mentor.acceptConfirmBadge' : 'community.mentor.acceptConfirmBadgeOther',
+              { deposit: proposal.depositAmount },
+            )}
+          </Badge>
         </div>
         <div style={{ ...S.cardBody, gap: 9 }}>
           <div style={S.listTitle}>
-            {t('community.mentor.mentorIs', { name: proposal.mentor?.displayName ?? t('community.mentor.unknownParty') })}
+            {t(
+              partyIsMentor ? 'community.mentor.mentorIs' : 'community.mentor.researcherIs',
+              { name: party.displayName || t('community.mentor.unknownParty') },
+            )}
           </div>
           {affiliation ? <div style={S.hint}>{affiliation}</div> : null}
           <div style={S.hint}>
@@ -2441,13 +2713,21 @@ function AcceptConfirmDialog({
               success: proposal.successPaymentAmount,
             })}
           </div>
-          {/* 冻结语义说清楚：钱还是研究者的，只是不可用 */}
-          <div style={S.hint}>{t('community.mentor.acceptFreezeNote', { deposit: proposal.depositAmount })}</div>
+          {/* 冻结语义说清楚：钱还是学生的，只是不可用 */}
           <div style={S.hint}>
-            {typeof balance === 'number'
-              ? t('community.mentor.acceptBalance', { balance })
-              : t('community.briefConfirm.balanceUnknown')}
+            {t(
+              iPayer ? 'community.mentor.acceptFreezeNote' : 'community.mentor.acceptFreezeNoteOther',
+              { deposit: proposal.depositAmount },
+            )}
           </div>
+          {/* 余额只在"冻的是我的钱"时显示 —— 冻别人的钱时我的余额与本操作无关 */}
+          {iPayer ? (
+            <div style={S.hint}>
+              {typeof balance === 'number'
+                ? t('community.mentor.acceptBalance', { balance })
+                : t('community.briefConfirm.balanceUnknown')}
+            </div>
+          ) : null}
           <div style={S.footer}>
             <span style={{ flex: '1 1 auto' }} />
             <button type="button" style={S.ghostBtn} onClick={onCancel}>
@@ -2742,10 +3022,14 @@ function TokenDialog({
 }
 
 /**
- * 发起指导的**提案对话框**（导师视角，从【可指导】列表打开）。
+ * 发起指导 / **出价加入**的对话框（两个方向共用）。
  *
  * 为什么这个不用"二次确认"那一套：发起提案**不花 Token**（服务器只在接受时冻结押金），
- * 所以对话框本身就是确认 —— 填完点「发起指导」才发请求。真正花钱的是对面的【接受指导】。
+ * 所以对话框本身就是确认 —— 填完点按钮才发请求。真正花钱的是**对方**的【接受】。
+ *
+ * `variant` 只换文案，不换逻辑：导师侧叫「发起指导申请」（我出价请人接受），
+ * 学生侧叫「出价加入」（我出价请导师接受）—— **两边都是"未发起的那一方接受"**，
+ * 而且两个方向都是学生出钱，所以学生侧那句分账说明要写清"冻结的是你的"。
  *
  * 费用三项里**成功付款是推导出来的**（`总额 − 押金`），不是独立输入框：
  * 服务器强校验 `押金 + 成功付款 == 总额`，与其让用户填出一个必然被拒的组合，
@@ -2759,6 +3043,7 @@ function ProposeDialog({
   error,
   onCancel,
   onSubmit,
+  variant = 'mentor',
 }: {
   t: Translate
   title: string
@@ -2771,6 +3056,8 @@ function ProposeDialog({
     depositAmount: number
     successPaymentAmount: number
   }) => void
+  /** `mentor` = 导师出价（学生发布的研究）；`researcher` = 学生出价（导师发布的选题）。 */
+  variant?: 'mentor' | 'researcher'
 }): JSX.Element {
   const [total, setTotal] = React.useState(String(fee?.suggestedFee ?? 100))
 
@@ -2806,7 +3093,7 @@ function ProposeDialog({
     >
       <div style={{ ...S.card, width: 'min(400px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
         <div style={S.cardHead}>
-          {t('community.mentor.proposeTitle')}
+          {t(variant === 'researcher' ? 'community.mentor.bidTitle' : 'community.mentor.proposeTitle')}
           <span style={{ flex: '1 1 auto' }} />
           <Badge tone="neutral">{t('community.mentor.proposeFree')}</Badge>
         </div>
@@ -2826,14 +3113,14 @@ function ProposeDialog({
               }}
             />
           </div>
-          {/* 押金比例由平台定，导师只填总额：把分账说清楚，不让他去猜 */}
+          {/* 押金比例由平台定，只填总额：把分账说清楚，不让人去猜。
+              两个方向的措辞不同 —— 学生侧必须写清"冻结的是**你**的押金"。 */}
           <div style={S.hint}>
             {valid
-              ? t('community.mentor.feeNote', {
-                  percent: Math.round(ratio * 100),
-                  deposit,
-                  success,
-                })
+              ? t(
+                  variant === 'researcher' ? 'community.mentor.bidNote' : 'community.mentor.feeNote',
+                  { percent: Math.round(ratio * 100), deposit, success },
+                )
               : t('community.mentor.feeInvalid')}
           </div>
 
@@ -2858,7 +3145,9 @@ function ProposeDialog({
                 })
               }
             >
-              {busy ? t('community.action.loading') : t('community.action.propose')}
+              {busy
+                ? t('community.action.loading')
+                : t(variant === 'researcher' ? 'community.action.bid' : 'community.action.propose')}
             </button>
           </div>
         </div>
@@ -2868,23 +3157,31 @@ function ProposeDialog({
 }
 
 /**
- * 导师信息（Profile 介绍）。
+ * 对方的信息（Profile 介绍）。
  *
- * 数据来自提案响应里**内嵌的** `mentor.profile`（后端 enrich 之后才有）——
- * 为此不需要任何额外请求。导师没填过 profile 就如实说"尚未填写"，不编内容。
+ * 数据来自提案响应里**内嵌的** `profile`（后端 enrich 之后才有）——
+ * 为此不需要任何额外请求。对方没填过 profile 就如实说"尚未填写"，不编内容。
  *
- * 为什么学生需要它：接受指导要冻结一笔押金，决定跟谁合作之前应当能看清对方是谁。
+ * 为什么要有它：接受指导要冻结一笔押金，决定跟谁合作之前应当能看清对方是谁。
+ * 两个方向下"对方"不同：方向 A 是提出申请的**导师**，方向 B 是出价的**学生**
+ * （服务器按"谁要判断谁"投影 profile，见 v0.6.0 后端规格 §2 R5）—— 所以标题与
+ * 空态文案随 `isMentor` 换，但结构完全一样。
  */
-function MentorProfileDialog({
+function PartyProfileDialog({
   t,
-  proposal,
+  party,
+  isMentor,
+  status,
   onClose,
 }: {
   t: Translate
-  proposal: HostProposal
+  party: HostProposalParty
+  /** 对方是导师吗（决定标题与"尚未填写"的措辞）。 */
+  isMentor: boolean
+  status: HostProposalStatus
   onClose: () => void
 }): JSX.Element {
-  const profile = proposal.mentor?.profile ?? null
+  const profile = party.profile ?? null
   const affiliation = [profile?.institution, profile?.department].filter(Boolean).join(' · ')
   /** 一行：标签 + 值（值缺失就不渲染这一行）。 */
   const line = (label: string, value: string | null | undefined): JSX.Element | null =>
@@ -2899,16 +3196,12 @@ function MentorProfileDialog({
     <div style={S.overlay} role="dialog" aria-modal="true">
       <div style={{ ...S.card, width: 'min(430px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
         <div style={S.cardHead}>
-          {t('community.mentor.profileTitle')}
+          {t(isMentor ? 'community.mentor.profileTitle' : 'community.mentor.profileTitleResearcher')}
           <span style={{ flex: '1 1 auto' }} />
-          <Badge tone={proposalTone(proposal.status)}>
-            {enumText(t, PROPOSAL_STATUS_KEYS, proposal.status)}
-          </Badge>
+          <Badge tone={proposalTone(status)}>{enumText(t, PROPOSAL_STATUS_KEYS, status)}</Badge>
         </div>
         <div style={{ ...S.cardBody, gap: 9 }}>
-          <div style={S.listTitle}>
-            {proposal.mentor?.displayName ?? t('community.mentor.unknownParty')}
-          </div>
+          <div style={S.listTitle}>{party.displayName || t('community.mentor.unknownParty')}</div>
           {affiliation ? <div style={S.hint}>{affiliation}</div> : null}
           {profile ? (
             <>
@@ -2918,7 +3211,9 @@ function MentorProfileDialog({
               {line(t('community.mentor.profileExpertise'), profile.researchExpertise.join(' · '))}
             </>
           ) : (
-            <div style={S.hint}>{t('community.mentor.profileEmpty')}</div>
+            <div style={S.hint}>
+              {t(isMentor ? 'community.mentor.profileEmpty' : 'community.mentor.profileEmptyResearcher')}
+            </div>
           )}
           <div style={S.footer}>
             <span style={{ flex: '1 1 auto' }} />
@@ -3201,7 +3496,7 @@ export function DownloadDialog({
         </div>
         <div style={{ ...S.cardBody, gap: 9 }}>
           <div style={S.listTitle}>
-            {proposal.projectTitle ?? t('community.mentor.untitledProject')}
+            {proposalWorkLabel(proposal) ?? t('community.mentor.untitledProject')}
           </div>
           {/* 只存 ZIP、其余交给用户：说清楚，免得以为会自动解压 */}
           <div style={S.hint}>{t('community.exchange.zipOnly')}</div>
@@ -3499,7 +3794,7 @@ function UploadDialog({
         </div>
         <div style={{ ...S.cardBody, gap: 11 }}>
           <div style={S.listTitle}>
-            {proposal.projectTitle ?? t('community.mentor.untitledProject')}
+            {proposalWorkLabel(proposal) ?? t('community.mentor.untitledProject')}
           </div>
 
           {/* ① 选工作区：只有 **含研究定义** 的工作区会出现（宿主侧判定） */}
@@ -3865,9 +4160,13 @@ export function CommunityTab({
    */
   const [inviteOpen, setInviteOpen] = React.useState(false)
 
-  /* ── 研究工作：两个视图（我的 / 可指导）───────────────────────────── */
-  /** 当前视图。「我的」在前：所有人都可能**被**指导，先看自己的。 */
-  const [workTab, setWorkTab] = React.useState<'mine' | 'mentor' | 'mentorship'>('mine')
+  /* ── 研究工作：四个视图（我的 / 可指导 / 可加入 / 指导中）─────────────
+   *
+   * 「我的」在最前（所有人都可能**被**指导，先看自己的）；「可指导」只对导师显示
+   * （v0.6.0：以前是"显示但说明需要角色"，现在按用户要求直接不显示），
+   * 「可加入」对所有人都显示（学生找导师发布的选题）。
+   */
+  const [workTab, setWorkTab] = React.useState<'mine' | 'mentor' | 'joinable' | 'mentorship'>('mine')
   /** 本机研究项目（不联网、不需要登录）。 */
   const [mine, setMine] = React.useState<HostLocalWork[] | null>(null)
   const [mineLoading, setMineLoading] = React.useState(false)
@@ -3875,24 +4174,50 @@ export function CommunityTab({
   const [mineError, setMineError] = React.useState<{ code: string; message: string } | null>(null)
   /** 工作区注册表是否可用（不可用 = 读不到，而不是没有）。 */
   const [mineRegistry, setMineRegistry] = React.useState<{ available: boolean; reason?: string } | null>(null)
-  /** 正在发布的那一项（本机工作区 id）。 */
-  const [publishing, setPublishing] = React.useState<string | null>(null)
+  /**
+   * 正在发布的那一项 —— **带方向**（v0.6.0）。
+   *
+   * 两个按钮共用一个工作区，只记 id 的话两个按钮会同时显示「发布中…」，
+   * 用户看不出点的是哪一个（而发布方向恰恰是这一版的核心信息）。
+   */
+  const [publishing, setPublishing] = React.useState<
+    { id: string; direction: HostProjectDirection } | null
+  >(null)
   /** 发布结果 / 失败（只在业务发生时出现）。 */
   const [publishNotice, setPublishNotice] = React.useState<
     { tone: 'success' | 'error'; code?: string; text: string; missing?: string[] } | null
   >(null)
-  /** 发布确认对话框（点「寻找指导」/「更新」时打开）。 */
+  /** 发布确认对话框（点【寻找指导】/【寻找学生】/【更新…】时打开）。 */
   const [dialog, setDialog] = React.useState<{
     work: HostLocalWork
+    /**
+     * 本次发布到哪个方向。**存在对话框里**而不是从 `work` 再推一次：
+     * 用户点的是哪个按钮，就发布到哪个方向，全程不能变（`work/uploadPlan` 与
+     * `work/publish` 必须是同一个方向，否则记的指纹会落到另一个项目上）。
+     */
+    direction: HostProjectDirection
     data: HostUploadPlan
     selection: Set<string>
     remember: boolean
     expanded: Set<string>
   } | null>(null)
-  const [dialogLoading, setDialogLoading] = React.useState<string | null>(null)
+  /** 正在取上传计划的那一项（同样带方向：只有被点的那一个按钮该显示「读取中…」）。 */
+  const [dialogLoading, setDialogLoading] = React.useState<
+    { id: string; direction: HostProjectDirection } | null
+  >(null)
   const [works, setWorks] = React.useState<HostWork[] | null>(null)
   const [worksLoading, setWorksLoading] = React.useState(false)
   const [worksError, setWorksError] = React.useState<{ code: string; message: string } | null>(null)
+  /**
+   * 【可加入】—— 导师发布的选题（`direction = SEEK_STUDENT`）。
+   *
+   * 结构与【可指导】完全一样（同一份发现列表 + 同一套两级披露），所以复用
+   * `HostWork` / `WorkRow`；只有"行上的动作是【出价】"和空态文案不同。
+   * 加载态与错误**各自独立**：两个 Tab 是两件事，一个失败不该把另一个也染红。
+   */
+  const [joinable, setJoinable] = React.useState<HostWork[] | null>(null)
+  const [joinableLoading, setJoinableLoading] = React.useState(false)
+  const [joinableError, setJoinableError] = React.useState<{ code: string; message: string } | null>(null)
   /** 当前展开的那一项。 */
   const [open, setOpen] = React.useState<{ projectId: string; kind: 'summary' | 'brief' } | null>(null)
   const [detail, setDetail] = React.useState<{ projectId: string; work: HostWork; brief?: HostWorkBrief } | null>(
@@ -4086,7 +4411,17 @@ export function CommunityTab({
   /** 回传进度（宿主 `mentor/uploadProgress`；`null` = 未在跑）。 */
   const [uploadProgress, setUploadProgress] = React.useState<HostUploadProgress | null>(null)
   /** 正在查看导师信息的提案（非空 = 导师信息对话框开着）。 */
-  const [profileTarget, setProfileTarget] = React.useState<HostProposal | null>(null)
+  /**
+   * 打开对方资料的提案 + 算好的视角 + 要显示的当事人（v0.6.0 起方向化）。
+   *
+   * 存这三样而不是只存提案：对话框要的正是"对方是谁 + 对方是导师吗"，
+   * 进了对话框再算一遍会与列表行的判断分叉。
+   */
+  const [profileTarget, setProfileTarget] = React.useState<{
+    proposal: HostProposal
+    view: HostProposalView
+    party: HostProposalParty
+  } | null>(null)
   /** 正在对它发起指导的那项研究工作（非空 = 提案对话框开着）。 */
   const [proposeTarget, setProposeTarget] = React.useState<HostWork | null>(null)
   /** 提案对话框里的费用预填（默认 100 / 20 / 80）。 */
@@ -4200,22 +4535,45 @@ export function CommunityTab({
    */
   const activeServer = state?.serverUrl ?? ''
   /**
-   * 能否用「可指导」视图。
+   * 能否用【可指导】视图。
    *
    * 由**服务器给的角色**决定（`MENTOR`；`ADMIN` 一并放行，否则管理员无法自查这一页）。
-   * 没有角色时不是把内容藏起来不说，而是明说"需要导师角色" —— 那是权限状态，
-   * 不是产品说明（用户点开了这个 Tab，就是"业务发生"了）。
+   * v0.6.0 起没有导师角色就**不显示这个 Tab**（用户要求：角色为研究者时只有
+   * 【我的】【可加入】【指导中】）—— 而"为什么看不到"由【可加入】那边的语义自洽
+   * （学生本来就该看导师出的题）。未登录时同样不显示：`canMentor` 需要 `account`。
    */
   const canMentor = Boolean(
     account && (account.roles.includes('MENTOR') || account.roles.includes('ADMIN')),
   )
+  /**
+   * 角色变化后当前 Tab 可能**不再可见**（例如刚登出、或换了账号）——
+   * 回落到【我的】。不回落的后果是：顶栏没有任何一个 Tab 是选中态，
+   * 而下面的内容却还是"可指导"，看着像坏了。
+   */
+  React.useEffect(() => {
+    if (workTab === 'mentor' && !canMentor) setWorkTab('mine')
+  }, [workTab, canMentor])
   /** 凭据来自环境变量时无法在界面里清除（它不在设置文档里）—— 如实说明，不装作能登出。 */
   const fromEnv = state?.keySource === 'env'
 
   /* ── 列表加载：**只有登录后才联网**；未登录显示示例数据 ─────────────── */
-  const loadWorks = React.useCallback(async (): Promise<void> => {
-    setWorksLoading(true)
-    setWorksError(null)
+  /**
+   * 拉一个方向的公开列表。
+   *
+   * 两个方向各有自己的列表与加载态（【可指导】/【可加入】），但**流程完全一样** ——
+   * 所以只有一份实现，靠 `direction` 分派到对应的 state。
+   *
+   * `mentor/list` 顺带一起拉：【可指导】/【可加入】每行要靠它显示「等待响应」/
+   * 「已出价」角标，而提案状态只有它知道 —— 不刷新的话角标一刷新页面就丢。
+   * 失败**不清空**已有提案（拿不到 ≠ 没发起过）。
+   */
+  const loadWorks = React.useCallback(async (direction: HostProjectDirection): Promise<void> => {
+    const toJoinable = direction === 'SEEK_STUDENT'
+    const setLoading = toJoinable ? setJoinableLoading : setWorksLoading
+    const setError = toJoinable ? setJoinableError : setWorksError
+    const setList = toJoinable ? setJoinable : setWorks
+    setLoading(true)
+    setError(null)
     setChargeNotice(null)
     // 换账号 / 重新加载时收起展开态，避免显示上一个账号看到的内容
     setOpen(null)
@@ -4224,20 +4582,21 @@ export function CommunityTab({
     /*
      * 两条请求互不依赖（一个是研究网络里的公开工作，一个是"我涉及的提案"），
      * 所以**并发发**：这一页的等待时间从"两者之和"变成"两者中较慢的那个"。
-     *
-     * 顺带刷新"我发起的提案"：【可指导】每行要靠它显示「等待响应」角标，
-     * 而提案状态只有 `mentor/list` 知道 —— 不刷新的话角标一刷新页面就丢。
-     * 失败**不清空**已有提案（拿不到 ≠ 没发起过）。
      */
-    const [res, mine] = await Promise.all([post('work/list', {}), post('mentor/list', {})])
-    setWorksLoading(false)
-    if (mine.ok) setProposals((mine.value as { proposals: HostProposal[] }).proposals ?? [])
+    const [res, proposalsRes] = await Promise.all([
+      post('work/list', { direction }),
+      post('mentor/list', {}),
+    ])
+    setLoading(false)
+    if (proposalsRes.ok) {
+      setProposals((proposalsRes.value as { proposals: HostProposal[] }).proposals ?? [])
+    }
     if (!res.ok) {
-      setWorksError(res.error ?? { code: 'unknown', message: t('community.error.readWorkList') })
-      setWorks(null)
+      setError(res.error ?? { code: 'unknown', message: t('community.error.readWorkList') })
+      setList(null)
       return
     }
-    setWorks((res.value as { items: HostWork[] }).items ?? [])
+    setList((res.value as { items: HostWork[] }).items ?? [])
   }, [post])
 
   /* ── 指导关系（第三个 Tab）──────────────────────────────────────────── */
@@ -4266,20 +4625,27 @@ export function CommunityTab({
   }, [post])
 
   /**
-   * 点【接受指导】= 打开**确认框**（不直接发请求）。
+   * 点【接受】= 打开**确认框**（不直接发请求）。
    *
    * 接受会把押金从 `available` 转到 `frozen` —— 是真正动 Token 的操作，
-   * 所以必须先让用户看清"冻多少、还剩多少"再确认。
+   * 所以必须先让用户看清"冻多少、冻谁的"再确认。
    */
   const requestAccept = (p: HostProposal): void => {
     setMentorNotice(null)
     setAcceptConfirm(p)
   }
 
-  /** 确认接受：发 `mentor/accept`（带幂等键），成功后刷新提案与余额。 */
+  /**
+   * 确认接受：发 `mentor/accept`（带幂等键），成功后刷新提案与余额。
+   *
+   * ⚠️ 押金**永远从学生（`researcher`）账上冻**：方向 A 接受的人就是学生
+   * （= 冻我自己的，402 说"我的余额不足"）；方向 B 接受的人是导师
+   * （= 冻学生的，402 也要如实说成"**学生**余额不足"，不能写成"你余额不足"）。
+   */
   const confirmAccept = async (): Promise<void> => {
     const target = acceptConfirm
     if (!target) return
+    const iPayer = !viewOf(target).iAmOwner
     // 幂等键：同一次"接受意图"复用（402 后充值再试不重复冻结押金）
     const intentKey = acceptIntents[target.id] ?? crypto.randomUUID()
     setAcceptIntents((prev) => ({ ...prev, [target.id]: intentKey }))
@@ -4293,7 +4659,12 @@ export function CommunityTab({
         tone: 'error',
         text:
           res.error?.code === 'insufficient-tokens'
-            ? t('community.mentor.acceptNoTokens', { deposit: target.depositAmount })
+            ? t(
+                iPayer
+                  ? 'community.mentor.acceptNoTokens'
+                  : 'community.mentor.acceptNoTokensOther',
+                { deposit: target.depositAmount },
+              )
             : (res.error?.message ?? t('community.error.unknown')),
       })
       // 提案状态在操作期间变了（别人已处理 / 已过期 / 项目已有关系）→ 列表刷新一下，
@@ -4303,13 +4674,16 @@ export function CommunityTab({
     }
     setMentorNotice({
       tone: 'success',
-      text: t('community.mentor.acceptDone', { deposit: target.depositAmount }),
+      text: t(
+        iPayer ? 'community.mentor.acceptDone' : 'community.mentor.acceptDoneOther',
+        { deposit: target.depositAmount },
+      ),
     })
     // 提案状态已变（ACCEPTED），押金也冻结了 —— 两处都得刷新
     await Promise.all([loadProposals(), refreshBalance()])
   }
 
-  /** 拒绝指导（研究者）。不冻 Token，但会终止导师的这次提议，直接执行并给回执。 */
+  /** 拒绝提案（收到提案的那一方）。不冻 Token，但会终止对方的这次提议，直接执行并给回执。 */
   const rejectProposal = async (p: HostProposal): Promise<void> => {
     setMentorNotice(null)
     setMentorBusy({ id: p.id, action: 'reject' })
@@ -4324,7 +4698,10 @@ export function CommunityTab({
   }
 
   /**
-   * 点【发起指导】= 打开提案对话框（免费操作，对话框即确认）。
+   * 点【发起指导】/【出价】= 打开提案对话框（免费操作，对话框即确认）。
+   *
+   * 两个方向**共用这一个动作**（同一个端点、同一套费用结构）：区别只在对话框文案，
+   * 由 `proposeTarget.direction` 决定（导师出价 / 学生出价）。
    *
    * 费用建议**当场取**而不是预先缓存：默认值属于服务器策略（将来可能按领域/阶段浮动），
    * 抄一份到客户端只会在两边悄悄漂移。取不到就退回对话框里的内置默认值，不拦着用户。
@@ -4337,7 +4714,12 @@ export function CommunityTab({
     if (res.ok) setProposeFee((res.value as { suggestion: HostFeeSuggestion }).suggestion ?? null)
   }
 
-  /** 提交提案：成功 → 关框、给回执、刷新提案（该行立刻显示「等待响应」角标）。 */
+  /**
+   * 提交提案：成功 → 关框、给回执、刷新提案（该行立刻显示「等待响应」/「已出价」角标）。
+   *
+   * ⚠️ **不传方向**：方向由**项目自己**决定，服务端按它决定谁写在哪一边
+   * （见 `server-client.ts` 的 `fetchPropose`）。客户端再传一份只可能矛盾。
+   */
   const submitPropose = async (input: {
     totalFee: number
     depositAmount: number
@@ -4347,7 +4729,7 @@ export function CommunityTab({
     if (!target) return
     setProposeBusy(true)
     setProposeError(null)
-    // 导师只定总费用；指导范围与成功条件见 PROPOSE_SCOPE_PLACEHOLDER 的说明（过渡值）
+    // 只定总费用；指导范围与成功条件见 PROPOSE_SCOPE_PLACEHOLDER 的说明（过渡值）
     const res = await post('mentor/propose', {
       projectId: target.projectId,
       guidanceScope: PROPOSE_SCOPE_PLACEHOLDER,
@@ -4361,21 +4743,31 @@ export function CommunityTab({
       return
     }
     setProposeTarget(null)
-    setMentorNotice({ tone: 'success', text: t('community.mentor.proposeDone') })
+    setMentorNotice({
+      tone: 'success',
+      text: t(
+        target.direction === 'SEEK_STUDENT'
+          ? 'community.mentor.bidDone'
+          : 'community.mentor.proposeDone',
+      ),
+    })
     await loadProposals()
   }
 
   /* ── 指导闭环：下载工作区快照 / 回传我这一份工作区 ─────────────────── */
 
   /**
-   * 我在这条指导关系里是**哪一侧**（服务器 `?source=`）：
-   * 我是导师 → `mentor`（我回传的落在这一侧）；我是学生 → `owner`（我自己上传的那侧）。
+   * 我在这条指导关系里是**哪一侧**（服务器 `?source=`）—— **按方向算，不按角色**。
    *
-   * 规矩一句话：**比对自己那一侧，下载对方那一侧**。
-   * 身份缺失（旧宿主 / 异常数据）时一律按 `owner` —— 与服务器默认一致，最保守。
+   * 服务器两侧的名字取自"谁拥有项目"：`owner` = 项目所有者写的那一侧，
+   * `mentor` = 另一方（历史上只有导师会写这一侧）。方向 B 下项目 owner 是**导师**，
+   * 于是学生写的落在 `mentor` 侧 —— 继续用"我是不是导师"判断会**写反**，
+   * 把两个人的工作区互相覆盖。
+   *
+   * 规矩一句话：**owner 侧是项目所有者，另一方是 counterpart**；
+   * 比对自己那一侧（上传），下载对方那一侧。
    */
-  const mySide = (p: HostProposal): HostFileSide => (p.mentor?.id === myAccountId ? 'mentor' : 'owner')
-  const otherSide = (p: HostProposal): HostFileSide => (mySide(p) === 'mentor' ? 'owner' : 'mentor')
+  const viewOf = (p: HostProposal): HostProposalView => proposalView(p, myAccountId)
 
   /**
    * 打开【上传】对话框：先问宿主"本机有哪些工作区**可以回传**"。
@@ -4523,7 +4915,7 @@ export function CommunityTab({
         workspaceId: uploadWorkspaceId,
         paths: Array.from(uploadSelected),
         // 增量比对**自己那一侧**（服务器按"谁写的"分两侧，同名互不覆盖）
-        source: mySide(target),
+        source: viewOf(target).mySide,
       })
     } finally {
       stopPoll()
@@ -4567,8 +4959,9 @@ export function CommunityTab({
    */
   const requestDownload = async (p: HostProposal): Promise<void> => {
     const prefix = downloadPrefix(p)
-    // 导师下学生的工作区（owner 侧）；学生取导师回传的那份（mentor 侧）
-    const source = otherSide(p)
+    // 下载的是**对方那一侧**：方向 A 导师下学生的工作区（owner 侧）、学生取导师的交付
+    // （mentor 侧）；方向 B 反过来（学生下导师的选题、导师取学生的进展）。
+    const source = viewOf(p).otherSide
     const res = await post('mentor/downloadState', {
       projectId: p.projectId,
       prefix,
@@ -4611,8 +5004,13 @@ export function CommunityTab({
      * 默认落到别处，用户会以为提示词填不进去是坏了。
      */
     const current = v.currentWorkspaceId ? v.items.find((w) => w.id === v.currentWorkspaceId) : undefined
+    /*
+     * ② 这项工作**已发布到的那个工作区**（学生侧指导意见该落回那里）。
+     * v0.6.0：`published` 变成"一个方向一条记录"，所以按 `projectId` 在数组里找
+     * —— 项目 id 在整个服务器上唯一，方向不必再比一次。
+     */
     const own = v.items.find((w) =>
-      (mine ?? []).some((m) => m.id === w.id && m.published?.projectId === p.projectId),
+      (mine ?? []).some((m) => m.id === w.id && m.published.some((r) => r.projectId === p.projectId)),
     )
     const preferred = [current, own, ...v.items].find(Boolean)
     setDownload({
@@ -4918,16 +5316,19 @@ export function CommunityTab({
   }, [activeServer, configured, loadProposals])
 
   /**
-   * 点「寻找指导」/「更新」：**先取上传计划**，再决定是直接更新还是弹对话框。
+   * 点【寻找指导】/【寻找学生】/【更新…】：**先取上传计划**，再决定是直接更新还是弹对话框。
    *
    * - 从未发布过 → 一定弹（用户要看到"传什么、多少、花几个 Token"）；
-   * - 已发布且**没有变化** → 直接更新（配置被记住时），只给一条回执；
-   * - 已发布但**有变化** → 弹，并标出本次会更新哪些文件。
+   * - 该方向已发布且**没有变化** → 直接更新（配置被记住时），只给一条回执；
+   * - 该方向已发布但**有变化** → 弹，并标出本次会更新哪些文件。
+   *
+   * ⚠️ `direction` 是**用户点的那个按钮**决定的，全程带着走：
+   * 它决定查哪条本地记录、建哪个服务器项目、记回哪条指纹 —— 两个方向互不可复用。
    */
-  const openPublish = async (w: HostLocalWork): Promise<void> => {
-    setDialogLoading(w.id)
+  const openPublish = async (w: HostLocalWork, direction: HostProjectDirection): Promise<void> => {
+    setDialogLoading({ id: w.id, direction })
     setPublishNotice(null)
-    const res = await post('work/uploadPlan', { id: w.id })
+    const res = await post('work/uploadPlan', { id: w.id, direction })
     setDialogLoading(null)
     if (!res.ok) {
       const staleHost = res.error?.code === 'unknown-endpoint'
@@ -4939,13 +5340,15 @@ export function CommunityTab({
       return
     }
     const data = res.value as HostUploadPlan
-    // 已发布 + 记住过选择 + 内容没有变化 → 不打扰用户，直接更新
-    if (w.published && data.remembered && data.changed.length === 0 && data.selection.length > 0) {
-      await doPublish(w, data.selection, true)
+    // 该方向已发布 + 记住过选择 + 内容没有变化 → 不打扰用户，直接更新
+    const publishedHere = publishedIn(w, direction)
+    if (publishedHere && data.remembered && data.changed.length === 0 && data.selection.length > 0) {
+      await doPublish(w, direction, data.selection, true)
       return
     }
     setDialog({
       work: w,
+      direction,
       data,
       selection: new Set(data.selection),
       remember: true,
@@ -4954,10 +5357,15 @@ export function CommunityTab({
   }
 
   /** 真正执行发布（对话框确认后 / 无变化直接更新时）。 */
-  const doPublish = async (w: HostLocalWork, selection: string[], remember: boolean): Promise<void> => {
-    setPublishing(w.id)
+  const doPublish = async (
+    w: HostLocalWork,
+    direction: HostProjectDirection,
+    selection: string[],
+    remember: boolean,
+  ): Promise<void> => {
+    setPublishing({ id: w.id, direction })
     setPublishNotice(null)
-    const res = await post('work/publish', { id: w.id, selection, remember })
+    const res = await post('work/publish', { id: w.id, direction, selection, remember })
     setPublishing(null)
     if (!res.ok) {
       const staleHost = res.error?.code === 'unknown-endpoint'
@@ -4969,7 +5377,14 @@ export function CommunityTab({
       return
     }
     const value = res.value as {
-      published: { version: number; created: boolean; chargedTokens: number }
+      published: {
+        version: number
+        created: boolean
+        chargedTokens: number
+        title?: string
+        /** 名字没改成功的原因（缺省 = 改好了 / 不需要改）。 */
+        renameFailed?: string
+      }
       attachments?: { selected: number; uploaded: number; uploadedBytes: number; skippedExisting: number; oversize: Array<{ relPath: string }> }
       missing?: string[]
     }
@@ -4982,9 +5397,18 @@ export function CommunityTab({
      *
      * 只报**真实发生的事**：没扣费（重复发布免费）就不写 Token，没有新附件就不写附件；
      * 超限未传是警告，必须写出来。
+     *
+     * ⚠️ 两个按钮共用这一行回执，所以**必须写出方向**：发布到"寻找学生"却说成
+     * 「已发布」，用户无从判断刚才点的是哪一个。
      */
     const bits: string[] = [
-      t('community.notice.published', { title: w.title, version: value.published.version }),
+      // 回执用**网络里这次用的名字**：用户点完就知道发出去的名字对不对
+      // （旧宿主不回 `title` → 退回本机工作区名，不编）
+      t('community.notice.published', {
+        title: value.published.title ?? w.title,
+        version: value.published.version,
+      }),
+      t(direction === 'SEEK_STUDENT' ? 'community.action.seekStudent' : 'community.action.seekMentor'),
     ]
     if (value.published.chargedTokens > 0) {
       bits.push(t('community.notice.tokens', { tokens: value.published.chargedTokens }))
@@ -4994,6 +5418,13 @@ export function CommunityTab({
     }
     if (value.attachments && value.attachments.oversize.length > 0) {
       bits.push(t('community.notice.oversize', { count: value.attachments.oversize.length }))
+    }
+    /*
+     * 名字没改成功要**说出来**：回执里写的是这次想用的名字，而网络里还是旧名字 ——
+     * 不说就等于让用户以为改好了（发布本身是成功的，所以仍是成功回执 + 一句警告）。
+     */
+    if (value.published.renameFailed) {
+      bits.push(t('community.notice.renameFailed', { reason: value.published.renameFailed }))
     }
     setPublishNotice({
       tone: 'success',
@@ -5005,16 +5436,24 @@ export function CommunityTab({
   }
 
   React.useEffect(() => {
-    // ⚠️ 依赖里有**生效地址**：换服务器后【可指导】必须重读，否则显示的是上一台的列表。
-    // 未登录 / 没换到新地址时清空（不能把上一台的条目当成本机的）。
+    /*
+     * ⚠️ 依赖里有**生效地址**：换服务器后两个列表都必须重读，否则显示的是上一台的。
+     * 未登录 / 没换到新地址时清空（不能把上一台的条目当成本机的）。
+     *
+     * 两个方向**都要拉**：【可指导】与【可加入】是两个 Tab，用户可能先点后者；
+     * 只拉一个的话切过去是空的，看起来像"没有选题"（而真相是"还没读"）。
+     */
     if (!activeServer || !account) {
       setWorks(null)
       setWorksError(null)
+      setJoinable(null)
+      setJoinableError(null)
       setOpen(null)
       setDetail(null)
       return
     }
-    void loadWorks()
+    void loadWorks('SEEK_MENTOR')
+    void loadWorks('SEEK_STUDENT')
   }, [account, activeServer, loadWorks])
 
   /** 展开 / 收起一项研究工作的摘要（免费）。 */
@@ -5317,28 +5756,58 @@ export function CommunityTab({
     void loadRechargeRequests()
   }
 
-  // 指导提案分栏：我在哪一边决定能做什么 —— 我是 researcher 就是我收到的（可接受/拒绝），
-  // 我是 mentor 就是我发起的（等对方响应）。身份缺失时宿主已回退成 id，短 id 也能对上 account.id。
+  /*
+   * 指导提案分栏：**按方向**决定我在这条关系里的角色。
+   *
+   * ⚠️ 早先是"我是 researcher = 我收到的"，那只在方向 A 成立：方向 B 里
+   * 项目 owner 是导师、发起人是学生，于是"我是 researcher"意味着**我发起的**。
+   * 所以统一走 {@link proposalView}，这里只做一次映射。
+   * 身份缺失时宿主已回退成 id，短 id 也能对上 account.id。
+   */
   const myAccountId = account?.id ?? ''
-  const incomingProposals = (proposals ?? []).filter((p) => p.researcher?.id === myAccountId)
-  const outgoingProposals = (proposals ?? []).filter((p) => p.mentor?.id === myAccountId)
+  const trackItems = React.useMemo(
+    () =>
+      (proposals ?? [])
+        .map((p) => ({ p, view: proposalView(p, myAccountId) }))
+        .sort((a, b) => {
+          // 该我动作（等处理）的顶上去，然后是跟踪中，最后是终态；同一档新的在前
+          const rank: Record<string, number> = { PROPOSED: 0, ACCEPTED: 1 }
+          const byStatus = (rank[a.p.status] ?? 9) - (rank[b.p.status] ?? 9)
+          if (byStatus !== 0) return byStatus
+          const byAction = Number(b.view.iAmAcceptor && b.p.status === 'PROPOSED') - Number(a.view.iAmAcceptor && a.p.status === 'PROPOSED')
+          if (byAction !== 0) return byAction
+          return (b.p.createdAt ?? '').localeCompare(a.p.createdAt ?? '')
+        }),
+    [proposals, myAccountId],
+  )
 
   /**
-   * 我发起的提案按项目索引 —— 【可指导】每行据此显示状态角标（发起后变「等待响应」）。
+   * 我**发起**的提案按项目索引 —— 【可指导】/【可加入】每行据此显示状态角标。
+   *
+   * ⚠️ 两个 Tab 各要一份，且取的是**不同**的提案集合：
+   * 【可指导】里我是导师（我出价），【可加入】里我是学生（我出价）；
+   * 混在一起会让"我导师身份对别人的工作发起的提案"出现在我的出价记录里。
    *
    * 同一项目可能有历史提案（被拒之后又发了一次），所以取**最需要用户注意**的那条：
    * `PROPOSED`（等对方响应）优先于 `ACCEPTED`，都优先于终态（已拒绝 / 已过期 / 已取消）。
    */
-  const myProposalByProject = new Map<string, HostProposal>()
-  {
+  const proposalsByProject = (from: 'mentor' | 'researcher'): Map<string, HostProposal> => {
     const rank: Record<string, number> = { PROPOSED: 0, ACCEPTED: 1 }
-    for (const p of outgoingProposals) {
-      const current = myProposalByProject.get(p.projectId)
-      if (!current || (rank[p.status] ?? 9) < (rank[current.status] ?? 9)) {
-        myProposalByProject.set(p.projectId, p)
-      }
+    const out = new Map<string, HostProposal>()
+    for (const p of proposals ?? []) {
+      const view = proposalView(p, myAccountId)
+      // 既要"我在这条关系里是这一边"，又要"这次提案是我发起的" —— 后者不能省：
+      // 方向 A 里我是学生时，这条提案是**导师**发起的，不该进我的出价角标。
+      if (view.myRole !== from || !view.iProposed) continue
+      const current = out.get(p.projectId)
+      if (!current || (rank[p.status] ?? 9) < (rank[current.status] ?? 9)) out.set(p.projectId, p)
     }
+    return out
   }
+  /** 我在【可指导】里作为**导师**发起的提案（按项目）。 */
+  const myMentorProposalByProject = proposalsByProject('mentor')
+  /** 我在【可加入】里作为**学生**出价的提案（按项目）。 */
+  const myResearcherProposalByProject = proposalsByProject('researcher')
 
   /** 费用数字（只给数，不做解释性描述）。 */
   const feeText = (p: HostProposal): string =>
@@ -5347,21 +5816,6 @@ export function CommunityTab({
       deposit: p.depositAmount,
       success: p.successPaymentAmount,
     })
-
-  /**
-   * 「指导中」的**统一列表**：我收到的 + 我发起的合成一条，按"要不要我动作"排序。
-   *
-   * 排序：`PROPOSED`（等我处理 / 等对方响应）→ `ACCEPTED`（跟踪中）→ 终态；
-   * 同一档内新的在前。这一页的主职就是**跟踪状态**，所以把还需要动作的顶上去。
-   */
-  const trackItems = [
-    ...incomingProposals.map((p) => ({ p, incoming: true })),
-    ...outgoingProposals.map((p) => ({ p, incoming: false })),
-  ].sort((a, b) => {
-    const rank: Record<string, number> = { PROPOSED: 0, ACCEPTED: 1 }
-    const byStatus = (rank[a.p.status] ?? 9) - (rank[b.p.status] ?? 9)
-    return byStatus !== 0 ? byStatus : (b.p.createdAt ?? '').localeCompare(a.p.createdAt ?? '')
-  })
 
   return (
     <>
@@ -5734,7 +6188,7 @@ export function CommunityTab({
           onCancel={() => setDialog(null)}
           onConfirm={() => {
             if (!dialog) return
-            void doPublish(dialog.work, [...dialog.selection], dialog.remember)
+            void doPublish(dialog.work, dialog.direction, [...dialog.selection], dialog.remember)
           }}
         />
       ) : null}
@@ -5754,7 +6208,12 @@ export function CommunityTab({
         />
       ) : null}
 
-      {/* ══ 发起指导提案（点【发起指导】时出现；免费操作，对话框即确认）══════ */}
+      {/*
+        * ══ 提案对话框（点【发起指导】/【出价】时出现；免费操作，对话框即确认）════
+        *
+        * `variant` 由这一行所属的**方向**决定（【可指导】= 导师出价、【可加入】= 学生出价）——
+        * 不用"我是什么角色"：同一个人可能两个角色都有。
+        */}
       {proposeTarget ? (
         <ProposeDialog
           t={t}
@@ -5762,6 +6221,7 @@ export function CommunityTab({
           fee={proposeFee}
           busy={proposeBusy}
           error={proposeError}
+          variant={proposeTarget.direction === 'SEEK_STUDENT' ? 'researcher' : 'mentor'}
           onCancel={() => {
             setProposeTarget(null)
             setProposeError(null)
@@ -5919,16 +6379,25 @@ export function CommunityTab({
         />
       ) : null}
 
-      {/* ══ 导师信息（点【导师】时出现；数据来自提案内嵌的 profile）══════════ */}
+      {/* ══ 对方信息（点【导师】/【学生】时出现；数据来自提案内嵌的 profile）════ */}
       {profileTarget ? (
-        <MentorProfileDialog t={t} proposal={profileTarget} onClose={() => setProfileTarget(null)} />
+        <PartyProfileDialog
+          t={t}
+          party={profileTarget.party}
+          isMentor={profileTarget.view.counterpartyIsMentor}
+          status={profileTarget.proposal.status}
+          onClose={() => setProfileTarget(null)}
+        />
       ) : null}
 
-      {/* ══ 接受指导确认（点【接受指导】时出现；确认前不发请求、不冻结押金）════ */}
+      {/* ══ 接受确认（点【接受】时出现；确认前不发请求、不冻结押金）═══════════ */}
       {acceptConfirm ? (
         <AcceptConfirmDialog
           t={t}
           proposal={acceptConfirm}
+          party={viewOf(acceptConfirm).counterparty ?? { id: '', displayName: '' }}
+          partyIsMentor={viewOf(acceptConfirm).counterpartyIsMentor}
+          iPayer={!viewOf(acceptConfirm).iAmOwner}
           balance={state?.tokens?.available ?? null}
           onCancel={() => setAcceptConfirm(null)}
           onConfirm={() => void confirmAccept()}
@@ -5964,50 +6433,61 @@ export function CommunityTab({
       ) : null}
 
       {/*
-       * ══ 研究工作（三个视图）══════════════════════════════════════════════
+       * ══ 研究工作（四个视图）══════════════════════════════════════════════
        *
        *   我的   —— **本机**的研究项目（有效 research workspace 的工作区）。
        *            不联网、不需要登录；所有用户都能看到自己的。
-       *   可指导 —— 研究网络里已公开的研究工作（导师视角）。需要导师角色。
-       *   指导中 —— 我发起的（等对方响应）+ 我收到的（接受 / 拒绝）。
+       *   可指导 —— 研究网络里学生公开的研究工作（`SEEK_MENTOR`）。**只对导师显示**。
+       *   可加入 —— 研究网络里导师公开的选题（`SEEK_STUDENT`）。所有人都能看到。
+       *   指导中 —— 我涉及的指导提案（发起 / 接受 / 拒绝 / 文件交换都在这里）。
        *
        * 「我的」在最前（2026-09 用户拍板）：所有人都可能**被**指导，先看自己的。
+       * v0.6.0（用户拍板）：Tab 按角色定 —— 研究者只看得到【我的】【可加入】【指导中】，
+       * 导师四个都看得到。没有导师角色时**不显示**【可指导】（此前是"显示但说明需要角色"）。
        */}
       <div style={S.card}>
         <div style={S.cardHead}>
-          {/* 卡片标题：只说"这一片是什么"，两个视图的名字交给后面的 Tab */}
+          {/* 卡片标题：只说"这一片是什么"，视图的名字交给后面的 Tab */}
           <span style={{ marginRight: 4 }}>{t('community.work.title')}</span>
           <MiniTab active={workTab === 'mine'} onClick={() => setWorkTab('mine')}>
-            
-            {t('community.tab.mine')}</MiniTab>
-          <MiniTab active={workTab === 'mentor'} onClick={() => setWorkTab('mentor')}>
-            
-            {t('community.tab.mentor')}</MiniTab>
+            {t('community.tab.mine')}
+          </MiniTab>
+          {canMentor ? (
+            <MiniTab active={workTab === 'mentor'} onClick={() => setWorkTab('mentor')}>
+              {t('community.tab.mentor')}
+            </MiniTab>
+          ) : null}
+          <MiniTab active={workTab === 'joinable'} onClick={() => setWorkTab('joinable')}>
+            {t('community.tab.joinable')}
+          </MiniTab>
           {/* 「指导中」= 我发起的 + 我收到的指导提案（发起 / 接受 / 拒绝都在这里） */}
           <MiniTab active={workTab === 'mentorship'} onClick={() => setWorkTab('mentorship')}>
-            {t('community.tab.mentorship')}</MiniTab>
+            {t('community.tab.mentorship')}
+          </MiniTab>
           <span style={{ flex: '1 1 auto' }} />
           {workTab === 'mine' ? (
             <RefreshIconButton t={t} busy={mineLoading} onClick={() => void loadMine()} />
           ) : null}
           {workTab === 'mentor' && account ? (
-            <RefreshIconButton t={t} busy={worksLoading} onClick={() => void loadWorks()} />
+            <RefreshIconButton t={t} busy={worksLoading} onClick={() => void loadWorks('SEEK_MENTOR')} />
+          ) : null}
+          {workTab === 'joinable' && account ? (
+            <RefreshIconButton t={t} busy={joinableLoading} onClick={() => void loadWorks('SEEK_STUDENT')} />
           ) : null}
           {workTab === 'mentorship' && account ? (
             <RefreshIconButton t={t} busy={proposalsLoading} onClick={() => void loadProposals()} />
           ) : null}
-          {workTab === 'mentor' && !account ? <Badge tone="neutral">{t('community.badge.sample')}</Badge> : null}
+          {workTab === 'joinable' && !account ? <Badge tone="neutral">{t('community.badge.sample')}</Badge> : null}
         </div>
         <div style={S.cardBody}>
           {/*
-           * 三个视图（2026-09 用户拍板）：我的 / 可指导 / 指导中。
-           *
-           * 「指导中」承载整条商业闭环：POST /projects/{id}/mentorship-proposals（发起）
+           * 四个视图。商业闭环：POST /projects/{id}/mentorship-proposals（发起）
            * → POST /mentorship-proposals/{id}/accept（接受 → **冻结押金** + 建合同 + 建关系）。
-           * 关系建立后导师即可读 Level 3 `GET /projects/{id}/full`（服务器已实现，插件后续接）。
+           * 两个方向走的是同一套端点，方向由**项目自己**决定。
            *
-           * ⚠️ 不再在「我的」「可指导」列表里加内联按钮（用户：有第三个 Tab 时这些可忽略）——
-           * 发起与接受都收在一处，列表行保持只读。
+           * ⚠️ 不在「我的」「可指导」「可加入」列表里加内联动作（发起 / 接受都收在
+           * 【指导中】一处）—— 两个列表的行保持只读，只有【我的】那两个按钮例外
+           * （那是"发布"，不是指导关系上的动作）。
            */}
           {/* 列表级失败（列表 / 摘要 / 简报共用一处提示，按 code 给出不同说法） */}
           {publishNotice ? (
@@ -6063,6 +6543,7 @@ export function CommunityTab({
               </span>
             </div>
           ) : null}
+          {/* 列表级失败：【可指导】与【可加入】各一处，一个失败不染红另一个 */}
           {worksError ? (
             <div style={S.inlineRow}>
               <Badge tone="error">{worksError.code}</Badge>
@@ -6076,6 +6557,22 @@ export function CommunityTab({
                 }}
               >
                 {worksError.message}
+              </span>
+            </div>
+          ) : null}
+          {joinableError ? (
+            <div style={S.inlineRow}>
+              <Badge tone="error">{joinableError.code}</Badge>
+              <span
+                style={{
+                  color: 'var(--dsw-alias-state-error-primary)',
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                  flex: '1 1 320px',
+                  minWidth: 0,
+                }}
+              >
+                {joinableError.message}
               </span>
             </div>
           ) : null}
@@ -6121,7 +6618,7 @@ export function CommunityTab({
               <div style={S.hint}>{t('community.hint.mentorEmpty')}</div>
             ) : (
               <div style={S.list}>
-                {trackItems.map(({ p, incoming }, i) => (
+                {trackItems.map(({ p, view }, i) => (
                   <div
                     key={p.id}
                     style={i === 0 ? undefined : { borderTop: '1px solid var(--dsw-alias-border-l1)' }}
@@ -6145,43 +6642,49 @@ export function CommunityTab({
                       >
                         {/*
                           **哪份工作、和谁**（2026-10 用户要求）：两行都要有 ——
-                            · 我收到的（我是学生）→ 导师名（粗体）+ **研究工作名**；
-                            · 我发起的（我是导师）→ 研究工作名（粗体）+ 学生名。
+                            · 该我接受的（别人申请我）→ 对方名（粗体）+ **研究工作名**；
+                            · 我发起的（我出价请人接受）→ 研究工作名（粗体）+ 对方名。
 
                           为什么两行都给：只给人名时，"同一个导师的多个研究工作"分不出来；
                           只给工作名时，"**同名**工作分属两个学生"分不出来 —— 本机实测就有
                           两份都叫「ConvFusion-dsh（run）」的提案（导师互换），光看名字根本分不清。
 
+                          ⚠️ 用 `view.iAmAcceptor` 而不是"我是不是学生"（v0.6.0）：
+                          方向 B 下该接受的是**导师**、粗体那行仍是对方（出价的学生）。
                           ⚠️ 粗体那行是 `whiteSpace: nowrap + ellipsis`，所以区分用的那一半
                           **必须另起一行**（`S.hint` 会换行）：挤进同一行会被省略号截掉，
                           那就等于没显示。
                         */}
                         <div style={S.listTitle}>
-                          {incoming
-                            ? (p.mentor?.displayName ?? t('community.mentor.unknownParty'))
-                            : (p.projectTitle ?? t('community.mentor.untitledProject'))}
+                          {view.iAmAcceptor
+                            ? (view.counterparty?.displayName ?? t('community.mentor.unknownParty'))
+                            : (proposalWorkLabel(p) ?? t('community.mentor.untitledProject'))}
                         </div>
                         {(() => {
-                          const line = incoming
-                            ? (p.projectTitle ?? t('community.mentor.untitledProject'))
-                            : (p.researcher?.displayName ?? '')
+                          const line = view.iAmAcceptor
+                            ? (proposalWorkLabel(p) ?? t('community.mentor.untitledProject'))
+                            : (view.counterparty?.displayName ?? '')
                           return line ? <div style={S.hint}>{line}</div> : null
                         })()}
                         {/* 费用数字（不做解释性描述）—— 名称之下一行 */}
                         <div style={S.hint}>{feeText(p)}</div>
                         {/*
-                          **导师侧**的下载提示（2026-10）—— 三态各有说法：
-                            · 从没下载过 → "先下载"（手里没副本，这本身就是该下载的理由）；
-                            · 下载过、学生动过 → "学生更新了 / 删除了，需要重新下载"；
+                          **下载提示**（原"导师侧"提示，v0.6.0 起两侧通用）—— 三态各有说法：
+                            · 从没下载过那一侧、且那一侧有内容 → "先下载"；
+                            · 下载过、对方动过 → "对方更新了 / 删除了，需要重新下载"；
                             · 下载过、没动 / 无从判断 → 不提示。
-                          判据由宿主算好（`sync`）：拿**上一次归档响应的水位**与列表的
-                          `workspace_updated_at` / `workspace_files` 比 —— 时间戳变大 = 传了新文件，
+                          判据由宿主**按侧**算好（`syncBySide`）：拿**上一次归档响应的水位**与
+                          列表里**同一侧**的两个字段比 —— 时间戳变大 = 传了新文件，
                           文件数变了 = 删了文件（互补，缺一不可）。
-                          只在导师侧显示：学生自己知道他更新过；`!incoming` = 我发起的 = 我是导师。
+                          ⚠️ 两侧各有各的水位（服务器 `workspace_*` 对 owner 侧、
+                          `counterpart_updated_at` / `review_files` 对另一侧），而**方向决定
+                          我下载哪一侧**：方向 A 的导师下 owner 侧、方向 B 的导师下 `mentor` 侧
+                          （学生交付的进展）。所以这里不按角色判，只取 `otherSide` 那一份 ——
+                          这样方向 B 的导师也能看到"学生又交了东西"。
                         */}
-                        {!incoming && studentSyncHint(t, p.sync) ? (
+                        {sideSyncHint(t, p, view) ? (
                           <div style={{ ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' }}>
-                            {studentSyncHint(t, p.sync)}
+                            {sideSyncHint(t, p, view)}
                           </div>
                         ) : null}
                       </div>
@@ -6196,15 +6699,15 @@ export function CommunityTab({
                         }}
                       >
                       <Badge tone={proposalTone(p.status)}>
-                        {translateOr(t, progressLabelKey(p, incoming), p.status)}
+                        {translateOr(t, progressLabelKey(p, view), p.status)}
                       </Badge>
                       {/*
                         指导关系建立之后才有文件交换：
-                          【下载】两端都显示 —— 导师取学生的工作区做分析，学生取回（含
-                          导师上传的 mentorship/ 产物）继续推进研究；
-                          【上传】只有导师侧 —— 学生自己的工作区本来就在服务器上（用【我的】里的【更新】）。
+                          【下载】两端都显示 —— 下载**对方那一侧**的快照继续推进研究；
+                          【上传】只有 **owner 之外** 的一方 —— 项目所有者本来就在
+                          【我的】里更新自己的工作区（方向 A 是学生、方向 B 是导师）。
                       */}
-                      {canDownloadProposal(p, incoming) ? (
+                      {canDownloadProposal(p, view) ? (
                         <button
                           type="button"
                           style={S.ghostBtn}
@@ -6214,7 +6717,7 @@ export function CommunityTab({
                           {t('community.action.download')}
                         </button>
                       ) : null}
-                      {p.status === 'ACCEPTED' && !incoming ? (
+                      {p.status === 'ACCEPTED' && !view.iAmOwner ? (
                         <button
                           type="button"
                           style={{ ...S.accentBtn, opacity: 0.85 }}
@@ -6224,15 +6727,29 @@ export function CommunityTab({
                           {t('community.action.upload')}
                         </button>
                       ) : null}
-                      {/* 我作为学生时，看得到"是谁在申请指导我"（标签压短，见下方 Split Button 注释） */}
-                      {incoming ? (
+                      {/*
+                        对方的资料 —— 判据是"服务器**给没给**这一方的 profile 键"，
+                        不是"profile 是不是非空"：
+                          · 键在、值 `null`（投影了但对方没填）→ **显示**按钮，
+                            点开如实说"尚未填写"；
+                          · 键都不在（服务器不给看这一方的资料）→ **不显示**。
+                        服务器按"谁要判断谁"投影（方向 A 给 researcher 看 mentor 的，
+                        方向 B 给 mentor 看 researcher 的），所以这里不按角色判断。
+                      */}
+                      {view.counterparty?.profile !== undefined ? (
                         <button
                           type="button"
                           style={S.ghostBtn}
-                          title={t('community.mentor.profileTitle')}
-                          onClick={() => setProfileTarget(p)}
+                          title={t(
+                            view.counterpartyIsMentor
+                              ? 'community.mentor.profileTitle'
+                              : 'community.mentor.profileTitleResearcher',
+                          )}
+                          onClick={() =>
+                            setProfileTarget({ proposal: p, view, party: view.counterparty! })
+                          }
                         >
-                          {t('community.action.viewMentor')}
+                          {t(view.counterpartyIsMentor ? 'community.action.viewMentor' : 'community.action.viewStudent')}
                         </button>
                       ) : null}
                       {/*
@@ -6240,12 +6757,12 @@ export function CommunityTab({
                         *
                         * ⚠️ 做成 **Split Button**（2026-09 用户要求）：一行里塞三个按钮时
                         * 宽度不够、右侧信息被挤掉。【拒绝】收进 ▾ 的下拉里，行上只剩
-                        * 「导师 + 接受 ▾」两段。
+                        * 「对方 + 接受 ▾」两段。
                         *
                         * 下拉用 `position: fixed` 按按钮位置定位，而不是 `absolute`：
                         * 外层卡片有 `overflow: hidden`（圆角需要），absolute 菜单会被裁掉。
                         */}
-                      {incoming && p.status === 'PROPOSED' ? (
+                      {view.iAmAcceptor && p.status === 'PROPOSED' ? (
                         /*
                          * `alignItems: 'stretch'` 让右段**自动**跟左段等高。
                          *
@@ -6383,70 +6900,179 @@ export function CommunityTab({
                         </div>
                       </div>
                       {/*
-                       * 「寻找指导」= **发布**（建项目 → 传状态 → 发布到网络）。
-                       * 只有点它才上传；已发布过则复用同一个服务器项目，按钮变「更新」。
+                       * **两个发布按钮**（v0.6.0 用户拍板）：【寻找指导】与【寻找学生】
+                       * **上下排列**，顺序由角色定（导师 → 寻找学生在上）。
+                       *
+                       * 两个方向是服务器上**两个不同的项目**：一个工作区可以同时
+                       * "求指导"并"招学生"，各自的发布状态、附件指纹互不影响，
+                       * 所以这里对每个方向**各渲染一次**，状态也各读各的
+                       * （`publishedIn`）。
+                       *
+                       * 「已在网络中」徽章只出现一次（任一方向已发布）—— 两个按钮
+                       * 各自的"更新"文案已经说清是哪一个方向了。
                        */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 0 auto' }}>
-                        {w.published ? <Badge tone="success">{t('community.badge.inNetwork')}</Badge> : null}
-                        <button
-                          type="button"
-                          style={{
-                            ...S.ghostBtn,
-                            opacity: account && publishing !== w.id ? 1 : 0.55,
-                          }}
-                          disabled={!account || publishing !== null || dialogLoading !== null}
-                          title={account ? t('community.tip.publish') : t('community.tip.publishNeedSignIn')}
-                          onClick={() => void openPublish(w)}
-                        >
-                          {publishing === w.id
-                            ? t('community.action.publishing')
-                            : dialogLoading === w.id
-                              ? t('community.action.loading')
-                              : w.published
-                                ? t('community.action.republish')
-                                : t('community.action.seekMentor')}
-                        </button>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: 6,
+                          flex: '0 0 auto',
+                        }}
+                      >
+                        {w.published.length > 0 ? (
+                          <Badge tone="success">{t('community.badge.inNetwork')}</Badge>
+                        ) : null}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'stretch' }}>
+                          {publishButtonOrder(canMentor).map((direction) => {
+                            const published = publishedIn(w, direction)
+                            const busyHere =
+                              (publishing?.id === w.id && publishing.direction === direction) ||
+                              (dialogLoading?.id === w.id && dialogLoading.direction === direction)
+                            return (
+                              <button
+                                key={direction}
+                                type="button"
+                                style={{
+                                  ...S.ghostBtn,
+                                  opacity: account && publishing === null && dialogLoading === null ? 1 : busyHere ? 1 : 0.55,
+                                }}
+                                disabled={!account || publishing !== null || dialogLoading !== null}
+                                title={
+                                  // 两个方向的提示语必须不同：都要说清"会传到哪一类列表"，
+                                  // 以及"研究方法不会被上传"这条产品承诺（同 publishTip）。
+                                  account
+                                    ? t(
+                                        direction === 'SEEK_STUDENT'
+                                          ? 'community.tip.publishTopic'
+                                          : 'community.tip.publish',
+                                      )
+                                    : t('community.tip.publishNeedSignIn')
+                                }
+                                onClick={() => void openPublish(w, direction)}
+                              >
+                                {busyHere
+                                  ? publishing?.id === w.id
+                                    ? t('community.action.publishing')
+                                    : t('community.action.loading')
+                                  : direction === 'SEEK_STUDENT'
+                                    ? published
+                                      ? t('community.action.republishStudent')
+                                      : t('community.action.seekStudent')
+                                    : published
+                                      ? t('community.action.republishMentor')
+                                      : t('community.action.seekMentor')}
+                              </button>
+                            )
+                          })}
+                        </div>
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
             )
-          ) : !account ? (
-            /* ── 可指导 · 未登录：示例数据（不可操作）── */
-            <>
+          ) : workTab === 'joinable' ? (
+            /* ── 可加入：导师发布的选题（`SEEK_STUDENT`）──
+             *
+             * 与【可指导】**同一个形状**（同一份发现列表、同一套两级披露、同一个
+             * WorkRow），差别只有三处：
+             *   ① 未登录时给示例数据（原来是【可指导】承担的，v0.6.0 起那个 Tab
+             *      对非导师不显示）；
+             *   ② 行上的动作是【出价】（学生出价，导师接受）；
+             *   ③ 空态/提示文案说"导师发布的选题"。
+             */
+            !account ? (
+              <>
+                <div style={S.list}>
+                  {SAMPLE_WORKS.map((w, i) => (
+                    <div
+                      key={w.titleKey}
+                      style={i === 0 ? undefined : { borderTop: '1px solid var(--dsw-alias-border-l1)' }}
+                    >
+                      <WorkRow
+                        t={t}
+                        title={t(w.titleKey)}
+                        fields={[t(w.fieldsKey)]}
+                        stage={w.stage}
+                        progress={w.progress}
+                        disabled
+                        busy={null}
+                        expanded={false}
+                        onSummary={() => undefined}
+                        onBrief={() => undefined}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div style={S.hint}>{t('community.hint.sampleFootnote')}</div>
+              </>
+            ) : joinable === null ? (
+              <div style={S.hint}>{joinableLoading ? t('community.hint.loadingWork') : t('community.hint.noData')}</div>
+            ) : joinable.length === 0 ? (
+              <div style={S.hint}>{t('community.hint.noJoinable')}</div>
+            ) : (
               <div style={S.list}>
-                {SAMPLE_WORKS.map((w, i) => (
-                  <div
-                    key={w.titleKey}
-                    style={i === 0 ? undefined : { borderTop: '1px solid var(--dsw-alias-border-l1)' }}
-                  >
-                    <WorkRow
-                      t={t}
-                      title={t(w.titleKey)}
-                      fields={[t(w.fieldsKey)]}
-                      stage={w.stage}
-                      progress={w.progress}
-                      disabled
-                      busy={null}
-                      expanded={false}
-                      onSummary={() => undefined}
-                      onBrief={() => undefined}
-                    />
-                  </div>
-                ))}
+                {joinable.map((w, i) => {
+                  const expanded = open?.projectId === w.projectId
+                  const busyKind = detailBusy?.projectId === w.projectId ? detailBusy.kind : null
+                  /** 我已经对这项选题出过的价（有 → 按钮禁用 + 显示状态角标）。 */
+                  const bidded = myResearcherProposalByProject.get(w.projectId)
+                  // 【出价】与【发起指导】同一条规则：**读过详情之后**才出现
+                  const canBid = detailRead.has(w.projectId) || briefFree(w)
+                  return (
+                    <div
+                      key={w.projectId}
+                      style={i === 0 ? undefined : { borderTop: '1px solid var(--dsw-alias-border-l1)' }}
+                    >
+                      <WorkRow
+                        t={t}
+                        title={workLabelOf(w)}
+                        author={w.owner?.displayName ?? null}
+                        fields={w.researchFields}
+                        stage={w.stage}
+                        progress={w.progress}
+                        updatedAt={w.updatedAt}
+                        disabled={false}
+                        busy={busyKind}
+                        expanded={expanded}
+                        briefFree={briefFree(w)}
+                        onSummary={() => void toggleSummary(w)}
+                        onBrief={() => requestBrief(w)}
+                        /* 第二行：出价 + 出价之后的状态角标 */
+                        below={
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            {/* 状态角标在前、按钮在后（同【可指导】的排法）。
+                                ⚠️ `bidded` 恒为**我出价**的提案（我是学生），
+                                接受之后提案状态不再变化，所以不能直接显示提案状态原值。 */}
+                            {bidded ? (
+                              <Badge tone={proposalTone(bidded.status)}>
+                                {translateOr(t, progressLabelKey(bidded, proposalView(bidded, myAccountId)), bidded.status)}
+                              </Badge>
+                            ) : null}
+                            {canBid ? (
+                              <button
+                                type="button"
+                                style={{ ...S.accentBtn, opacity: bidded ? 0.55 : 1 }}
+                                disabled={Boolean(bidded) || proposeBusy}
+                                title={bidded ? t('community.tip.bidded') : t('community.tip.bid')}
+                                onClick={() => void openPropose(w)}
+                              >
+                                {t('community.action.bid')}
+                              </button>
+                            ) : null}
+                          </div>
+                        }
+                      />
+                      {expanded && detail?.projectId === w.projectId ? (
+                        <WorkDetail t={t} work={detail.work} brief={detail.brief} />
+                      ) : null}
+                    </div>
+                  )
+                })}
               </div>
-              <div style={S.hint}>{t('community.hint.sampleFootnote')}</div>
-            </>
-          ) : !canMentor ? (
-            /* ── 可指导 · 已登录但没有导师角色：如实说明这一层需要什么 ── */
-            <div style={S.inlineRow}>
-              <Badge tone="warn">{t('community.badge.mentorRequired')}</Badge>
-              <span style={S.hint}>
-                {t('community.hint.mentorRequiresRole', { roles: roleText(t, account.roles) })}
-              </span>
-            </div>
+            )
           ) : works === null ? (
+            /* ── 可指导：学生发布的研究工作（`SEEK_MENTOR`，只对导师显示这个 Tab）── */
             <div style={S.hint}>{worksLoading ? t('community.hint.loadingWork') : t('community.hint.noData')}</div>
           ) : works.length === 0 ? (
             <div style={S.hint}>{t('community.hint.noDiscoverable')}</div>
@@ -6456,7 +7082,7 @@ export function CommunityTab({
                 const expanded = open?.projectId === w.projectId
                 const busyKind = detailBusy?.projectId === w.projectId ? detailBusy.kind : null
                 /** 我已经对这项工作发起过的提案（有 → 按钮禁用 + 显示状态角标）。 */
-                const mine = myProposalByProject.get(w.projectId)
+                const proposed = myMentorProposalByProject.get(w.projectId)
                 /**
                  * 【发起指导】的显示规则：**读过详情之后**才出现。
                  *
@@ -6472,7 +7098,7 @@ export function CommunityTab({
                   >
                     <WorkRow
                       t={t}
-                      title={w.title}
+                      title={workLabelOf(w)}
                       author={w.owner?.displayName ?? null}
                       fields={w.researchFields}
                       stage={w.stage}
@@ -6492,21 +7118,25 @@ export function CommunityTab({
                             发起过之后按钮就只是"灰掉的残影"，真正要读的是状态；
                             先给信息、再给不可用的动作。与【指导中】的排法一致。
 
-                            ⚠️ 用 `progressLabelKey(..., false)` 而不是提案状态原值：
-                            这里 `mine` 恒为**我发起**的提案（我是导师），接受之后
+                            ⚠️ 用 `progressLabelKey(..., view)` 而不是提案状态原值：
+                            这里 `proposed` 恒为**我发起**的提案（我是导师），接受之后
                             提案状态不再变化，直接显示会永远停在「已接受」。
                           */}
-                          {mine ? (
-                            <Badge tone={proposalTone(mine.status)}>
-                              {translateOr(t, progressLabelKey(mine, false), mine.status)}
+                          {proposed ? (
+                            <Badge tone={proposalTone(proposed.status)}>
+                              {translateOr(
+                                t,
+                                progressLabelKey(proposed, proposalView(proposed, myAccountId)),
+                                proposed.status,
+                              )}
                             </Badge>
                           ) : null}
                           {canPropose ? (
                             <button
                               type="button"
-                              style={{ ...S.accentBtn, opacity: mine ? 0.55 : 1 }}
-                              disabled={Boolean(mine) || proposeBusy}
-                              title={mine ? t('community.tip.proposed') : t('community.tip.propose')}
+                              style={{ ...S.accentBtn, opacity: proposed ? 0.55 : 1 }}
+                              disabled={Boolean(proposed) || proposeBusy}
+                              title={proposed ? t('community.tip.proposed') : t('community.tip.propose')}
                               onClick={() => void openPropose(w)}
                             >
                               {t('community.action.propose')}

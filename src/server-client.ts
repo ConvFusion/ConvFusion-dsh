@@ -31,7 +31,7 @@
 
 import { defaultServerUrl } from './config.js'
 import { serverAddressKey } from './server-env.js'
-import type { StudentSyncCheck } from './research/sync-watermarks.js'
+import type { SideSyncCheck } from './research/sync-watermarks.js'
 import { normalizeWorkspaceId } from './research/work-identity.js'
 
 /** 服务器 API 前缀（`ConvFusion-server/app/core/config.py` 的 `API_PREFIX`）。 */
@@ -102,6 +102,28 @@ export interface TokenBalance {
 }
 
 /**
+ * 一项研究工作的**方向** —— 两个方向共用同一套项目 / 提案 / 合同结构，
+ * 差别只在"谁拥有项目、谁发起、谁接受"（学生出钱两个方向都一样）。
+ *
+ * | 值 | 谁的项目 | 谁看 | 谁发起 | 谁接受 |
+ * |---|---|---|---|---|
+ * | `SEEK_MENTOR` | 学生 | 导师（【可指导】） | 导师出价 | 学生 |
+ * | `SEEK_STUDENT` | 导师 | 学生（【可加入】） | 学生出价 | 导师 |
+ *
+ * ⚠️ **缺字段一律读作 `SEEK_MENTOR`**（旧服务器不返回 `direction`）：
+ * 那正是"今天的行为"，退回它最保守 —— 不会把学生的研究当成导师的选题。
+ */
+export type ProjectDirection = 'SEEK_MENTOR' | 'SEEK_STUDENT'
+
+/** 两个方向的显式清单（界面按它遍历"这个工作区在两个方向上的发布状态"）。 */
+export const PROJECT_DIRECTIONS: readonly ProjectDirection[] = ['SEEK_MENTOR', 'SEEK_STUDENT']
+
+/** 解析方向字段；缺失 / 取值不在枚举里 → `SEEK_MENTOR`（旧服务器 = 今天的行为）。 */
+export function parseDirection(raw: unknown): ProjectDirection {
+  return asString(raw) === 'SEEK_STUDENT' ? 'SEEK_STUDENT' : 'SEEK_MENTOR'
+}
+
+/**
  * 一项**研究工作**（服务器上的 Research Project）的公开信息。
  *
  * 这是服务器**渐进披露**体系的第一层（免费，`GET /discovery/random`
@@ -130,6 +152,24 @@ export interface WorkItem {
   summary: string | null
   /** 与 owner 的关系（部分响应带）。 */
   updatedAt: string
+  /**
+   * **这项研究工作的名字**（服务器的 `work_name`）—— 列表**该显示的名字**。
+   *
+   * ⚠️ 与 {@link WorkItem.title} 的区别：`title` 是"这次发布的名字"（历史上是发布方的
+   * 本机工作区名），`work_name` 是"这项研究工作的名字"（有论文用论文标题，否则用
+   * 工作确定的主题）。看列表的人本机不一定有那份 workspace，所以名字只能由服务器给。
+   *
+   * `undefined` = 旧服务器还没有这个字段 → 界面退回 `title`。
+   */
+  workName?: string | null
+  /**
+   * 这项研究工作的**方向**（服务器 `direction`）：
+   * `SEEK_MENTOR` = 学生出题求指导（【可指导】）；
+   * `SEEK_STUDENT` = 导师出题招学生（【可加入】）。
+   *
+   * ⚠️ 旧服务器不返回该字段 → `SEEK_MENTOR`（= 今天的行为，见 {@link parseDirection}）。
+   */
+  direction: ProjectDirection
   /**
    * **这项研究属于谁**（服务器 `owner: { id, display_name }`）。
    *
@@ -1506,6 +1546,16 @@ export interface ServerProject {
   description: string | null
   status: string
   visibility: string
+  /** 这项研究工作的方向（见 {@link ProjectDirection}）。 */
+  direction: ProjectDirection
+  /**
+   * **这项研究工作的名字**（服务器按内容解析：`work_name` → `research_question`
+   * → `summary` → `title`，见 `dev-notes/v0.6.0-work-name-api.md`）。
+   *
+   * `null` = 服务器明确说不可知；`undefined` = **旧服务器还没有这个字段** →
+   * 界面退回 `title`（不编造）。
+   */
+  workName?: string | null
   updatedAt: string
 }
 
@@ -1528,15 +1578,23 @@ function parseProject(raw: unknown): ServerProject {
     description: asString(b.description) || null,
     status: asString(b.status) || 'ACTIVE',
     visibility: asString(b.visibility) || 'PRIVATE',
+    direction: parseDirection(b.direction),
+    workName: parseTriText(b.work_name),
     updatedAt: asString(b.updated_at),
   }
 }
 
-/** 建项目（恒为 PRIVATE；此时还没有 State）。 */
+/**
+ * 建项目（恒为 PRIVATE；此时还没有 State）。
+ *
+ * `direction`（可选）决定这项研究工作**属于哪个方向的市场**：不传 = `SEEK_MENTOR`
+ * （学生发布求指导，即今天的行为）。导师出题传 `SEEK_STUDENT`，见
+ * `dev-notes/v0.6.0-mentor-topic-mode.md` §2 R1。
+ */
 export async function createProject(
   base: string,
   apiKey: string,
-  input: { title: string; description?: string },
+  input: { title: string; description?: string; direction?: ProjectDirection },
   options: ServerRequestOptions = {},
 ): Promise<ServerProject> {
   const key = requireKey(apiKey)
@@ -1548,10 +1606,47 @@ export async function createProject(
     {
       method: 'POST',
       apiKey: key,
-      body: { title, ...(input.description ? { description: input.description } : {}) },
+      body: {
+        title,
+        ...(input.description ? { description: input.description } : {}),
+        // ⚠️ 只在明确给了方向时才发这个字段：默认方向由服务器拥有，
+        // 客户端抄一份默认值只会在平台改默认时悄悄漂移。
+        ...(input.direction ? { direction: input.direction } : {}),
+      },
     },
     options,
     '建项目',
+  )
+  return parseProject(body)
+}
+
+/**
+ * 改项目（`PUT /projects/{id}`，owner-only）。
+ *
+ * 本插件只用它改**标题**：研究工作的名字会在论文起名 / 主题演进后变化，而项目的
+ * 标题只在建项目时写过一次 —— 不改的话，网络里那个名字就永远停在第一次发布的样子。
+ *
+ * ⚠️ 服务器**不接受**在这里改 `direction`（创建后不可改）：同一份工作区在两个方向是
+ * 两个项目，改方向等于把项目在两个市场之间偷偷搬家。
+ */
+export async function updateProject(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  input: { title?: string },
+  options: ServerRequestOptions = {},
+): Promise<ServerProject> {
+  const key = requireKey(apiKey)
+  const id = (projectId ?? '').trim()
+  if (!id) throw new ServerError('bad-request', '缺少 projectId。')
+  const title = (input.title ?? '').trim()
+  if (!title) throw new ServerError('bad-request', '标题不能为空。')
+  const body = await requestJson(
+    base,
+    `/projects/${encodeURIComponent(id)}`,
+    { method: 'PUT', apiKey: key, body: { title } },
+    options,
+    '改项目',
   )
   return parseProject(body)
 }
@@ -1716,6 +1811,8 @@ function parseWorkItem(raw: unknown): WorkItem {
     researchQuestion: asString(b.research_question) || null,
     summary: asString(b.summary) || null,
     updatedAt: asString(b.updated_at),
+    direction: parseDirection(b.direction),
+    workName: parseTriText(b.work_name),
     // `brief_paid`：打开这项简报还会不会再扣 Token（服务器按支付记录 / owner 判定）。
     // 只有真的是布尔才采信；字段缺失或类型不对 → null（= 不知道，界面会照常提醒）。
     briefPaid: typeof b.brief_paid === 'boolean' ? b.brief_paid : null,
@@ -1780,11 +1877,20 @@ export async function fetchWorkList(
   base: string,
   apiKey: string,
   options: ServerRequestOptions = {},
+  /**
+   * 要**哪个方向**的列表（服务器 `?direction=`）：
+   * `SEEK_MENTOR` = 【可指导】（学生发布的研究工作，导师看）；
+   * `SEEK_STUDENT` = 【可加入】（导师发布的选题，学生看）。
+   *
+   * 省略该参数 → 服务器默认 `SEEK_MENTOR`（= 今天的行为），旧服务器忽略它。
+   */
+  direction?: ProjectDirection,
 ): Promise<WorkItem[]> {
   const key = requireKey(apiKey)
+  const query = direction ? `?direction=${encodeURIComponent(direction)}` : ''
   const body = await requestJson(
     base,
-    '/discovery/random',
+    `/discovery/random${query}`,
     { method: 'GET', apiKey: key },
     options,
     '研究工作列表',
@@ -1874,6 +1980,18 @@ export interface MentorProfile {
 export interface ProposalParty {
   id: string
   displayName: string
+  /**
+   * 研究简介（`research_profiles` 投影）。**三态，不许合并**：
+   *
+   * - 一个对象 —— 投影了，且对方填了；
+   * - `null` —— **投影了**，但对方还没建研究档案；
+   * - `undefined`（键都不在）—— 服务器**不给你看这一方的资料**。
+   *
+   * ⚠️ 为什么必须分开（服务器 `docs/API.md` §12.2）：profile 按"谁要判断谁"投影 ——
+   * 方向 A 只给 `mentor.profile`、方向 B 只给 `researcher.profile`，**没被投影的那一方
+   * 是整块省略 `profile` 键**。"不给你看"与"对方没填"在界面上是两件事：
+   * 前者不该出现资料入口，后者该出现并如实说"尚未填写"。
+   */
   profile?: MentorProfile | null
 }
 
@@ -1883,8 +2001,29 @@ export type ProposalStatus = 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 
 export interface MentorshipProposal {
   id: string
   projectId: string
+  /**
+   * 这个项目属于哪个方向（服务器的 `direction`，见 {@link ProjectDirection}）。
+   *
+   * 界面**必须**靠它决定三件事，不能靠"我是谁的角色"：谁能接受、
+   * 我上传落在哪一侧、进展文案怎么称呼。旧服务器缺字段 → `SEEK_MENTOR`。
+   */
+  direction: ProjectDirection
+  /**
+   * **谁发起了这次提案**（服务器的 `proposed_by_id`）。
+   *
+   * `null` = 旧服务器不返回 → 界面退回按方向推断
+   * （`SEEK_MENTOR` → 导师发起；`SEEK_STUDENT` → 学生发起）。
+   */
+  proposedById: string | null
   /** 项目标题（后端 enrich 后才有；旧服务器 → null，界面显示"未命名项目"）。 */
   projectTitle: string | null
+  /**
+   * **这项研究工作的名字**（服务器的 `work_name`，与 {@link projectTitle} 并列返回）。
+   *
+   * 与发现列表同一个字段、同一个来源（见 {@link WorkItem.workName}）：列表该显示的
+   * 是它，`project_title` 只作旧服务器的兜底。
+   */
+  workName?: string | null
   mentor: ProposalParty | null
   researcher: ProposalParty | null
   guidanceScope: string
@@ -1894,7 +2033,9 @@ export interface MentorshipProposal {
   successCondition: { type: string; description: string | null }
   status: ProposalStatus
   /**
-   * 指导进展（服务器 `review_files`）：该项目 `review/` 下**去重后**的指导结果份数。
+   * 指导进展（服务器 `review_files`）：**非 owner 那一侧**去重后的文件数
+   * （`review/` 笔记与整份工作区一视同仁）。方向 A 下那是导师的指导产物，
+   * 方向 B 下那是**学生的交付**（项目 owner 是导师）。
    *
    * 三态，**不许合并**（与 `brief_paid` 一脉相承的纪律）：
    * - `n`（含 `0`）—— 服务器明确知道（读权限在，数了就是这么多）；
@@ -1910,29 +2051,55 @@ export interface MentorshipProposal {
    */
   reviewFiles?: number | null
   /**
-   * 学生那一侧**当前**的文件数（服务器 `workspace_files`，`DISTINCT relative_path`）。
+   * **owner 那一侧**当前的文件数（服务器 `workspace_files`，`DISTINCT relative_path`）。
    *
    * 三态（与 `reviewFiles` 同一套纪律）：`undefined` = 响应里没有这个字段（旧服务器）、
    * `null` = 不可知（无读权限 / 项目软删除）、`n` = 明确知道。
-   * 它与 {@link workspaceUpdatedAt} 合起来是"学生更新了工作区吗"的两条互补判据 ——
+   * 它与 {@link workspaceUpdatedAt} 合起来是"**owner 侧**变了吗"的两条互补判据 ——
    * **时间戳看不到删除**（删文件不会让 `MAX(created_at)` 前进），文件数看得到。
    */
   workspaceFiles?: number | null
   /**
-   * 学生那一侧最后一次**上传文件**的时间（服务器 `workspace_updated_at`，ISO-8601）。
+   * **owner 那一侧**最后一次**上传文件**的时间（服务器 `workspace_updated_at`，ISO-8601）。
    *
    * 与 `workspaceFiles` 同三态。只覆盖**文件**：研究状态的变动不进这个时间戳
    * （状态自己的信号是 `GET /full` 的 `version` / `content_hash`）。
    */
   workspaceUpdatedAt?: string | null
   /**
-   * **宿主算好的**判读结果：上一次下载之后学生那一侧动过吗（`null` = 无从判断）。
+   * **非 owner 那一侧**最后一次变化的时间（服务器 `counterpart_updated_at`，ISO-8601）。
+   *
+   * 与 {@link workspaceUpdatedAt} 同三态、同一套语义，只是**另一侧**：
+   * `workspaceUpdatedAt` 跟 owner 侧（与 `workspaceFiles` 配对），
+   * 它跟 `reviewFiles` 那一侧。
+   *
+   * ⚠️ 为什么必须有它（服务器 `docs/API.md` §12.2）：`workspace_updated_at` 只跟踪
+   * **owner 侧**。方向 A 的 owner 是学生，所以导师靠它发现"学生又更新了"；但
+   * **方向 B 的 owner 是导师**，那个字段只会报导师自己传的东西 —— 导师看不到学生的交付。
+   * 这一对（`counterpartUpdatedAt` + `reviewFiles`）就是那一侧的水位与计数。
+   */
+  counterpartUpdatedAt?: string | null
+  /**
+   * **宿主算好的**判读结果，**按侧**给（`null` = 这台机器记不住下载过什么 → 无从判断）。
    *
    * 不是服务器字段 —— 宿主拿它与**本地存的水位**（上一次归档响应的
-   * `X-Source-Updated-At` / `X-File-Count`，见 `research/sync-watermarks.ts`）比对后填进来。
-   * 界面**只在导师侧**显示这个提示（学生自己知道自己更新过）。
+   * `X-Source-Updated-At` / `X-File-Count`，见 `research/sync-watermarks.ts`）按侧比对后填进来。
+   *
+   * ⚠️ 为什么是**两侧都要**（v0.6.0）：界面知道自己要下载哪一侧（`otherSide`），
+   * 而**方向决定那是哪一侧** —— 方向 A 的导师下 `owner` 侧，方向 B 的导师下 `mentor` 侧。
+   * 宿主不知道"我"是谁（为此多发一次 `fetchAccount` 正是刚消掉的那个 N），
+   * 所以两侧都算好，由界面取自己那一份。
    */
-  sync?: StudentSyncCheck | null
+  syncBySide?: {
+    owner: SideSyncCheck | null
+    mentor: SideSyncCheck | null
+  } | null
+  /**
+   * **旧形状**（协议 < 25）：只有 owner 侧这一个判读结果，界面为兼容继续认它。
+   *
+   * ⚠️ 只在 `syncBySide` 缺失（旧宿主）时才读 —— 两份都在时以 `syncBySide` 为准。
+   */
+  sync?: SideSyncCheck | null
   expiresAt: string
   createdAt: string
 }
@@ -1960,6 +2127,8 @@ export interface MentorshipContract {
   researcherId: string
   mentorId: string
   projectId: string
+  /** 合同所属的方向（见 {@link ProjectDirection}；旧服务器缺字段 → `SEEK_MENTOR`）。 */
+  direction: ProjectDirection
   totalFee: number
   depositAmount: number
   successPaymentAmount: number
@@ -2015,7 +2184,12 @@ function parseParty(raw: unknown, fallbackId?: unknown): ProposalParty | null {
     id,
     // 后端还没 enrich 身份字段时回退成短 id，界面仍然有东西可显示、可区分
     displayName: displayName || id.slice(0, 8),
-    profile: b ? parseProfile(b.profile) : null,
+    /*
+     * ⚠️ 只在**键存在**时才给 `profile`：`undefined`（键不在）= 服务器不给你看这一方的
+     * 资料；`null` = 投影了但对方没填。合并成 `null` 会让界面在"不该有入口"的那一侧
+     * 也显示【导师】/【学生】按钮（点开只能说"尚未填写"）。
+     */
+    ...(b && 'profile' in b ? { profile: parseProfile(b.profile) } : {}),
   }
 }
 
@@ -2041,6 +2215,19 @@ function parseTriCount(raw: unknown): number | null | undefined {
   return undefined
 }
 
+/**
+ * **自由文本类三态**解析（`work_name`）：显式 `null` → 服务器说不可知；
+ * 非空字符串 → 原样；**字段缺失** → `undefined`（旧服务器，界面退回 `title`）。
+ *
+ * 与计数/时间戳同一套纪律：`null` 与 `undefined` 的处分不同，不许合并。
+ * 空串按"字段缺失"处理（空名字没有意义，不该渲染成空行）。
+ */
+function parseTriText(raw: unknown): string | null | undefined {
+  if (raw === null) return null
+  const text = asString(raw)
+  return text ? text : undefined
+}
+
 /** **时间戳类三态**解析（`workspace_updated_at`）：显式 null → 未知；ISO 字符串 → 原样。 */
 function parseTriIso(raw: unknown): string | null | undefined {
   if (raw === null) return null
@@ -2056,7 +2243,11 @@ function parseProposal(raw: unknown): MentorshipProposal {
   return {
     id,
     projectId: asString(b.project_id),
+    direction: parseDirection(b.direction),
+    // `proposed_by_id`：谁发起的。缺失（旧服务器）→ null，界面按方向推断。
+    proposedById: asString(b.proposed_by_id) || null,
     projectTitle: asString(b.project_title) || null,
+    workName: parseTriText(b.work_name),
     // 后端 enrich 之后 `mentor` / `researcher` 是内嵌对象；没 enrich 时退回顶层
     // `mentor_id` / `researcher_id`（UUID），界面用短 id 显示 —— 至少能分出"哪边是我"。
     mentor: parseParty(b.mentor, b.mentor_id),
@@ -2070,6 +2261,7 @@ function parseProposal(raw: unknown): MentorshipProposal {
     reviewFiles: parseTriCount(b.review_files),
     workspaceFiles: parseTriCount(b.workspace_files),
     workspaceUpdatedAt: parseTriIso(b.workspace_updated_at),
+    counterpartUpdatedAt: parseTriIso(b.counterpart_updated_at),
     expiresAt: asString(b.expires_at),
     createdAt: asString(b.created_at),
   }
@@ -2085,6 +2277,7 @@ function parseContract(raw: unknown): MentorshipContract {
     researcherId: asString(b.researcher_id),
     mentorId: asString(b.mentor_id),
     projectId: asString(b.project_id),
+    direction: parseDirection(b.direction),
     totalFee: asNumber(b.total_fee),
     depositAmount: asNumber(b.deposit_amount),
     successPaymentAmount: asNumber(b.success_payment_amount),
@@ -2140,7 +2333,20 @@ export async function fetchFeeSuggestion(
   }
 }
 
-/** 发起指导提案（免费，不扣 Token）。 */
+/**
+ * 发起指导提案（免费，不扣 Token）。
+ *
+ * **两个方向共用这一个端点**，由**项目自己的方向**决定谁写在哪一边：
+ *
+ * | 项目方向 | 调用者 | 服务端写入 |
+ * |---|---|---|
+ * | `SEEK_MENTOR` | 导师（`MENTOR`/`ADMIN`） | `mentor_id = 我`，`researcher_id = owner` |
+ * | `SEEK_STUDENT` | 学生（`RESEARCHER`/`ADMIN`） | `researcher_id = 我`，`mentor_id = owner` |
+ *
+ * 所以客户端**不传方向**（传了也是冗余信息，可能与项目本身矛盾）；角色校验在服务端。
+ * 方向 B 下服务端会在这一步预检学生余额（不足 → 402），因为接受方是导师，
+ * 押金不足要让**出价的人**当场知道。
+ */
 export interface ProposeInput {
   guidanceScope: string
   totalFee: number
@@ -2207,10 +2413,15 @@ export async function fetchProposals(
 }
 
 /**
- * 接受指导提案（研究者）→ **冻结押金**，创建合同与关系。
+ * 接受指导提案 → **冻结押金**，创建合同与关系。
+ *
+ * 能接受的是**未发起的那一方**（服务端按 `proposed_by_id` 判，不是按角色）：
+ * 方向 A 由学生接受、方向 B 由导师接受；**两个方向都从 `researcher_id`
+ * （= 学生）的账户冻结押金** —— 论文主体是学生，学生出钱。
  *
  * ⚠️ `intentKey` 是**一次接受意图**的幂等键（同 work/brief）：
  * 402（押金不足）之后拿到 Token 再试必须复用同一个 key，服务器据此回放、不重复冻结。
+ * 方向 B 下 402 说的是**学生**余额不足，界面要如实那样说（不是"你余额不足"）。
  */
 export async function fetchAcceptProposal(
   base: string,
@@ -2234,7 +2445,7 @@ export async function fetchAcceptProposal(
   return parseContract(body)
 }
 
-/** 拒绝指导提案（研究者）。 */
+/** 拒绝指导提案（收到提案的一方：方向 A 是学生，方向 B 是导师）。 */
 export async function fetchRejectProposal(
   base: string,
   apiKey: string,

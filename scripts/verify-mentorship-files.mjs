@@ -772,7 +772,14 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
   )
   assertEq(itemOf(empty)?.status, 'new', '没有研究 → new（与"校验不了"是两件事）')
   assertEq(state.value?.remoteWorkspaceId, null, '服务器没给标识 → 顶层字段是 null（不是空串）')
-  assertEq(state.value?.protocol, 23, '响应带宿主协议号，界面据此决定显不显示校验状态')
+  /*
+   * ⚠️ 协议号从 `HOST_PROTOCOL` 取，不写死：这个断言要证明的是"响应**带了**协议号"
+   * （界面据此决定显不显示工作区校验状态），而不是"协议号正好是 23" ——
+   * 写死会在每次升号时变成假红，真正的回归（忘了带 protocol）反而没人看。
+   */
+  const HOST_PROTOCOL = (await import(pathToFileURL(join(PKG, 'lib', 'protocol.js')).href))
+    .HOST_PROTOCOL
+  assertEq(state.value?.protocol, HOST_PROTOCOL, '响应带宿主协议号，界面据此决定显不显示校验状态')
   assertEq(
     itemOf(mine)?.layout,
     'nested',
@@ -1125,7 +1132,7 @@ section('[8] 下载正文的卡死超时（stall）')
  * （改同一路径只动时间戳）—— 所以两个水位都要存，且**都取自那一次归档响应**
  * （下载前后列表里的值与 ZIP 会错位：取早了多提示一次、取晚了**会漏文件**）。
  * ════════════════════════════════════════════════════════════════════════ */
-section('[9] 学生更新工作区的检测（水位 → 比对 → 提示）')
+section('[9] 对方更新工作区的检测（按侧的水位 → 比对 → 提示）')
 {
   const SW = await import(lib('research/sync-watermarks.js'))
   const WM_AT = '2026-10-01T10:00:00+08:00'
@@ -1137,51 +1144,51 @@ section('[9] 学生更新工作区的检测（水位 → 比对 → 提示）')
    * 早先这里返回 null（界面一声不吭），真实反馈就是"学生明明更新过了，导师侧没有任何提示"。
    */
   assertEq(
-    SW.checkStudentChange(undefined, WM_AT, 3),
+    SW.checkSideChange(undefined, WM_AT, 3),
     { neverDownloaded: true },
     '从没下载过 → 明确说"该下载"（不是无从判断）',
   )
   assertEq(
-    SW.checkStudentChange(undefined, undefined, undefined),
+    SW.checkSideChange(undefined, undefined, undefined),
     { neverDownloaded: true },
     '从没下载过：服务器给不给字段都不影响 —— 反正要先下载一次',
   )
-  assertEq(SW.checkStudentChange(wm, undefined, undefined), null, '旧服务器不给列表字段 → 无从判断')
-  assertEq(SW.checkStudentChange(wm, null, null), null, '服务器说不可知 → 无从判断（查不到 ≠ 没有）')
+  assertEq(SW.checkSideChange(wm, undefined, undefined), null, '旧服务器不给列表字段 → 无从判断')
+  assertEq(SW.checkSideChange(wm, null, null), null, '服务器说不可知 → 无从判断（查不到 ≠ 没有）')
   assertEq(
-    SW.checkStudentChange(wm, '2026-10-02T09:00:00+08:00', 3),
+    SW.checkSideChange(wm, '2026-10-02T09:00:00+08:00', 3),
     { changed: true, reason: 'uploaded' },
     '时间戳变大、文件数没动 → 学生改了同一路径',
   )
   assertEq(
-    SW.checkStudentChange(wm, WM_AT, 2),
+    SW.checkSideChange(wm, WM_AT, 2),
     { changed: true, reason: 'deleted' },
     '文件数变了、时间戳没动 → 学生删了文件',
   )
   assertEq(
-    SW.checkStudentChange(wm, '2026-10-02T09:00:00+08:00', 4),
+    SW.checkSideChange(wm, '2026-10-02T09:00:00+08:00', 4),
     { changed: true, reason: 'uploaded' },
     '两个都变 → 报 uploaded（有证据就不放过）',
   )
   assertEq(
-    SW.checkStudentChange(wm, WM_AT, 3),
+    SW.checkSideChange(wm, WM_AT, 3),
     { changed: false, reason: null },
     '两个判据都可判且都说没动 → 没动',
   )
   assertEq(
-    SW.checkStudentChange(wm, WM_AT, null),
+    SW.checkSideChange(wm, WM_AT, null),
     null,
     '只有一半判据可用 → 无从判断（查不全 ≠ 没变，会漏掉看不见的删除）',
   )
   assertEq(
-    SW.checkStudentChange({ ...wm, fileCount: null }, WM_AT, 3),
+    SW.checkSideChange({ ...wm, fileCount: null }, WM_AT, 3),
     null,
     '老服务器没存文件数 → 只有时间戳不够断言"没动"',
   )
-  assertEq(SW.checkStudentChange(wm, 'not-a-date', 3), null, '时间戳解析不了 → 该分支未知')
+  assertEq(SW.checkSideChange(wm, 'not-a-date', 3), null, '时间戳解析不了 → 该分支未知')
   // 同一台服务器给的 ISO：等值比较（毫秒级时差不算"更新"）
   assertEq(
-    SW.checkStudentChange(wm, '2026-10-01T02:00:00Z', 3),
+    SW.checkSideChange(wm, '2026-10-01T02:00:00Z', 3),
     { changed: false, reason: null },
     '同一时刻的不同写法（+08:00 vs Z）不算更新',
   )
@@ -1234,8 +1241,8 @@ section('[9] 学生更新工作区的检测（水位 → 比对 → 提示）')
     projectId: PROJECT_ID, workspaceId: 'ws-0', prefix: 'x', source: 'owner',
   })
   assertEq(got.ok, true, `owner 侧下载成功${got.ok ? '' : `（${got.error?.code}）`}`)
-  const saved = Object.values(store.all())[0]
-  assertEq(Object.keys(store.all()).length, 1, '只记一个项目的水位')
+  const saved = store.get('http://localhost:8000', PROJECT_ID, 'owner')
+  assertEq(Object.keys(store.all()).length, 1, 'owner 侧只记一条水位（键里带侧）')
   assertEq(saved?.updatedAt, WM_AT, '水位取自 X-Source-Updated-At（不是下载前后列表里的值）')
   assertEq(saved?.fileCount, 3, '文件数取自 X-File-Count（默认快照口径 = workspace_files）')
   assert(Boolean(saved?.downloadedAt), '落盘时刻也有（诊断用，不参与比较）')
@@ -1245,14 +1252,40 @@ section('[9] 学生更新工作区的检测（水位 → 比对 → 提示）')
     projectId: PROJECT_ID, workspaceId: 'ws-0', prefix: 'x', source: 'owner',
   })
   assertEq(noHeader.ok, true, '老服务器（无水位头）下载照常成功')
-  assertEq(store.all()[Object.keys(store.all())[0]]?.updatedAt, WM_AT, '没有水位头就不动旧水位（不覆盖成错值）')
+  assertEq(
+    store.get('http://localhost:8000', PROJECT_ID, 'owner')?.updatedAt,
+    WM_AT,
+    '没有水位头就不动旧水位（不覆盖成错值）',
+  )
 
-  // mentor 侧（学生取导师那一份）→ 不存：列表的 workspace_* 是 owner 侧，存了也没得比
+  /*
+   * mentor 侧（= 另一方交付的那一侧）：**也存，但存到自己的键上**（v0.6.0）。
+   *
+   * 早先这里断言"mentor 侧不存"—— 那是因为当时服务器只有 owner 侧的水位字段可比。
+   * 服务器现在给了 `counterpart_updated_at` / `review_files`（正是这一侧），
+   * 而**方向 B 的导师下载的就是这一侧**（学生交付的进展），所以必须按侧记，
+   * 否则方向 A / 方向 B 的水位会互相顶掉。
+   */
   const mentorDl = await dlHost('2026-10-05T00:00:00Z', 2).handler('mentor/download', {
     projectId: PROJECT_ID, workspaceId: 'ws-0', prefix: 'x', source: 'mentor',
   })
   assertEq(mentorDl.ok, true, 'mentor 侧下载成功')
-  assertEq(store.all()[Object.keys(store.all())[0]]?.updatedAt, WM_AT, 'mentor 侧的水位不写进 owner 记录（不可比）')
+  assertEq(
+    store.get('http://localhost:8000', PROJECT_ID, 'owner')?.updatedAt,
+    WM_AT,
+    'mentor 侧的水位**不写进 owner 那条**（两侧互不覆盖 —— 这正是按侧记的意义）',
+  )
+  assertEq(
+    store.get('http://localhost:8000', PROJECT_ID, 'mentor')?.updatedAt,
+    '2026-10-05T00:00:00Z',
+    'mentor 侧另记一条（方向 B 的导师靠它发现自己那一侧变没变）',
+  )
+  // 老文件（键里没有侧）读作 owner 侧：不丢历史、也不误判成另一侧
+  const legacy = SW.createMemorySyncWatermarkStore({
+    [`${'http://localhost:8000'}|${PROJECT_ID}`]: wm,
+  })
+  assertEq(legacy.get('http://localhost:8000', PROJECT_ID, 'owner')?.updatedAt, WM_AT, '旧键（无侧）读作 owner 侧')
+  assertEq(legacy.get('http://localhost:8000', PROJECT_ID, 'mentor'), undefined, '旧键不会被当成另一侧')
 
   /* ── ③ mentor/list 把比对结果给出来（三态 + 只挂在 ACCEPTED 上）────────── */
   const baseProposal = (over = {}) => ({
@@ -1287,28 +1320,36 @@ section('[9] 学生更新工作区的检测（水位 → 比对 → 提示）')
     workspace_updated_at: '2026-10-02T09:00:00+08:00',
     workspace_files: 4,
   })])
-  assertEq(a.sync, { changed: true, reason: 'uploaded' }, '(a) 水位之后学生又传了 → 提示重新下载')
+  assertEq(a.syncBySide.owner, { changed: true, reason: 'uploaded' }, '(a) 水位之后学生又传了 → 提示重新下载')
   assertEq(a.workspaceFiles, 4, '(a) workspace_files 解析成数字')
   assertEq(a.workspaceUpdatedAt, '2026-10-02T09:00:00+08:00', '(a) workspace_updated_at 原样读出')
 
   // (b) 时间戳没动、文件数变了 → deleted（删除不会让时间戳前进）
   const [b] = await list([baseProposal({ workspace_updated_at: WM_AT, workspace_files: 2 })])
-  assertEq(b.sync, { changed: true, reason: 'deleted' }, '(b) 文件数变小 → 学生删了文件')
+  assertEq(b.syncBySide.owner, { changed: true, reason: 'deleted' }, '(b) 文件数变小 → 学生删了文件')
 
   // (c) 两个判据都说没动 → changed: false（界面不提示）
   const [c] = await list([baseProposal({ workspace_updated_at: WM_AT, workspace_files: 3 })])
-  assertEq(c.sync, { changed: false, reason: null }, '(c) 没动 → 不提示')
+  assertEq(c.syncBySide.owner, { changed: false, reason: null }, '(c) 没动 → 不提示')
 
   // (d) 服务器说不可知（项目不可读 / 软删除）→ null，且**不**退化成 0 / epoch
-  const [d] = await list([baseProposal({ workspace_updated_at: null, workspace_files: null })])
-  assertEq(d.sync, null, '(d) 不可知 → 无从判断（三态不破）')
+  // ⚠️ 两侧都要给"不可知"，否则另一侧会用自己的字段算出真结论（那不算三态破）
+  const [d] = await list([baseProposal({
+    workspace_updated_at: null,
+    workspace_files: null,
+    counterpart_updated_at: null,
+    review_files: null,
+  })])
+  assertEq([d.syncBySide.owner, d.syncBySide.mentor], [null, null], '(d) 不可知 → 两侧都无从判断（三态不破）')
   assertEq(d.workspaceFiles, null, '(d) 显式 null 原样保留（不是 0）')
 
-  // (e) 旧服务器：响应里没有这两个字段 → undefined / sync: null
-  const [e] = await list([baseProposal()])
+  // (e) 旧服务器：响应里没有这些字段 → undefined / 两侧都无可判断
+  //     （`review_files: undefined` 会走"逐项目读 /files 自己数"的旧路径，这里它失败 → null）
+  const [e] = await list([baseProposal({ review_files: undefined })])
   assertEq(e.workspaceFiles, undefined, '(e) 旧服务器：字段缺失 → undefined（不是 0）')
   assertEq(e.workspaceUpdatedAt, undefined, '(e) 时间戳同样缺失')
-  assertEq(e.sync, null, '(e) 没有字段就无从判断 → null（界面不提示）')
+  assertEq(e.counterpartUpdatedAt, undefined, '(e) counterpart_updated_at 同样缺失（旧服务器）')
+  assertEq([e.syncBySide.owner, e.syncBySide.mentor], [null, null], '(e) 没有字段就无从判断 → 两侧都 null（界面不提示）')
 
   // (f) **这个项目从没下载过**（store 里只有上面那个项目的水位）→ 提示"该下载"
   const [f2] = await list([baseProposal({
@@ -1316,18 +1357,64 @@ section('[9] 学生更新工作区的检测（水位 → 比对 → 提示）')
     workspace_updated_at: '2026-10-02T09:00:00+08:00',
     workspace_files: 9,
   })])
-  assertEq(f2.sync, { neverDownloaded: true }, '(f) 没有水位 → 该下载（不是"无从判断"、也不是"没更新"）')
+  assertEq(f2.syncBySide.owner, { neverDownloaded: true }, '(f) 没有水位 → 该下载（不是"无从判断"、也不是"没更新"）')
 
   /*
    * (g) 宿主**没有水位存储**（精简环境）→ null：这台机器**记不住**下载过什么，
    * 与"记得、只是没下过"（→ neverDownloaded）是两件事。
    */
   const [g] = await list([baseProposal({ workspace_updated_at: '2026-10-02T09:00:00+08:00', workspace_files: 9 })], false)
-  assertEq(g.sync, null, '(g) 没有水位存储 → null（记不住 ≠ 没下载过）')
+  // 整个 `syncBySide` 就是 null（这台机器根本没有水位存储），不是两侧各一个 null
+  assertEq(g.syncBySide, null, '(g) 没有水位存储 → syncBySide: null（记不住 ≠ 没下载过）')
 
   // (h) 只有 ACCEPTED 才挂 sync：PROPOSED 行不谈"学生更新"
   const [h] = await list([baseProposal({ status: 'PROPOSED' })])
-  assertEq('sync' in h, false, '(h) 非 ACCEPTED 行不带 sync 字段')
+  assertEq('syncBySide' in h, false, '(h) 非 ACCEPTED 行不带 syncBySide 字段')
+
+  /*
+   * (i) **方向 B 的那一侧**（v0.6.0）：导师（owner）下载的是 `mentor` 侧 —— 学生交付的
+   * 进展 —— 所以要比对 `counterpart_updated_at` / `review_files`，而不是 owner 侧那一对。
+   *
+   * 这一段就是服务器 `counterpart_updated_at` 存在的理由：只跟踪 owner 侧的话，
+   * 方向 B 的导师**永远看不到"学生又交了新东西"**。
+   */
+  {
+    // 先给 `mentor` 侧存一条水位（模拟"导师下载过学生的交付"）
+    store.set('http://localhost:8000', PROJECT_ID, 'mentor', {
+      updatedAt: WM_AT, fileCount: 1, downloadedAt: '2026-10-01T11:00:00.000Z',
+    })
+    const [i1] = await list([baseProposal({
+      direction: 'SEEK_STUDENT',
+      review_files: 3,
+      counterpart_updated_at: '2026-10-03T09:00:00+08:00',
+      // owner 侧与它自己那条水位（WM_AT / 3，前面几步下载时存的）完全一致 → 不动
+      workspace_updated_at: WM_AT,
+      workspace_files: 3,
+    })])
+    assertEq(i1.direction, 'SEEK_STUDENT', '(i) 提案带出方向')
+    assertEq(
+      i1.syncBySide.mentor,
+      { changed: true, reason: 'uploaded' },
+      '(i) 方向 B：学生又交付了 → 提示导师重新下载（靠 counterpart_updated_at）',
+    )
+    assertEq(
+      i1.syncBySide.owner,
+      { changed: false, reason: null },
+      '(i) 同一行里 owner 侧没动 → 两侧各按各的字段判，互不干扰',
+    )
+    assertEq(i1.counterpartUpdatedAt, '2026-10-03T09:00:00+08:00', '(i) counterpart_updated_at 原样读出')
+
+    // 另一侧的文件数变了（学生删了交付）→ deleted
+    store.set('http://localhost:8000', PROJECT_ID, 'mentor', {
+      updatedAt: '2026-10-03T09:00:00+08:00', fileCount: 3, downloadedAt: '2026-10-03T10:00:00.000Z',
+    })
+    const [i2] = await list([baseProposal({
+      direction: 'SEEK_STUDENT',
+      review_files: 2,
+      counterpart_updated_at: '2026-10-03T09:00:00+08:00',
+    })])
+    assertEq(i2.syncBySide.mentor, { changed: true, reason: 'deleted' }, '(i) 学生删了交付 → 同样要提示')
+  }
 }
 
 rmSync(work, { recursive: true, force: true })

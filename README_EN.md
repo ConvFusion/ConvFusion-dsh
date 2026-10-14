@@ -7,7 +7,7 @@
 <p align="center"><strong>A research operating system plugin built for DeepSeek Harness</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.5.8-4a43ea" alt="Version 0.5.7">
+  <img src="https://img.shields.io/badge/version-v0.6.0-4a43ea" alt="Version 0.6.0">
   <img src="https://img.shields.io/badge/DeepSeek_Harness-plugin-4a43ea" alt="DeepSeek Harness Plugin">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="MIT License"></a>
 </p>
@@ -101,17 +101,38 @@ feature; while signed out the research-work list shows clearly labelled **sample
 cannot be acted on. Once signed in, the account row shows the current **Token balance**
 (click to refresh; paid reads such as a brief refresh it automatically).
 
-### Publishing research to the network ("Find a mentor")
+### Publishing research to the network ("Find a mentor" / "Find students")
 
 **Research work → Mine** lists the research projects on this machine (those DSH workspaces that
-contain a valid research workspace). Clicking **Find a mentor** on one of them is what publishes
-*that* project's research state to ConvFusion.com (create project → upload research state →
-publish); clicking again only updates the content and never creates a duplicate project.
+contain a valid research workspace). Each row has **two** publish buttons, stacked, ordered by
+role: a mentor (`MENTOR`) sees **Find students** on top, a researcher sees **Find a mentor** on
+top. The only difference is **which market** the work is published to:
+
+| Button | Direction | Who sees it | Who bids | Who accepts |
+|---|---|---|---|---|
+| Find a mentor | Student posts (seeks guidance) | Mentors (Can mentor) | Mentor | **Student** |
+| Find students | Mentor posts a topic | Students (Joinable) | Student | **Mentor** |
+
+In both directions the **student pays** (the deposit is frozen from the student's account) and
+the **student is the paper's subject**. The tabs are **Can mentor** (mentor view of student work;
+requires the `MENTOR` role), **Joinable** (students browsing mentor-published topics; visible to
+everyone) and **Mentorship** (offer / accept / decline / file exchange).
+
+Clicking either button is what publishes *that* project's research state to ConvFusion.com
+(create project → upload research state → publish); clicking again only updates the content and
+never creates a duplicate project. The two directions are **two separate projects** on the
+server, with independent state and attachment fingerprints.
 Published projects show **In the network**, and that badge follows the **server**: refreshing a
 list re-checks the server, so deleting a project or unpublishing it on the server clears the
 badge immediately (the matching local mapping is dropped or marked unpublished).
 **Only research progress is uploaded**: prompts, skill customizations, workflows and personal
 expertise always stay on this machine.
+
+The **research work's name shown on the network is the work's own name**: if there is a paper,
+the **paper title**; otherwise the **adopted research topic** from `project.md`; only when neither
+exists does it fall back to the local workspace name. The publish dialog's title is that name
+(when it differs from the local workspace name, one line below says which workspace this is);
+after naming the paper or evolving the topic, pressing Update again renames it on the network.
 
 ### Research work and two-level disclosure
 

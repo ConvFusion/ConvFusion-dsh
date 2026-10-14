@@ -87,7 +87,7 @@ import {
 import { HOST_PROTOCOL, HOST_PROTOCOL_FIELD } from './protocol.js'
 import type { SkillCustomizationStore } from './research/skill-customization.js'
 import type { PaidBriefStore } from './research/paid-briefs.js'
-import { checkStudentChange } from './research/sync-watermarks.js'
+import { checkSideChange } from './research/sync-watermarks.js'
 import {
   type WorkIdentityStore,
   type WorkspaceStatus,
@@ -144,8 +144,10 @@ import {
   probeServerHealth,
   publishProject,
   readStateVersion,
+  updateProject,
   submitRechargeRequest,
   fetchRechargeRequests,
+  PROJECT_DIRECTIONS,
   SERVER_TIMEOUT_MS,
   ServerError,
   uploadProjectFiles,
@@ -155,6 +157,7 @@ import {
   type FeeSuggestion,
   type MentorshipContract,
   type MentorshipProposal,
+  type ProjectDirection,
   type RechargeRequest,
   type ServerAccount,
   type TokenBalance,
@@ -166,6 +169,7 @@ import { latestTurnReport } from './research/progress-bridge.js'
 import { buildWorkspaceProgress, captureProgress } from './research/progress.js'
 import type { ProgressCountRow } from './research/progress.js'
 import { buildPublishContent } from './research/publish-content.js'
+import { researchWorkName } from './research/work-name.js'
 import {
   buildUploadPlan,
   planUploadBatches,
@@ -173,6 +177,7 @@ import {
 } from './research/upload-selection.js'
 import {
   createMemoryPublishedStore,
+  parsePublishedStoreKey,
   type PublishedRecord,
   type PublishedStore,
 } from './research/published-store.js'
@@ -459,13 +464,20 @@ export interface LocalWorkItem {
   /** 注册表最近一次变更时刻（ISO）。 */
   updatedAt: string
   /**
-   * 是否**在网络上可见**（`visibility = PUBLISHED`）。
+   * 本机这个工作区在**网络上的发布状态**，一个方向一条（`[]` = 还没发布过）。
    *
-   * ⚠️ 判据是**服务器**（`GET /projects/{id}`），不是本地映射：本地记录只说明"我传过"，
-   * 服务器删项目或取消发布时它不会自己更新。核对不通（离线/未登录）时退回本地记录，
-   * 因为"读不到"不等于"服务器上没有"。
+   * ⚠️ 为什么是**数组**（v0.6.0）：一个工作区可以同时在两个方向发布 ——
+   * 【寻找指导】（`SEEK_MENTOR`，学生求指导）与【寻找学生】（`SEEK_STUDENT`，
+   * 导师出题）。它们是**服务器上两个不同的项目**，所以要有两条记录、两个标记；
+   * 早先的单对象形状表达不了"两个方向各有各的状态"。
+   *
+   * ⚠️ 每一行的判据是**服务器**（`GET /projects/{id}`），不是本地映射：本地记录只说明
+   * "我传过"，服务器删项目或取消发布时它不会自己更新。核对不通（离线/未登录）时退回
+   * 本地记录，因为"读不到"不等于"服务器上没有"。
    */
-  published: {
+  published: Array<{
+    /** 这条对应哪个方向（界面按它把按钮文案切成「更新指导」/「更新学生」）。 */
+    direction: ProjectDirection
     projectId: string
     version: number
     updatedAt: string
@@ -473,7 +485,7 @@ export interface LocalWorkItem {
     serverUrl: string
     /** 记录属于哪个账号。 */
     accountId: string
-  } | null
+  }>
 }
 
 /** 服务器上的账号（`GET /api/v1/auth/me`）。**不含任何凭据。** */
@@ -874,6 +886,17 @@ function asString(v: unknown): string {
  */
 function asSource(v: unknown): 'owner' | 'mentor' {
   return asString(v) === 'mentor' ? 'mentor' : 'owner'
+}
+
+/**
+ * 归一研究方向（`SEEK_MENTOR` / `SEEK_STUDENT`）。
+ *
+ * 缺省 = `SEEK_MENTOR`：这是"学生发布研究求指导"的方向，也是**今天唯一存在的行为**
+ * —— 旧界面（不带这个字段）点【寻找指导】时走的正是它。
+ * 其它取值一律当缺省处理，不把奇怪的值递给服务器。
+ */
+function asDirection(v: unknown): ProjectDirection {
+  return asString(v) === 'SEEK_STUDENT' ? 'SEEK_STUDENT' : 'SEEK_MENTOR'
 }
 
 /** 正整数（费用类字段：0 / 负数 / 非数字一律视为无效）。 */
@@ -1317,7 +1340,24 @@ export function createSettingsRpcHandler(
         /* 读不动就当"未知"，不把这个工作区从列表里抹掉 */
       }
       const title = w.title.trim() || basename(canonical)
-      const record = publishedStore.get(root)
+      /*
+       * 两个方向各读一条记录 —— 一个工作区可以**同时**是"学生求指导的研究"和
+       * "导师招学生的选题"（服务器上是两个项目）。没有的方向就不出现在数组里，
+       * 界面据此把该按钮显示成「寻找…」而不是「更新…」。
+       */
+      const published = PROJECT_DIRECTIONS.flatMap((direction) => {
+        const record = publishedStore.get(root, direction)
+        return record
+          ? [{
+              direction,
+              projectId: record.projectId,
+              version: record.version,
+              updatedAt: record.updatedAt,
+              serverUrl: record.serverUrl,
+              accountId: record.accountId,
+            }]
+          : []
+      })
       if (progress) sources.set(w.id, { root, title, progress })
       items.push({
         id: w.id,
@@ -1334,15 +1374,7 @@ export function createSettingsRpcHandler(
         paper: progress?.paper ?? false,
         clarity: progress?.need.clarity ?? 'unknown',
         updatedAt: w.updatedAt,
-        published: record
-          ? {
-              projectId: record.projectId,
-              version: record.version,
-              updatedAt: record.updatedAt,
-              serverUrl: record.serverUrl,
-              accountId: record.accountId,
-            }
-          : null,
+        published,
       })
     }
     return {
@@ -1378,50 +1410,50 @@ export function createSettingsRpcHandler(
      * ⚠️ 早先的写法是"没凭据就直接原样返回"，于是切到另一台服务器（那里还没登录）时，
      * 【我的】仍然带着**上一台服务器**的发布记录 —— 界面显示"已在网络中"，
      * 而当前这台服务器上其实什么都没有。用户看到的和服务实际连的不是同一台。
+     *
+     * ⚠️ 逐**方向**过滤：两个方向的记录可能分属两台服务器（先在开发服发布、
+     * 后在生产服发布），不能一起丢。
      */
     const baseKey = serverAddressKey(base)
-    const scoped = items.map((it) =>
-      !it.published || serverAddressKey(it.published.serverUrl) === baseKey
-        ? it
-        : { ...it, published: null },
-    )
+    const scoped = items.map((it) => ({
+      ...it,
+      published: it.published.filter((r) => serverAddressKey(r.serverUrl) === baseKey),
+    }))
     if (!apiKey) return scoped
-    const targets = scoped.filter((it) => it.published)
+    const targets = scoped.flatMap((it) => it.published.map((r) => ({ item: it, record: r })))
     if (targets.length === 0) return scoped
     const checkedAt = new Date().toISOString()
     const checks = await Promise.all(
-      targets.map(async (it) => {
+      targets.map(async ({ item, record }) => {
         try {
-          const project = await fetchProject(base, apiKey, it.published!.projectId, netOptions())
-          return { id: it.id, root: it.researchRoot, visibility: project.visibility, gone: false }
+          const project = await fetchProject(base, apiKey, record.projectId, netOptions())
+          return { item, record, visibility: project.visibility, gone: false }
         } catch (e) {
           // 只有"服务器明确说不存在"才算消失；网络/超时/其它错误一律不下结论
           return {
-            id: it.id,
-            root: it.researchRoot,
+            item,
+            record,
             visibility: null,
             gone: e instanceof ServerError && e.code === 'not-found',
           }
         }
       }),
     )
-    const byId = new Map(checks.map((c) => [c.id, c]))
     // 服务器说什么就写回什么（`serverVisibility` / `checkedAt`）—— 本地记录里的
     // "我传过什么"（files / selection / version）在核对时不改
     for (const c of checks) {
       if (c.visibility === null && !c.gone) continue
-      const record = publishedStore.get(c.root)
+      const record = publishedStore.get(c.item.researchRoot, c.record.direction)
       if (!record) continue
-      if (c.gone) publishedStore.remove(c.root)
-      else publishedStore.set(c.root, { ...record, serverVisibility: c.visibility!, checkedAt })
+      if (c.gone) publishedStore.remove(c.item.researchRoot, c.record.direction)
+      else publishedStore.set(c.item.researchRoot, { ...record, serverVisibility: c.visibility!, checkedAt })
     }
-    return scoped.map((it) => {
-      const c = byId.get(it.id)
-      if (!c) return it
-      if (c.gone) return { ...it, published: null }
-      if (c.visibility && c.visibility !== 'PUBLISHED') return { ...it, published: null }
-      return it
-    })
+    for (const c of checks) {
+      // 服务器上没有 / 已取消发布 → 这个方向不再显示"已在网络中"
+      const visible = !c.gone && (c.visibility === null || c.visibility === 'PUBLISHED')
+      if (!visible) c.item.published = c.item.published.filter((r) => r !== c.record)
+    }
+    return scoped
   }
 
   /**
@@ -1432,16 +1464,19 @@ export function createSettingsRpcHandler(
    * 指纹是在**另一台**上传出来的，新服务器上根本没有这些附件，但比对结果是"没变化"，
    * 于是被跳过。界面上的"已在网络中"同样会是假的。
    *
+   * ⚠️ 方向也要对得上：两个方向是服务器上**两个不同的项目**，拿"求指导"那份记录去给
+   * "找学生"做增量，比对的项目根本不是同一个。
+   *
    * 地址比较走 `serverAddressKey`：配置文件里可能带末尾斜杠，字符串直接比会错判成两台。
    */
-  const recordOn = (root: string, base: string): PublishedRecord | undefined => {
-    const record = publishedStore.get(root)
+  const recordOn = (root: string, base: string, direction: ProjectDirection): PublishedRecord | undefined => {
+    const record = publishedStore.get(root, direction)
     if (!record) return undefined
     return serverAddressKey(record.serverUrl) === serverAddressKey(base) ? record : undefined
   }
 
   /**
-   * 服务器的工作列表（【可指导】）也是**服务器**的状态；顺带把本地记录对齐。
+   * 服务器的工作列表（【可指导】/【可加入】）也是**服务器**的状态；顺带把本地记录对齐。
    *
    * 列表里出现的项目必然是"在网络上可见"的，所以若它的 `project_id` 正好是本机
    * 一条发布记录（自己的工作也出现在列表里），就把那条记录刷新为 `PUBLISHED`。
@@ -1451,10 +1486,11 @@ export function createSettingsRpcHandler(
     if (items.length === 0) return
     const ids = new Set(items.map((it) => it.projectId))
     const checkedAt = new Date().toISOString()
-    for (const [root, record] of Object.entries(publishedStore.all())) {
+    for (const [key, record] of Object.entries(publishedStore.all())) {
       if (!ids.has(record.projectId)) continue
       if (record.serverVisibility === 'PUBLISHED' && record.checkedAt) continue
-      publishedStore.set(root, { ...record, serverVisibility: 'PUBLISHED', checkedAt })
+      const { researchRoot, direction } = parsePublishedStoreKey(key)
+      publishedStore.set(researchRoot, { ...record, direction, serverVisibility: 'PUBLISHED', checkedAt })
     }
   }
 
@@ -1860,13 +1896,22 @@ export function createSettingsRpcHandler(
         case 'work/uploadPlan': {
           const id = asString(p.id)
           if (!id) return fail('bad-request', '缺少研究工作 id。')
+          const direction = asDirection(p.direction)
           const listed = await collectLocalWorks()
           const source = listed.sources.get(id)
           if (!source) return fail('not-found', '找不到这个本机研究项目（或其研究状态读不出来）。')
           const plan: UploadPlan = buildUploadPlan(source.root)
-          // ⚠️ 只认**当前服务器**的记录：别的服务器的"已上传指纹"在这里不成立（会漏传）
+          /*
+           * 对话框头部显示**要发布到网络的那个名字**（这项研究工作自己的名字），
+           * 而不是本机工作区名 —— 用户点的是【寻找指导/寻找学生】，他看到的名字
+           * 应该就是网络上会出现的那个。本机工作区名另给（`workspaceTitle`），
+           * 界面在两者不同时用一行提示说明"这是哪个本机工作区"。
+           */
+          const workName = researchWorkName(source.root, source.title)
+          // ⚠️ 只认**当前服务器 + 当前方向**的记录：别的服务器、另一个方向的"已上传指纹"
+          // 在这里都不成立（会漏传，或把两个项目的附件算在一起）
           const base = resolveServerUrl(deps.getConfig(), env()).url
-          const record = recordOn(source.root, base)
+          const record = recordOn(source.root, base, direction)
           // 记住的选择 ∪ 规则推荐（新文件自动并入，否则新增证据会静默漏传）
           const remembered = record?.selection ?? null
           const recommended = plan.categories
@@ -1892,7 +1937,14 @@ export function createSettingsRpcHandler(
             value: {
               projectId: id,
               root: source.root,
-              title: source.title,
+              /** 要发布的名字 = 这项研究工作自己的名字（有论文用论文标题）。 */
+              title: workName.name,
+              /** 本机工作区名（注册表标题）—— 与 `title` 不同时界面用它指认"是哪个工作区"。 */
+              workspaceTitle: source.title,
+              /** 名字是从哪来的（`paper` / `topic` / `fallback`），诊断与回执用。 */
+              workNameSource: workName.source,
+              /** 本次要发布到哪个方向（界面把它显示在标题上，免得两个按钮分不清）。 */
+              direction,
               plan,
               /** 对话框的初始勾选。 */
               selection: effective,
@@ -1911,6 +1963,13 @@ export function createSettingsRpcHandler(
           if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
           const id = asString(p.id)
           if (!id) return fail('bad-request', '缺少研究工作 id。')
+          /*
+           * 发布到哪个方向（【寻找指导】/【寻找学生】）—— 由界面在按钮上决定。
+           *
+           * ⚠️ 两个方向是服务器上**两个不同的项目**（各自一条本地记录、各自一套已上传
+           * 指纹），所以 `direction` 从查记录、建项目到回写记录**全程都要带上**。
+           */
+          const direction = asDirection(p.direction)
           const listed = await collectLocalWorks()
           const source = listed.sources.get(id)
           if (!source) return fail('not-found', '找不到这个本机研究项目（或其研究状态读不出来）。')
@@ -1926,26 +1985,32 @@ export function createSettingsRpcHandler(
           const remember = p.remember !== false
           try {
             const me = await fetchAccount(base, apiKey, netOptions())
-            const { content, missing } = buildPublishContent({
+            const { content, missing, workName } = buildPublishContent({
               researchRoot: source.root,
               workspaceTitle: source.title,
               progress: source.progress,
               generatedAt: new Date().toISOString(),
             })
-            // ⚠️ 同上：另一台服务器的记录不能当"上次传过"用（增量上传会漏文件）
-            const previous = recordOn(source.root, base)
+            // ⚠️ 同上：另一台服务器 / 另一个方向的记录不能当"上次传过"用
+            const previous = recordOn(source.root, base, direction)
             // 只有同一台服务器 + 同一个账号才重用项目；否则新建
             // （服务器 GET /projects/{id} 是 owner-only，重用别人的 id 只会 404）
             const reusable = previous && previous.serverUrl === base && previous.accountId === me.id
             let projectId = reusable ? previous.projectId : ''
             let created = false
+            /** 改名失败的原因（`null` = 改名成功或不需要改名）—— 回执要如实说。 */
+            let renameFailed: string | null = null
             const create = async (): Promise<string> => {
               const project = await createProject(
                 base,
                 apiKey,
                 {
-                  title: source.title,
+                  // **这项研究工作自己的名字**（有论文用论文标题）——不是本机工作区名：
+                  // 网络里的列表都显示它，而看列表的人本机不一定有这份 workspace。
+                  title: workName,
                   description: content.summary ? content.summary : undefined,
+                  // 只在非默认方向时显式发：默认方向归服务器所有（见 createProject 注释）
+                  ...(direction === 'SEEK_STUDENT' ? { direction } : {}),
                 },
                 netOptions(),
               )
@@ -1986,7 +2051,7 @@ export function createSettingsRpcHandler(
             } catch (e) {
               // 映射指向的项目已被服务器删除（本地记录不会自己知道）：忘掉它、新建项目重来一次
               if (!reusable || !(e instanceof ServerError) || e.code !== 'not-found') throw e
-              publishedStore.remove(source.root)
+              publishedStore.remove(source.root, direction)
               projectId = await create()
               uploaded = await saveStateWithRebase(
                 await readStateVersion(base, apiKey, projectId, netOptions()),
@@ -2049,9 +2114,40 @@ export function createSettingsRpcHandler(
               intentKey: `convfusion-dsh-publish-${projectId}-v${uploaded.version}`,
               ...netOptions(),
             })
+            /*
+             * 名字会在**论文起名 / 主题演进**之后变化，而项目标题只在建项目时写过一次。
+             * 复用时按需改名：不改的话网络里那个名字永远停在第一次发布的样子。
+             *
+             * ⚠️ 判据用**上次存下的标题**（`previous.title`），不是先 GET 一次项目：
+             * 一次额外往返换一个几乎总是"没变"的结论不划算；代价是"别的客户端改了名字"
+             * 时我们会把它改回来（这本来也是我们要的语义 —— 本机是这项工作的发布方）。
+             * 老记录没有 `title`（v0.6.0 之前）→ 无从比较，改一次并记下来。
+             */
+            if (reusable && previous?.title !== workName) {
+              try {
+                await updateProject(base, apiKey, projectId, { title: workName }, netOptions())
+              } catch (e) {
+                /*
+                 * ⚠️ 改名**不是发布的前提**：它失败不该让整次发布失败（状态与附件都还没传）。
+                 *
+                 * 两种情形分开：
+                 *   · `not-found`：项目已被删（本地记录不知道）→ 下面的状态上传会走
+                 *     "忘掉旧映射、新建项目"那条路，而**新建时本来就带正确的名字**，
+                 *     所以这一支是自愈的，不算失败；
+                 *   · 其它（5xx / 超时 / 服务器不接受 PUT）：名字没改成，但工作照发 ——
+                 *     回执里如实说一句，用户下次发布还会再试。
+                 */
+                if (!(e instanceof ServerError && e.code === 'not-found')) {
+                  renameFailed = e instanceof ServerError ? e.message : String(e)
+                }
+              }
+            }
             const now = new Date().toISOString()
             const record: PublishedRecord = {
+              direction,
               projectId,
+              // 这次用的名字（下次用它判断"要不要改名"）
+              title: workName,
               serverUrl: base,
               accountId: me.id,
               version: uploaded.version,
@@ -2068,6 +2164,16 @@ export function createSettingsRpcHandler(
               ok: true,
               value: {
                 published: {
+                  /** 本次发布到哪个方向（界面据此把回执说对）。 */
+                  direction,
+                  /** 这次在网络里用的名字（回执显示它 —— 用户点完就知道名字对不对）。 */
+                  title: workName,
+                  /**
+                   * 名字**没改成功**的原因（`null` / 缺省 = 改好了或不需要改）。
+                   *
+                   * 界面据此如实补一句 —— 否则回执会显示一个新名字，而网络里还是旧名字。
+                   */
+                  ...(renameFailed ? { renameFailed } : {}),
                   projectId,
                   version: uploaded.version,
                   visibility,
@@ -2098,10 +2204,19 @@ export function createSettingsRpcHandler(
           const config = deps.getConfig()
           const apiKey = resolveConvFusionApiKey(config, env())
           if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          /*
+           * 要哪个方向的列表：省略 = `SEEK_MENTOR`（【可指导】，= 今天的行为）。
+           * 【可加入】传 `SEEK_STUDENT`（导师发布的选题）。
+           *
+           * ⚠️ 旧服务器不认识这个参数 → 会**原样返回同一个列表**。这是可接受的降级
+           * （那份列表确实是"网络里已公开的研究工作"，只是方向没分开），
+           * 界面不为此额外辩解；服务器落地后自动正确。
+           */
+          const direction = p.direction === undefined ? undefined : asDirection(p.direction)
           try {
             const base = resolveServerUrl(config, env()).url
             // ⚠️ 不传 limit：列表条数与抽样策略由**服务器**决定（见 fetchWorkList 注释）
-            const items: WorkItem[] = await fetchWorkList(base, apiKey, netOptions())
+            const items: WorkItem[] = await fetchWorkList(base, apiKey, netOptions(), direction)
             // 顺带把命中的本地发布记录对齐到服务器的可见性
             syncRecordsFromWorkList(items)
             // 「这一项简报买过没有」服务器列表里没有，补本地记忆 →
@@ -2238,29 +2353,46 @@ export function createSettingsRpcHandler(
               }),
             )
             /*
-             * "学生更新了工作区吗"（导师要提示**重新下载**）—— 判据在宿主：
-             * 服务器给 `workspace_updated_at` / `workspace_files`，与**本地存的水位**
-             * （上一次归档响应的 `X-Source-Updated-At` / `X-File-Count`）比对。
+             * "对方更新了工作区吗"（要提示**重新下载**）—— 判据在宿主：
+             * 服务器给**两侧各自**的水位与计数，宿主与**本地存的水位**
+             * （上一次归档响应的 `X-Source-Updated-At` / `X-File-Count`）**按侧**比对。
+             *
+             * | 侧 | 列表字段 |
+             * |---|---|
+             * | `owner`（项目所有者写的） | `workspace_updated_at` / `workspace_files` |
+             * | `mentor`（另一方写的） | `counterpart_updated_at` / `review_files` |
+             *
+             * ⚠️ **两侧都算好**、由界面取自己那一侧（`otherSide`）：
+             *   ① 宿主不知道"我"是谁，为此多发一次 `fetchAccount` 正是 review_files
+             *      那轮刚消掉的 1+N 里的那个 N；
+             *   ② 更要紧的是**方向决定谁下载哪一侧**：方向 A 的导师下 owner 侧，
+             *      方向 B 的导师下 `mentor` 侧（学生交付的进展）。所以只有一侧不够用。
              *
              * ⚠️ 三态纪律：从没下载过 / 旧服务器没这些字段 / 服务器说不可知 → `null`，
              * 界面**不提示**（查不到 ≠ 没更新，也不编造"有更新"）。
-             *
-             * 角色**不在这里判**：宿主不知道"我"是谁，为此多发一次 `fetchAccount`
-             * 正是 review_files 那轮刚消掉的 1+N 里的那个 N。所以 ACCEPTED 行全算好，
-             * 由界面按角色（导师侧 `!incoming`）决定显不显示 —— 学生自己知道他更新过。
              */
             const withSync = withReview.map((p) => {
               if (p.status !== 'ACCEPTED') return p
               /*
                * 没有水位存储（精简环境 / 离线测试）= 这台机器**记不住下载过什么** →
-               * `sync: null`（无从判断）。这与"没有水位记录"是两件事：后者是**记得**、
+               * 两侧都 `null`（无从判断）。这与"没有水位记录"是两件事：后者是**记得**、
                * 只是没下过 → `{ neverDownloaded: true }`（该下载）。
                */
-              if (!deps.syncStore) return { ...p, sync: null }
-              const watermark = deps.syncStore.get(base, p.projectId)
+              if (!deps.syncStore) return { ...p, syncBySide: null }
               return {
                 ...p,
-                sync: checkStudentChange(watermark, p.workspaceUpdatedAt, p.workspaceFiles),
+                syncBySide: {
+                  owner: checkSideChange(
+                    deps.syncStore.get(base, p.projectId, 'owner'),
+                    p.workspaceUpdatedAt,
+                    p.workspaceFiles,
+                  ),
+                  mentor: checkSideChange(
+                    deps.syncStore.get(base, p.projectId, 'mentor'),
+                    p.counterpartUpdatedAt,
+                    p.reviewFiles,
+                  ),
+                },
               }
             })
             return { ok: true, value: { proposals: withSync } }
@@ -2743,14 +2875,15 @@ export function createSettingsRpcHandler(
             /*
              * 存下**这一版**的水位 —— 两个值都取自**本次归档响应**本身，
              * 不取下载前后列表里的：下载前的可能比 ZIP 旧（多提示一次、不漏），
-             * 下载后再拉的可能比 ZIP 新（**会漏文件**，学生在下载途中又传了一个）。
+             * 下载后再拉的可能比 ZIP 新（**会漏文件**，对方在下载途中又传了一个）。
              *
-             * 只存 `owner` 侧（列表的 `workspace_*` 就是 owner 侧；mentor 侧是学生的动作，
-             * 没有可比的列表字段）。老服务器没有 `X-Source-Updated-At` → 不写：
-             * 保持"未知"比写一个错的水位强。
+             * ⚠️ **按侧存**（v0.6.0）：下载的是哪一侧，就记哪一侧的水位。
+             * 方向 A 的导师下 owner 侧、方向 B 的导师下 `mentor` 侧 —— 同一台机器上
+             * 两个方向的水位不能互相顶掉（顶掉的结果是该提示时不提示、或误提示）。
+             * 老服务器没有 `X-Source-Updated-At` → 不写：保持"未知"比写一个错的水位强。
              */
-            if (source === 'owner' && sourceUpdatedAt) {
-              deps.syncStore?.set(base, projectId, {
+            if (sourceUpdatedAt) {
+              deps.syncStore?.set(base, projectId, source, {
                 updatedAt: sourceUpdatedAt,
                 fileCount,
                 downloadedAt: new Date().toISOString(),

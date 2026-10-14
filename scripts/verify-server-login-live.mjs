@@ -54,6 +54,14 @@ import { pathToFileURL } from 'node:url'
 import process from 'node:process'
 
 const PKG = resolve(process.argv[2] || '.')
+
+/**
+ * 从 `work/mine` 的一条发布状态里取某个方向的那一条（v0.6.0 起 `published` 是数组）。
+ * 一个工作区可以在两个方向上各发布一次，所以断言必须点名方向。
+ */
+const pubOf = (item, direction = 'SEEK_MENTOR') =>
+  (item?.published ?? []).find((r) => r.direction === direction) ?? null
+
 const lib = (f) => pathToFileURL(join(PKG, 'lib', f)).href
 
 const RPC = await import(lib('settings-rpc.js'))
@@ -903,7 +911,7 @@ console.log('\n[live.7] 寻找指导：本机研究 → 发布 → 被另一个�
   // ① 我的列表里能看到它（未发布）
   const mine1 = await publisher('work/mine', {})
   assertEq(mine1.value.items.length, 1, '「我的」能列出这个本机研究项目')
-  assertEq(mine1.value.items[0].published, null, '发布前：没有已发布记录')
+  assertEq(pubOf(mine1.value.items[0]), null, '发布前：没有已发布记录')
 
   // ② 点「寻找指导」= 发布
   const pub = await publisher('work/publish', { id: 'ws-live' })
@@ -937,7 +945,7 @@ console.log('\n[live.7] 寻找指导：本机研究 → 发布 → 被另一个�
 
   // ③ 映射落盘：再点一次不新建项目（同一工作区只对应一个服务器项目）
   const mine2 = await publisher('work/mine', {})
-  assertEq(mine2.value.items[0].published?.projectId, serverProjectId, '列表带出已发布的 project_id')
+  assertEq(pubOf(mine2.value.items[0])?.projectId, serverProjectId, '列表带出已发布的 project_id')
   const again = await publisher('work/publish', { id: 'ws-live' })
   assertEq(again.value?.published?.created, false, '再点一次复用同一个项目（不是新建）')
   assertEq(again.value?.published?.projectId, serverProjectId, 'project_id 不变')
@@ -958,7 +966,13 @@ console.log('\n[live.7] 寻找指导：本机研究 → 发布 → 被另一个�
   const found = (list.value?.items ?? []).find((it) => it.projectId === serverProjectId)
   assert(Boolean(found), '另一个账号能在发现网络里发现这个刚发布的研究')
   if (found) {
-    assertEq(found.title, '现场验证项目', '网络里的标题 = 本机工作区标题')
+    /*
+     * v0.6.0 起网络里显示的是**这项工作自己的名字**，不是发布方的本机工作区名：
+     * 上面的注册表标题是「现场验证项目」，而这项工作的主题是
+     * 「现场验证：裁剪证据与失败判定」—— 网络里该出现的是后者。
+     * （看列表的人本机不一定有这份 workspace，所以名字只能来自服务器。）
+     */
+    assertEq(found.title, '现场验证：裁剪证据与失败判定', '网络里的标题 = 工作的主题（不是本机工作区标题）')
     assertEq(found.researchQuestion, '裁剪证据能否改善失败判定？', '研究问题来自本机 project.md')
     assertEq(found.researchFields, ['多模态', '机器人学习'], '研究领域来自本机 project.md')
   }
@@ -1034,7 +1048,7 @@ console.log('\n[live.8] 「已在网络中」跟着服务器走（取消发布 /
     fetchImpl: fetch,
     serverTimeoutMs: 15000,
   })
-  const recordOf = () => store.all()[fs.realpathSync(researchRoot)]
+  const recordOf = () => store.get(fs.realpathSync(researchRoot))
 
   // ① 发布 → 刷新「我的」时从服务器核对，并把服务器的可见性回写进本地记录
   const pub = await publisher('work/publish', { id: 'ws-sync' })
@@ -1042,7 +1056,7 @@ console.log('\n[live.8] 「已在网络中」跟着服务器走（取消发布 /
   assertEq(pub.ok, true, '发布成功')
   const projectId = pub.value?.published?.projectId
   const mine1 = await publisher('work/mine', {})
-  assertEq(mine1.value?.items?.[0]?.published?.projectId, projectId, '服务器说可见 → 显示「已在网络中」')
+  assertEq(pubOf(mine1.value?.items?.[0])?.projectId, projectId, '服务器说可见 → 显示「已在网络中」')
   assertEq(recordOf()?.serverVisibility, 'PUBLISHED', '本地记录回写了服务器的可见性')
   assertEq(recordOf()?.files?.['project.md']?.startsWith('sha256:'), true, '回写不动附件指纹（"我传过什么"仍保留）')
 
@@ -1053,7 +1067,7 @@ console.log('\n[live.8] 「已在网络中」跟着服务器走（取消发布 /
   })
   assert(un.status < 300, `服务器取消发布成功（HTTP ${un.status}）`)
   const mine2 = await publisher('work/mine', {})
-  assertEq(mine2.value?.items?.[0]?.published, null, '取消发布后不再显示「已在网络中」')
+  assertEq(pubOf(mine2.value?.items?.[0]), null, '取消发布后不再显示「已在网络中」')
   assertEq(recordOf()?.serverVisibility, 'PRIVATE', '本地记录被刷新为 PRIVATE')
   assert(Boolean(recordOf()), '记录保留（项目还在，点发布仍复用同一个）')
   const repub = await publisher('work/publish', { id: 'ws-sync' })
@@ -1068,7 +1082,7 @@ console.log('\n[live.8] 「已在网络中」跟着服务器走（取消发布 /
   })
   assert(del.status < 300, `服务器删除项目成功（HTTP ${del.status}）`)
   const mine3 = await publisher('work/mine', {})
-  assertEq(mine3.value?.items?.[0]?.published, null, '服务器删了项目 → 不再显示「已在网络中」')
+  assertEq(pubOf(mine3.value?.items?.[0]), null, '服务器删了项目 → 不再显示「已在网络中」')
   assertEq(recordOf(), undefined, '死掉的本地映射被删掉（否则会一直撞这个 project_id）')
   const fresh = await publisher('work/publish', { id: 'ws-sync' })
   assertEq(fresh.value?.published?.created, true, '再发布 = 新建项目（不是写一个已删除的 id）')
@@ -1453,10 +1467,16 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
     })
     const virginList = await virgin('mentor/list', {})
     const virginRow = (virginList.value?.proposals ?? []).find((p) => p.projectId === projectId)
+    // v0.6.0：判读**按侧**给 —— 方向 A 的导师下载 owner 侧，所以看 syncBySide.owner
     assertEq(
-      virginRow?.sync,
+      virginRow?.syncBySide?.owner,
       { neverDownloaded: true },
       '从没下载过 → 提示"先下载"（不是"无从判断"、也不是"没更新"）',
+    )
+    assertEq(
+      virginRow?.syncBySide?.mentor,
+      { neverDownloaded: true },
+      '另一侧同样各有各的水位（导师还没下过学生交付的那一侧）',
     )
 
     // ① 导师下载一次 → 水位来自**这次归档响应**
@@ -1476,7 +1496,7 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
 
     // 还没动 → 明确说"没动"（changed: false，不是 null —— 这两个判据此刻都可判）
     const row0 = await mentorRow()
-    assertEq(row0?.sync, { changed: false, reason: null }, '下载后学生没动 → 不提示')
+    assertEq(row0?.syncBySide?.owner, { changed: false, reason: null }, '下载后学生没动 → 不提示')
     assert(
       typeof row0?.workspaceUpdatedAt === 'string' && typeof row0?.workspaceFiles === 'number',
       `列表给了 workspace_updated_at / workspace_files（${row0?.workspaceUpdatedAt} / ${row0?.workspaceFiles}）`,
@@ -1492,7 +1512,12 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
     )
     assertEq(added.length, 1, '学生（owner）传了一个新文件')
     const row1 = await mentorRow()
-    assertEq(row1?.sync, { changed: true, reason: 'uploaded' }, '学生传了新文件 → 提示重新下载')
+    // 服务器还必须给出 counterpart_updated_at（另一侧的水位来源）
+    assert(
+      typeof row1?.counterpartUpdatedAt === 'string',
+      `列表给了 counterpart_updated_at（${row1?.counterpartUpdatedAt}）—— 方向 B 的导师靠它看学生交付`,
+    )
+    assertEq(row1?.syncBySide?.owner, { changed: true, reason: 'uploaded' }, '学生传了新文件 → 提示重新下载')
 
     // ③ 导师重新下载 → 水位更新 → 提示消失（用户要的闭环）
     const again = await wmHost('mentor/download', {
@@ -1500,7 +1525,7 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
     })
     assertEq(again.ok, true, '重新下载成功')
     const row2 = await mentorRow()
-    assertEq(row2?.sync, { changed: false, reason: null }, '下载到最新版后提示消失')
+    assertEq(row2?.syncBySide?.owner, { changed: false, reason: null }, '下载到最新版后提示消失')
 
     // ④ 学生**删了**文件 → 文件数变、时间戳不前进 → deleted
     const listing = await api(`/projects/${projectId}/files`, {
@@ -1516,7 +1541,7 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
     })
     assertEq(del.status, 204, `学生删除成功（HTTP ${del.status}）`)
     const row3 = await mentorRow()
-    assertEq(row3?.sync, { changed: true, reason: 'deleted' }, '学生删了文件 → 仍要提示重新下载')
+    assertEq(row3?.syncBySide?.owner, { changed: true, reason: 'deleted' }, '学生删了文件 → 仍要提示重新下载')
   }
 
   // ⑨-11 **反向流程**：导师在学生的 workspace/ 里继续推进研究 → 整包回传 → 学生下载后接着做
@@ -1690,6 +1715,364 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
       `整包写入 project.md：成功或 path-reserved（实际 ${grab?.code ?? 'ok'}）`,
     )
   }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * live.10 出题模式：**导师出题 → 学生出价 → 导师接受**（v0.6.0）
+ *
+ * 这一节跑的是**反方向**的整条闭环，而且每一步都用**真实 HTTP**打服务器：
+ *
+ * ```text
+ * ① 导师（admin）建 SEEK_STUDENT 项目 → 传状态 → 发布
+ * ② 学生（researcher）在 ?direction=SEEK_STUDENT 的发现列表里看到它
+ * ③ 学生出价（mentor/propose）→ 服务器写 researcher_id = 学生、mentor_id = 导师
+ * ④ 导师接受（mentor/accept）→ 从**学生**账上冻结押金、建合同 + 关系
+ * ⑤ 两侧的文件空间：学生传的落在 mentor 侧 → 导师靠 counterpart_updated_at 发现
+ * ```
+ *
+ * 与方向 A 的差别就是这四处；`live.9` 已经把方向 A 走通了，所以这里逐条对着验。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[live.10] 出题模式：导师出题 → 学生出价 → 导师接受')
+{
+  const meOf = async (key) =>
+    (await api('/auth/me', { headers: { authorization: `Bearer ${key}` } })).body ?? {}
+  const balanceOf = async (key) => {
+    const body = (await api('/tokens', { headers: { authorization: `Bearer ${key}` } })).body ?? {}
+    return { available: body.available_balance, frozen: body.frozen_balance }
+  }
+  const mentorId = (await meOf(adminKey)).id
+  const studentId = (await meOf(researcherKey)).id
+
+  // ── ① 导师建**选题**项目（direction = SEEK_STUDENT）并发布 ──
+  const created = await api('/projects', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${adminKey}` },
+    body: JSON.stringify({
+      title: 'Live Verify · 导师出题',
+      description: 'topic fixture',
+      direction: 'SEEK_STUDENT',
+    }),
+  })
+  assertEq(created.status, 201, '导师建立选题项目（direction=SEEK_STUDENT）')
+  assertEq(created.body?.direction, 'SEEK_STUDENT', '响应回显方向')
+  const topicId = created.body?.id
+
+  // 非法方向必须 422（**不静默落回默认** —— 静默会把"发到另一个市场"变成"发到旧市场"）
+  const badDir = await api('/projects', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${adminKey}` },
+    body: JSON.stringify({ title: 'x', direction: 'SEEK_WHATEVER' }),
+  })
+  assertEq(badDir.status, 422, '非法 direction → 422（不静默改成默认方向）')
+
+  const up = await api(`/projects/${topicId}/state`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${adminKey}`, 'idempotency-key': `topic-state-${Date.now()}` },
+    body: JSON.stringify({
+      base_version: null,
+      content: {
+        schema_version: 1,
+        research_question: '这个选题值得做吗？',
+        hypothesis: '在低算力下收益条件性成立。',
+        core_idea: '把裁剪当作可证伪的干预。',
+        method_overview: '三组对照 + oracle 上界。',
+        stage: 'IDEA',
+        progress: 0.2,
+        research_fields: ['多模态'],
+        summary: '导师出题端到端验证。',
+      },
+    }),
+  })
+  assertEq(up.status, 201, '选题上传研究状态')
+  const pub = await api(`/projects/${topicId}/publish`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${adminKey}`, 'idempotency-key': `topic-publish-${topicId}` },
+  })
+  assertEq(pub.status, 200, '选题发布到网络')
+
+  // ── ② 学生侧发现列表：`?direction=SEEK_STUDENT` 必须含它，默认那一份**不含** ──
+  const topicList = await api('/discovery/random?direction=SEEK_STUDENT', {
+    headers: { authorization: `Bearer ${researcherKey}` },
+  })
+  assertEq(topicList.status, 200, '学生能拉「可加入」列表')
+  const topicHit = (topicList.body?.items ?? []).find((x) => x.project_id === topicId)
+  assert(Boolean(topicHit), '选题出现在 ?direction=SEEK_STUDENT 的列表里')
+  assertEq(topicHit?.direction, 'SEEK_STUDENT', '列表项带出方向（界面据此把它放进【可加入】）')
+
+  const mentorList = await api('/discovery/random', {
+    headers: { authorization: `Bearer ${researcherKey}` },
+  })
+  assert(
+    !(mentorList.body?.items ?? []).some((x) => x.project_id === topicId),
+    '默认列表（= 可指导 / SEEK_MENTOR）里**没有**这个选题（两个市场不混）',
+  )
+
+  // ── ③ 角色门禁：方向由**项目**决定，不由调用方角色决定 ──
+  //
+  // 导师（admin）对**自己的**选题提案 → 400（不能对自己的项目提案）；
+  // 换一个方向也不行：学生对方向 A 的项目提案必须 403。这两条都由服务端强制。
+  const mentorBidOwn = await api(`/projects/${topicId}/mentorship-proposals`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${adminKey}` },
+    body: JSON.stringify({
+      guidance_scope: '-', total_fee: 100, deposit_amount: 20, success_payment_amount: 80,
+      success_condition: { type: 'MUTUAL_COMPLETION', description: null },
+    }),
+  })
+  assert(
+    [400, 403].includes(mentorBidOwn.status),
+    `导师对自己的选题不能出价（HTTP ${mentorBidOwn.status}）`,
+  )
+
+  // 学生**出价**（同一个端点；方向取自项目）
+  const bidBody = {
+    guidance_scope: '参与这个选题',
+    total_fee: 100,
+    deposit_amount: 20,
+    success_payment_amount: 80,
+    success_condition: { type: 'MUTUAL_COMPLETION', description: '双方确认完成' },
+  }
+  const bid = await api(`/projects/${topicId}/mentorship-proposals`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${researcherKey}` },
+    body: JSON.stringify(bidBody),
+  })
+  assertEq(bid.status, 201, '学生出价成功（同一个端点）')
+  assertEq(bid.body?.direction, 'SEEK_STUDENT', '提案带出项目方向')
+  assertEq(bid.body?.researcher_id, studentId, '写入：researcher_id = 出价的学生')
+  assertEq(bid.body?.mentor_id, mentorId, '写入：mentor_id = 项目 owner（导师）')
+  assertEq(bid.body?.proposed_by_id, studentId, '写入：proposed_by_id = 发起人（决定谁能接受）')
+  const bidId = bid.body?.id
+
+  // profile 投影按"谁要判断谁"：方向 B 给**导师**看出价的学生，且**省略**导师自己的 profile 键
+  assert(
+    'profile' in (bid.body?.researcher ?? {}),
+    '方向 B：researcher 那一方带 profile 键（导师要判断出价的学生是谁）',
+  )
+  assert(
+    !('profile' in (bid.body?.mentor ?? {})),
+    '没被投影的那一方（mentor）**整块省略** profile 键 —— 不是 null（两者不是一个意思）',
+  )
+
+  // 学生重复出价 → 409（同一 (project, 发起人) 只能有一个生效提案）
+  const bidAgain = await api(`/projects/${topicId}/mentorship-proposals`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${researcherKey}` },
+    body: JSON.stringify({ ...bidBody, guidance_scope: '重复出价' }),
+  })
+  assertEq(bidAgain.status, 409, '重复出价被拒（409）')
+
+  // 出价时的**余额预检**：押金大于学生可用余额 → 402（不让"导师接受时才发现"）
+  {
+    const other = await api(`/projects`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${adminKey}` },
+      body: JSON.stringify({ title: 'Live Verify · 余额预检', direction: 'SEEK_STUDENT' }),
+    })
+    const poorId = other.body?.id
+    await api(`/projects/${poorId}/state`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${adminKey}`, 'idempotency-key': `poor-state-${Date.now()}` },
+      body: JSON.stringify({ base_version: null, content: { schema_version: 1, summary: 'x' } }),
+    })
+    await api(`/projects/${poorId}/publish`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${adminKey}`, 'idempotency-key': `poor-pub-${poorId}` },
+    })
+    const poorBid = await api(`/projects/${poorId}/mentorship-proposals`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${researcherKey}` },
+      body: JSON.stringify({ ...bidBody, total_fee: 100000, deposit_amount: 99999, success_payment_amount: 1 }),
+    })
+    assertEq(poorBid.status, 402, '押金超过学生可用余额 → 出价当场 402（不等导师接受才失败）')
+  }
+
+  // ── ④ 导师接受：押金从**学生**账上冻（钱永远从学生走）──
+  const before = await balanceOf(researcherKey)
+  const mentorBefore = await balanceOf(adminKey)
+  const accept = await api(`/mentorship-proposals/${bidId}/accept`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${adminKey}`, 'idempotency-key': `topic-accept-${bidId}` },
+  })
+  assertEq(accept.status, 200, '**导师**接受学生的出价（未发起的那一方接受）')
+  assertEq(accept.body?.direction, 'SEEK_STUDENT', '合同带出方向')
+  assertEq(accept.body?.researcher_id, studentId, '合同的付款方 = 学生')
+  const after = await balanceOf(researcherKey)
+  const mentorAfter = await balanceOf(adminKey)
+  assertEq(before.available - after.available, 20, '学生的可用余额减少押金')
+  assertEq(after.frozen - before.frozen, 20, '押金转成学生的**冻结**')
+  assertEq(mentorAfter.available, mentorBefore.available, '导师的可用余额一分未动（钱不是他的）')
+
+  // 学生（发起人）不能自己接受 —— 判据是 proposed_by_id，不是角色
+  const selfAccept = await api(`/mentorship-proposals/${bidId}/accept`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${researcherKey}` },
+  })
+  assert(
+    [403, 409].includes(selfAccept.status),
+    `发起人不能自己接受（HTTP ${selfAccept.status}）`,
+  )
+
+  // ── ⑤ 两侧文件空间 + **按侧**的水位 ──
+  //
+  // 方向 B 下：导师是 owner（写 owner 侧），学生是另一方（写 mentor 侧）。
+  // 导师要下载的正是**学生交付的那一侧**（mentor 侧），判据是 counterpart_updated_at。
+  const SW = await import(lib('research/sync-watermarks.js'))
+  const wmStore = SW.createMemorySyncWatermarkStore()
+  const home = mkdtempSync(join(tmpdir(), 'cf-live-topic-'))
+  const mentorWs = join(home, 'proj-topic')
+  mkdirSync(join(mentorWs, 'workspace'), { recursive: true })
+  writeFileSync(join(mentorWs, 'workspace', 'project.md'), '# 导师侧\n')
+
+  const mentorHost = makeHostWithWorkspaces(adminKey, [{ id: 'ws-topic', title: '选题工作区', path: mentorWs }], {
+    syncStore: wmStore,
+  })
+  const rowOf = async (h, pid) => {
+    const list = await h('mentor/list', {})
+    return (list.value?.proposals ?? []).find((p) => p.projectId === pid) ?? null
+  }
+  const topicRow = await rowOf(mentorHost, topicId)
+  assert(Boolean(topicRow), '导师在【指导中】看到这条出题关系')
+  assertEq(topicRow?.direction, 'SEEK_STUDENT', '列表行带出方向（界面据此换称呼与分侧）')
+  assertEq(
+    topicRow?.proposedById,
+    studentId,
+    '列表行带出 proposed_by_id（界面据此知道"该我接受"）',
+  )
+  assert(
+    typeof topicRow?.counterpartUpdatedAt === 'string',
+    `列表给出 counterpart_updated_at（${topicRow?.counterpartUpdatedAt}）—— 方向 B 的水位来源`,
+  )
+  assert(Boolean(topicRow?.syncBySide), '列表按侧给 syncBySide（owner / mentor 各一份）')
+
+  // 学生先把第一份进展传上去（**非 owner → 落在 mentor 侧**）
+  const studentUp1 = await SC.uploadWorkspaceFiles(
+    BASE,
+    researcherKey,
+    topicId,
+    [{ relPath: 'notes/from-student.md', bytes: Buffer.from('# 学生交付\n') }],
+    { fetchImpl: fetch },
+  )
+  assertEq(studentUp1.length, 1, '学生把进展传上去（非 owner → 落在 mentor 侧）')
+
+  // 导师下载**学生交付的那一侧**（mentor 侧）→ 记下这一侧的水位
+  // ⚠️ 顺序是有意的：先传再下，免得下载一个**空**的侧（空快照能不能下是另一件事，
+  //    这里要验的是"水位记在哪一侧、下一轮拿它跟谁比"）
+  const firstDl = await mentorHost('mentor/download', {
+    projectId: topicId, workspaceId: 'ws-topic', prefix: 'topic', source: 'mentor',
+  })
+  assertEq(firstDl.ok, true, `导师下载学生交付的那一侧（source=mentor）${firstDl.ok ? '' : `（${firstDl.error?.code}）`}`)
+  assert(
+    Boolean(wmStore.get(BASE, topicId, 'mentor')?.updatedAt),
+    '水位记在 **mentor 侧**（方向 B 的导师靠它判断"学生又交了没"）',
+  )
+  assert(
+    wmStore.get(BASE, topicId, 'owner') === undefined,
+    'owner 侧没有水位（下载的是另一侧；两侧各记各的键）',
+  )
+
+  const rowIdle = await rowOf(mentorHost, topicId)
+  assertEq(
+    rowIdle?.syncBySide?.mentor,
+    { changed: false, reason: null },
+    '刚下载完、学生没再动 → 这一侧"没变"（两个判据此刻都可判）',
+  )
+
+  // 学生**再**传一个 → 导师那一侧应当报"变了"
+  const studentUp2 = await SC.uploadWorkspaceFiles(
+    BASE,
+    researcherKey,
+    topicId,
+    [{ relPath: 'notes/from-student-2.md', bytes: Buffer.from('# 学生交付 2\n') }],
+    { fetchImpl: fetch },
+  )
+  assertEq(studentUp2.length, 1, '学生又交了一份')
+
+  const rowChanged = await rowOf(mentorHost, topicId)
+  assertEq(
+    rowChanged?.syncBySide?.mentor,
+    { changed: true, reason: 'uploaded' },
+    '学生交了新东西 → 导师那一侧提示重新下载（靠 counterpart_updated_at，不是 owner 侧）',
+  )
+  assertEq(
+    rowChanged?.syncBySide?.owner,
+    { neverDownloaded: true },
+    'owner 侧从没被这台机器下载过 → 各自独立（两侧水位互不串台）',
+  )
+
+  rmSync(home, { recursive: true, force: true })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * live.11 网络里显示的是**这项工作自己的名字**（v0.6.0）
+ *
+ * 三个列表（【可指导】/【可加入】/【指导中】）显示的名字必须能在**服务器上**查到 ——
+ * 看列表的人本机不一定有那份 workspace。所以这一步用插件真的发布一份**有论文**的工作，
+ * 然后**用另一个账号**在发现列表里核对：看到的名字就是论文标题。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[live.11] 研究工作的名字（有论文用论文标题）')
+{
+  const me = (await api('/auth/me', { headers: { authorization: `Bearer ${researcherKey}` } })).body ?? {}
+  await api(`/admin/users/${me.id}/tokens/grant`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${adminKey}` },
+    body: JSON.stringify({ amount: 20, reason: 'live verify work-name fixture' }),
+  })
+
+  const PAPER_TITLE = 'Hierarchical Memory: Information-Theoretic Guarantees'
+  const home = mkdtempSync(join(tmpdir(), 'cf-live-name-'))
+  const wsDir = join(home, 'proj-name')
+  const researchRoot = join(wsDir, 'workspace')
+  mkdirSync(join(researchRoot, 'papers', 'paper-main'), { recursive: true })
+  writeFileSync(
+    join(researchRoot, 'project.md'),
+    '---\ntype: research-project\ntopic: 一个还没凝练好的初始输入\n---\n\n# Research Project\n',
+  )
+  writeFileSync(join(researchRoot, 'research-state.md'), '---\ntype: research-state\n---\n\n## Problem\n\n动机\n')
+  // 论文（paper.md 的 H1）—— 这项工作**有名字**了
+  writeFileSync(join(researchRoot, 'papers', 'paper-main', 'paper.md'), `# ${PAPER_TITLE}\n\n正文\n`)
+
+  const host = makeHostWithWorkspaces(researcherKey, [
+    // 注册表标题故意是"本机目录名"那种：它不该出现在网络里
+    { id: 'ws-name', title: 'convfusion-live（run）', path: wsDir },
+  ])
+
+  // ① 上传计划：对话框头部显示**要发布的名字**，另给本机工作区名以便指认
+  const plan = await host('work/uploadPlan', { id: 'ws-name' })
+  assertEq(plan.ok, true, '上传计划可读')
+  assertEq(plan.value?.title, PAPER_TITLE, '① 计划里的名字 = 论文标题（不是本机目录名）')
+  assertEq(plan.value?.workspaceTitle, 'convfusion-live（run）', '① 另给本机工作区名（界面用它指认是哪个工作区）')
+  assertEq(plan.value?.workNameSource, 'paper', '① 名字来源 = paper')
+
+  // ② 发布 → 项目标题就是**论文标题**
+  const pub = await host('work/publish', { id: 'ws-name' })
+  assertEq(pub.ok, true, `② 发布成功${pub.ok ? '' : `（${pub.error?.code}: ${pub.error?.message}）`}`)
+  const projectId = pub.value?.published?.projectId
+  assert(typeof projectId === 'string' && projectId.length > 0, '② 拿到项目 id')
+  assertEq(pub.value?.published?.title, PAPER_TITLE, '② 回执带出这次网络里用的名字')
+
+  const onServer = await api(`/projects/${projectId}`, {
+    headers: { authorization: `Bearer ${researcherKey}` },
+  })
+  assertEq(onServer.body?.title, PAPER_TITLE, '② 服务器上的项目标题 = 论文标题')
+
+  // ③ **另一个账号**在发现列表里看到的名字（这才是"别人看到什么"）
+  const found = await api('/discovery/random', { headers: { authorization: `Bearer ${adminKey}` } })
+  const card = (found.body?.items ?? []).find((x) => x.project_id === projectId)
+  assert(Boolean(card), '③ 另一账号能在网络里发现这项工作')
+  assertEq(card?.title, PAPER_TITLE, '③ 列表显示的名字 = 论文标题（本机目录名不出现在网络里）')
+
+  // ④ 论文改名 → 再发布 → 服务器上的名字跟着变（复用项目时走 PUT）
+  writeFileSync(join(researchRoot, 'papers', 'paper-main', 'paper.md'), '# Hierarchical Memory: Theory and Practice\n\n正文\n')
+  const again = await host('work/publish', { id: 'ws-name' })
+  assertEq(again.ok, true, '④ 论文改名后再发布成功')
+  assertEq(again.value?.published?.projectId, projectId, '④ 复用同一个项目（不是新建）')
+  const renamed = await api(`/projects/${projectId}`, {
+    headers: { authorization: `Bearer ${researcherKey}` },
+  })
+  assertEq(renamed.body?.title, 'Hierarchical Memory: Theory and Practice', '④ 网络里的名字跟着论文改名')
+
+  rmSync(home, { recursive: true, force: true })
 }
 
 await shutdown()

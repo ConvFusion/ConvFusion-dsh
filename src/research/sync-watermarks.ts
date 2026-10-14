@@ -1,21 +1,37 @@
 /**
- * 导师【下载】之后的**水位** —— "学生是不是又改了文件"这件事的本地记忆。
+ * 【下载】之后的**水位** —— "对方那一侧是不是又变了"这件事的本地记忆。
  *
  * ## 它记的是什么
  *
- * 每次成功下载**学生那一侧**（`source=owner`）的 ZIP，就从**那次归档响应本身**记下两个数：
+ * 每次成功下载**某一侧**的 ZIP，就从**那次归档响应本身**记下两个数：
  *
  * ```text
- * updatedAt  = X-Source-Updated-At    ← 这一版的水位（= 列表的 workspace_updated_at）
- * fileCount  = X-File-Count           ← 快照口径（默认非 all_versions）= workspace_files
+ * updatedAt  = X-Source-Updated-At    ← 这一版的水位（= 列表的**同一侧**的 _updated_at）
+ * fileCount  = X-File-Count           ← 快照口径（默认非 all_versions）= 同一侧的 _files
  * ```
  *
- * 下一轮轮询 `mentor/list` 时（服务器给 `workspace_updated_at` / `workspace_files`）：
+ * 下一轮轮询 `mentor/list` 时，拿**同一侧**的两个列表字段比：
  *
  * ```text
- * workspace_updated_at > updatedAt → 学生传了新文件 → 提示重新下载
- * workspace_files      ≠ fileCount → 学生删了文件   → 提示重新下载
+ * 那一侧 _updated_at > updatedAt → 对方传了新文件 → 提示重新下载
+ * 那一侧 _files      ≠ fileCount → 对方删了文件   → 提示重新下载
  * ```
+ *
+ * ## 键里为什么有**侧**（v0.6.0）
+ *
+ * 服务器两侧各有自己的水位与计数：
+ *
+ * | 侧（服务器 `?source=`） | 列表字段 |
+ * |---|---|
+ * | `owner`（**项目所有者**写的） | `workspace_updated_at` / `workspace_files` |
+ * | `mentor`（**另一方**写的） | `counterpart_updated_at` / `review_files` |
+ *
+ * 方向 A 下 owner 是学生 → 导师下载 owner 侧；**方向 B 下 owner 是导师** →
+ * 导师下载的是 `mentor` 侧（学生交付的进展），学生下载的才是 owner 侧（导师的选题）。
+ * 也就是说**同一台机器上的两个人**（或同一个人换了方向）会下载**不同的侧**；
+ * 水位只按项目记一条的话，两边会互相顶掉，于是"该重新下载"永远不提示或**误提示**。
+ * 所以键是 `(服务器, 项目, 侧)`；旧文件里的键没有侧 → 读作 `owner`
+ * （那时只有 owner 侧会被下载）。
  *
  * ## 为什么水位必须取自归档响应，而不是下载前后那一次列表
  *
@@ -73,18 +89,18 @@ export interface SyncWatermark {
  * | 情形 | 值 | 界面 |
  * |---|---|---|
  * | **从没下载过** | `{ neverDownloaded: true }` | 提示"先下载"——**手里没有副本本身就是该下载的理由** |
- * | 下载过、学生又动过 | `{ changed: true, reason: 'uploaded' \| 'deleted' }` | 提示"学生更新了 / 删除了，需要重新下载" |
- * | 下载过、学生没动 | `{ changed: false, reason: null }` | 不提示 |
+ * | 下载过、对方又动过 | `{ changed: true, reason: 'uploaded' \| 'deleted' }` | 提示"对方更新了 / 删除了，需要重新下载" |
+ * | 下载过、对方没动 | `{ changed: false, reason: null }` | 不提示 |
  *
  * `null`（函数返回 `null`）单独表示**无从判断**：旧服务器不给列表字段、
  * 服务器说不可知、或只有一半判据可用 —— 三种都不该编造"有更新"，也不该说"没更新"。
  *
  * ⚠️ **"从没下载过"必须与"无从判断"分开**（2026-10 用户指出）：
- * 导师手里没有这个工作区的副本时，"学生有没有更新"其实不重要 —— 他**反正要下载一次**。
+ * 手里没有这个工作区的副本时，"对方有没有更新"其实不重要 —— 反正要下载一次。
  * 早先把两者都塞进 `null`，结果是"没下载过"也一声不吭（真实反馈：导师在【指导中】
  * 看不到任何提示，而学生明明已经更新过了）。
  */
-export type StudentSyncCheck =
+export type SideSyncCheck =
   /** 本地没有这个项目的水位 = 从没成功下载过 → 该下载（与"无从判断"是两件事）。 */
   | { neverDownloaded: true }
   /** 下载过，且学生那一侧动过（时间戳变大 / 文件数变了）。 */
@@ -93,19 +109,42 @@ export type StudentSyncCheck =
   | { changed: false; reason: null }
 
 export interface SyncWatermarkStore {
-  /** 读一条水位（没有下载记录 → `undefined`，**不是**"没更新"）。 */
-  get(serverUrl: string, projectId: string): SyncWatermark | undefined
-  /** 写一条水位（覆盖同项目的旧值）。 */
-  set(serverUrl: string, projectId: string, watermark: SyncWatermark): void
+  /** 读一条水位（没有下载记录 → `undefined`，**不是**"没更新"）。侧省略 = `owner`。 */
+  get(serverUrl: string, projectId: string, side?: SyncSide): SyncWatermark | undefined
+  /** 写一条水位（覆盖同项目**同侧**的旧值）。 */
+  set(serverUrl: string, projectId: string, side: SyncSide, watermark: SyncWatermark): void
   /** 全部记录（只读快照；设置页 / 日志展示用）。 */
   all(): Record<string, SyncWatermark>
   /** 落盘位置（离线环境是 `(memory)`）。 */
   readonly path: string
 }
 
-/** 存储键：**同一台服务器 + 同一个项目**（不含账号，理由见文件头）。 */
-export function syncWatermarkKey(serverUrl: string, projectId: string): string {
-  return `${serverUrl.trim()}|${projectId.trim()}`
+/**
+ * 工作区的**哪一侧**（与服务器 `?source=` 同名）：
+ * `owner` = 项目所有者写的那一侧，`mentor` = 另一方写的那一侧。
+ *
+ * ⚠️ 与角色无关：方向 A 下 owner 是学生，方向 B 下 owner 是导师。
+ */
+export type SyncSide = 'owner' | 'mentor'
+
+/** 存储键：**同一台服务器 + 同一个项目 + 同一侧**（不含账号，理由见文件头）。 */
+export function syncWatermarkKey(
+  serverUrl: string,
+  projectId: string,
+  side: SyncSide = 'owner',
+): string {
+  return `${serverUrl.trim()}|${projectId.trim()}|${side}`
+}
+
+/** 拆存储键；不带侧（旧文件）→ `owner`（那时只有 owner 侧会被下载）。 */
+export function parseSyncWatermarkKey(key: string): { serverUrl: string; projectId: string; side: SyncSide } {
+  const parts = key.split('|')
+  const side = parts.length >= 3 && parts[parts.length - 1] === 'mentor' ? 'mentor' : 'owner'
+  return {
+    serverUrl: parts[0] ?? '',
+    projectId: parts.length >= 3 ? parts.slice(1, -1).join('|') : (parts[1] ?? ''),
+    side,
+  }
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -142,7 +181,12 @@ function parseTable(text: string): Record<string, SyncWatermark> {
   const out: Record<string, SyncWatermark> = {}
   for (const [key, value] of Object.entries(data)) {
     const record = parseRecord(value)
-    if (record) out[key] = record
+    // ⚠️ 键用**解析后**的规范形式回写：旧文件（键里没有侧）落到 `owner` 侧上，
+    // 于是"再存一次就带上侧了"，不会两套键并存（同 published-store 的手法）。
+    if (record) {
+      const { serverUrl, projectId, side } = parseSyncWatermarkKey(key)
+      out[syncWatermarkKey(serverUrl, projectId, side)] = record
+    }
   }
   return out
 }
@@ -166,10 +210,11 @@ export function createFileSyncWatermarkStore(resolvePath: () => string): SyncWat
     renameSync(tmp, path)
   }
   return {
-    get: (serverUrl, projectId) => load()[syncWatermarkKey(serverUrl, projectId)],
-    set: (serverUrl, projectId, watermark) => {
+    get: (serverUrl, projectId, side = 'owner') =>
+      load()[syncWatermarkKey(serverUrl, projectId, side)],
+    set: (serverUrl, projectId, side, watermark) => {
       const table = load()
-      table[syncWatermarkKey(serverUrl, projectId)] = watermark
+      table[syncWatermarkKey(serverUrl, projectId, side)] = watermark
       save(table)
     },
     all: () => load(),
@@ -179,15 +224,24 @@ export function createFileSyncWatermarkStore(resolvePath: () => string): SyncWat
   }
 }
 
-/** 内存存储（离线验证 / 精简环境）。 */
+/**
+ * 内存存储（离线验证 / 精简环境）。
+ *
+ * `seed` 的键可以是旧写法（`服务器|项目`，没有侧）—— 按 `owner` 侧收，
+ * 与文件存储的读入归一保持一致（否则"旧键读作 owner"只在文件形态下成立）。
+ */
 export function createMemorySyncWatermarkStore(
   seed: Record<string, SyncWatermark> = {},
 ): SyncWatermarkStore {
-  const table: Record<string, SyncWatermark> = { ...seed }
+  const table: Record<string, SyncWatermark> = {}
+  for (const [key, watermark] of Object.entries(seed)) {
+    const { serverUrl, projectId, side } = parseSyncWatermarkKey(key)
+    table[syncWatermarkKey(serverUrl, projectId, side)] = watermark
+  }
   return {
-    get: (serverUrl, projectId) => table[syncWatermarkKey(serverUrl, projectId)],
-    set: (serverUrl, projectId, watermark) => {
-      table[syncWatermarkKey(serverUrl, projectId)] = watermark
+    get: (serverUrl, projectId, side = 'owner') => table[syncWatermarkKey(serverUrl, projectId, side)],
+    set: (serverUrl, projectId, side, watermark) => {
+      table[syncWatermarkKey(serverUrl, projectId, side)] = watermark
     },
     all: () => ({ ...table }),
     path: '(memory)',
@@ -195,13 +249,18 @@ export function createMemorySyncWatermarkStore(
 }
 
 /**
- * 判读：**上一次下载之后，学生那一侧动过吗？**
+ * 判读：**上一次下载之后，那一侧动过吗？**
+ *
+ * 调用方传进来的必须是**同一侧**的三个值（水位与两个列表字段）——
+ * 混侧会得到"永远没变"或"永远变过"这类假结论。哪一侧由调用方决定：
+ * 方向 A 的导师看 `owner`（`workspace_*`），方向 B 的导师看 `mentor`
+ * （`counterpart_updated_at` / `review_files`）。
  *
  * 四种结果，**"该下载"与"无从判断"分开**：
  *
  * | 情况 | 返回 | 为什么 |
  * |---|---|---|
- * | 从没下载过（`wm` 缺失） | `{ neverDownloaded: true }` | 手里没有副本 → **该下载**（不需要知道学生有没有动过） |
+ * | 从没下载过（`wm` 缺失） | `{ neverDownloaded: true }` | 手里没有副本 → **该下载**（不需要知道对方有没有动过） |
  * | 旧服务器不给列表字段 | `null` | 服务器这一版不会说 → 不编造 |
  * | 服务器说不可知（`null`） | `null` | 查不到 ≠ 没有（三态纪律） |
  * | 只有一半判据可用（如 `fileCount` 是 `null`） | `null` | 查不全 ≠ 没变（会漏掉那次看不见的删除） |
@@ -209,6 +268,7 @@ export function createMemorySyncWatermarkStore(
  * 已知的判据才说话，且**只有两个判据都可判时**才敢说"没动"：
  * - `serverUpdatedAt > wm.updatedAt` → `uploaded`（时间戳变大 = 传了新文件）；
  * - `serverFiles !== wm.fileCount` → `deleted`（文件数变了而时间戳没前进 = 删了文件）；
+ *   （两个参数都是"**同一侧**的两个列表字段"，混侧会得出假结论）
  * - 只要**任一**已知判据说"变过" → `changed: true`（有证据就不放过）；
  * - **只有一半判据可用**（另一半未知）→ `null`：拿"时间戳没变"去断言"没变过"会
  *   漏掉那次看不见的删除 —— 查不全 ≠ 没变（同三态纪律）。
@@ -220,16 +280,18 @@ export function createMemorySyncWatermarkStore(
  * @param serverUpdatedAt 列表里的 `workspace_updated_at`（三态）
  * @param serverFiles 列表里的 `workspace_files`（三态）
  */
-export function checkStudentChange(
+export function checkSideChange(
   watermark: SyncWatermark | undefined,
   serverUpdatedAt: string | null | undefined,
   serverFiles: number | null | undefined,
-): StudentSyncCheck | null {
+): SideSyncCheck | null {
   /*
    * 没有水位 = 从没成功下载过 → **明确说"该下载"**，而不是"无从判断"。
    *
    * 这里原来返回 `null`（归到"无从判断"那一档），于是导师第一次进【指导中】
    * 什么提示都没有 —— 但他手里连一份副本都没有，这正是最该提示下载的情形。
+   * ⚠️ 水位是**按侧**记的：换了一侧就是"从没下载过这一侧"，这是对的
+   * （方向 B 下导师要先下 `mentor` 侧、学生要先下 `owner` 侧，各记各的）。
    */
   if (!watermark) return { neverDownloaded: true }
 

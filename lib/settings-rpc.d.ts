@@ -78,7 +78,7 @@ import { type WorkIdentityStore, type WorkspaceStatus } from './research/work-id
 import type { SyncWatermarkStore } from './research/sync-watermarks.js';
 import type { Config } from './config.js';
 import { type SecretField } from './config.js';
-import { type FetchLike, type TokenBalance } from './server-client.js';
+import { type FetchLike, type ProjectDirection, type TokenBalance } from './server-client.js';
 import type { ProgressCountRow } from './research/progress.js';
 import { type PublishedStore } from './research/published-store.js';
 /**
@@ -270,13 +270,20 @@ export interface LocalWorkItem {
     /** 注册表最近一次变更时刻（ISO）。 */
     updatedAt: string;
     /**
-     * 是否**在网络上可见**（`visibility = PUBLISHED`）。
+     * 本机这个工作区在**网络上的发布状态**，一个方向一条（`[]` = 还没发布过）。
      *
-     * ⚠️ 判据是**服务器**（`GET /projects/{id}`），不是本地映射：本地记录只说明"我传过"，
-     * 服务器删项目或取消发布时它不会自己更新。核对不通（离线/未登录）时退回本地记录，
-     * 因为"读不到"不等于"服务器上没有"。
+     * ⚠️ 为什么是**数组**（v0.6.0）：一个工作区可以同时在两个方向发布 ——
+     * 【寻找指导】（`SEEK_MENTOR`，学生求指导）与【寻找学生】（`SEEK_STUDENT`，
+     * 导师出题）。它们是**服务器上两个不同的项目**，所以要有两条记录、两个标记；
+     * 早先的单对象形状表达不了"两个方向各有各的状态"。
+     *
+     * ⚠️ 每一行的判据是**服务器**（`GET /projects/{id}`），不是本地映射：本地记录只说明
+     * "我传过"，服务器删项目或取消发布时它不会自己更新。核对不通（离线/未登录）时退回
+     * 本地记录，因为"读不到"不等于"服务器上没有"。
      */
-    published: {
+    published: Array<{
+        /** 这条对应哪个方向（界面按它把按钮文案切成「更新指导」/「更新学生」）。 */
+        direction: ProjectDirection;
         projectId: string;
         version: number;
         updatedAt: string;
@@ -284,7 +291,7 @@ export interface LocalWorkItem {
         serverUrl: string;
         /** 记录属于哪个账号。 */
         accountId: string;
-    } | null;
+    }>;
 }
 /** 服务器上的账号（`GET /api/v1/auth/me`）。**不含任何凭据。** */
 export interface AccountWire {
