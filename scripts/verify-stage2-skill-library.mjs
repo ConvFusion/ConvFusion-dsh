@@ -54,6 +54,13 @@ console.log('\n[A] 系统 Skill Library（包内资产）')
   assert(existsSync(root), '系统库目录存在')
 
   const docs = S.listSystemSkills()
+  /*
+   * 技能分两类（`kind`）：`method` = 研究方法（有编号/分类/逐字来源/可定制），
+   * `operation` = 操作流程（如 `sync`）。下面这一段（迁移完整性、分类覆盖、
+   * 逐字来源）都只对**研究方法**成立 —— 操作类技能是 v2 原生能力，
+   * 没有旧提示词可迁移，也不进分类树。
+   */
+  const methodDocs = docs.filter((d) => d.kind === 'method')
   assert(docs.length >= 5, `系统库至少有 5 个 Skill（实际 ${docs.length}）`)
   assert(docs.every((d) => d.type === 'system'), '全部 Skill type=system（我们维护）')
   assert(docs.every((d) => d.editable === false), '全部 Skill **只读**（editable=false）')
@@ -83,8 +90,8 @@ console.log('\n[A] 系统 Skill Library（包内资产）')
     // 旧实现里没有任何"画论文结构图"的提示词可以迁移 —— 正文按 v0.5.5 的设计说明新写。
     'paper-diagrams',
   ])
-  const withSources = docs.filter((d) => d.sections.some((x) => x.title.startsWith('Source Prompts')))
-  const migrated = docs.filter((d) => !V2_NATIVE.has(d.id))
+  const withSources = methodDocs.filter((d) => d.sections.some((x) => x.title.startsWith('Source Prompts')))
+  const migrated = methodDocs.filter((d) => !V2_NATIVE.has(d.id))
   assertEq(
     withSources.filter((d) => !V2_NATIVE.has(d.id)).length,
     migrated.length,
@@ -101,15 +108,36 @@ console.log('\n[A] 系统 Skill Library（包内资产）')
     const sec = d.sections.find((x) => x.title.startsWith('Source Prompts'))
     assert(/modules\//.test(sec.body), `${d.id}: 逐字来源可追溯到 modules/ 下的源文件`)
   }
-  assert(docs.every((d) => d.category !== undefined), '每个 Skill 都有 category')
-  const groups = new Set(docs.map((d) => d.category.split('/')[0]))
+  assert(methodDocs.every((d) => d.category !== undefined), '每个**研究方法**都有 category')
+  const groups = new Set(methodDocs.map((d) => d.category.split('/')[0]))
   assert(groups.size >= 4, `覆盖多个类别（${[...groups].sort().join(', ')}）`)
-  assert(docs.every((d) => TAX.SYSTEM_CATEGORIES.some((c) => c.id === d.category)), '所有 category 都在系统 taxonomy 内')
+  assert(
+    methodDocs.every((d) => TAX.SYSTEM_CATEGORIES.some((c) => c.id === d.category)),
+    '所有 category 都在系统 taxonomy 内',
+  )
+  // 操作类技能：无类别、无编号、无逐字来源 —— 都不是"漏了"，是它本来就不是研究方法
+  const ops = docs.filter((d) => d.kind === 'operation')
+  assert(ops.length >= 1, `有操作类技能（实际 ${ops.length}）`)
+  assert(ops.every((d) => d.category === undefined), '操作类技能不进分类树')
+  assert(ops.every((d) => d.code === undefined), '操作类技能不编号')
+  assert(
+    ops.every((d) => !d.sections.some((x) => x.title.startsWith('Source Prompts'))),
+    '操作类技能不伪造历史出处（v2 原生）',
+  )
 
-  assert(docs.every((d) => /^skills\/[a-z-]+\/[a-z0-9-]+\.md$/.test(d.relPath)), '路径为 skills/<category>/<id>.md')
+  /* 路径约定：研究方法 `skills/<category>/<id>.md`；操作类技能放在 `skills/` 根下
+     —— 它不属于任何方法类别，放在根上正是这个意思。 */
+  assert(
+    methodDocs.every((d) => /^skills\/[a-z-]+\/[a-z0-9-]+\.md$/.test(d.relPath)),
+    '研究方法路径为 skills/<category>/<id>.md',
+  )
+  assert(
+    ops.every((d) => /^skills\/[a-z0-9-]+\.md$/.test(d.relPath)),
+    '操作类技能放在 skills/ 根下（不属于任何方法类别）',
+  )
 
   // ── C10 工作评阅：是**普通类别**，不是独立技能库（设计文档 §2 原则 2、§31）──
-  const review = docs.filter((d) => d.category.startsWith('review/'))
+  const review = methodDocs.filter((d) => d.category.startsWith('review/'))
   assertEq(review.length, 5, `评阅技能 5 个（粒度按 §8 不过度拆分）：${review.map((d) => d.id).join(', ')}`)
   assert(
     review.every((d) => d.relPath.startsWith('skills/review/')),

@@ -52,6 +52,19 @@ function assertEq(actual, expect, label) {
 
 const docs = SKILLS.listSystemSkills()
 
+/*
+ * 技能分两类（`kind`，见 `src/research/skills.ts`）：
+ *   - `method`：**研究方法** —— 进编号表（CxxPyy）、分类树、定制层、导出文件；
+ *   - `operation`：**操作流程**（如 `sync`：把下载下来的研究快照同步进来）——
+ *     只是"agent 可按需加载的能力"，**不进**上述四处：它不是研究方法，
+ *     研究者不需要定制它，也不该出现在"导出研究方法"里。
+ *
+ * 所以下面**所有**编号 / 分类 / 导出断言都限定在 `methodDocs` 上，
+ * 并为操作类技能单列一小段（[5]）。
+ */
+const methodDocs = docs.filter((d) => d.kind === 'method')
+const operationDocs = docs.filter((d) => d.kind === 'operation')
+
 /* ── 1. 类别编号 ──────────────────────────────────────────────────── */
 console.log('\n[1] 类别编号 C00–C09')
 {
@@ -97,9 +110,9 @@ console.log('\n[1] 类别编号 C00–C09')
 /* ── 2. 技能编号完整性 ────────────────────────────────────────────── */
 console.log('\n[2] 技能编号 CxxPyy')
 {
-  assertEq(Object.keys(CODES.SKILL_CODES).length, docs.length, '编号条数 = 技能数')
+  assertEq(Object.keys(CODES.SKILL_CODES).length, methodDocs.length, '编号条数 = 研究方法数（操作类不编号）')
 
-  const v = CODES.validateSkillCodes(docs.map((d) => d.id))
+  const v = CODES.validateSkillCodes(methodDocs.map((d) => d.id))
   assertEq(v.unmapped.length, 0, `没有未编号的技能${v.unmapped.length ? `：${v.unmapped.join(', ')}` : ''}`)
   assertEq(v.orphans.length, 0, `没有多余编号${v.orphans.length ? `：${v.orphans.join(', ')}` : ''}`)
   assertEq(v.duplicates.length, 0, '没有重复编号')
@@ -108,7 +121,7 @@ console.log('\n[2] 技能编号 CxxPyy')
   assertEq(v.ok, true, '整体校验通过')
 
   // 编号必须落在它所属类别的 C 号上
-  for (const doc of docs) {
+  for (const doc of methodDocs) {
     const code = CODES.skillCode(doc.id)
     const info = CODES.categoryCodeInfo(doc.category)
     assert(code !== undefined, `已编号：${doc.id}`)
@@ -155,9 +168,9 @@ console.log('\n[2] 技能编号 CxxPyy')
 /* ── 3. 排序按编号（不是字母序）──────────────────────────────────── */
 console.log('\n[3] 排序：技能库与设置页')
 {
-  const keys = docs.map((d) => CODES.skillSortKey(d.id))
+  const keys = methodDocs.map((d) => CODES.skillSortKey(d.id))
   const sorted = [...keys].sort()
-  assertEq(keys.join(','), sorted.join(','), 'listSystemSkills 按编号排序')
+  assertEq(keys.join(','), sorted.join(','), 'listSystemSkills 按编号排序（研究方法）')
 
   // 字母序的反例：ablation-design 属于实验（C07），绝不能排在理解输入（C01）之前
   const ablationIdx = docs.findIndex((d) => d.id === 'ablation-design')
@@ -185,13 +198,35 @@ console.log('\n[3] 排序：技能库与设置页')
   assert(st.categories.every((c) => c.skills.every((s) => typeof s.code === 'string')), '每个技能都带编号')
 }
 
+/* ── 5. 操作类技能（不是研究方法）────────────────────────────────── */
+console.log('\n[5] 操作类技能（kind: operation）')
+{
+  assert(operationDocs.length >= 1, `库里至少有一个操作类技能（实际 ${operationDocs.length}）`)
+  const sync = docs.find((d) => d.id === 'sync')
+  assert(sync !== undefined, '有 sync 技能（把下载下来的研究工作区快照同步进来）')
+  if (sync) {
+    assertEq(sync.kind, 'operation', 'sync 标为操作类（frontmatter kind: operation）')
+    assert(sync.code === undefined, '操作类技能**不编号**（不进 CxxPyy 表）')
+    assert(sync.category === undefined, '操作类技能**不进分类树**（设置页"本地研究方法"里看不到它）')
+    assertEq(sync.status, 'active', 'sync 是 active（否则技能通道不会提供它）')
+    assert(sync.body.includes('两步走'), 'sync 正文保留了"两步走"纪律')
+  }
+  // 导出里没有它（上面 [4] 已断言），定制列表里也没有它
+  const points = CUST.listCustomizationPoints('', {})
+  assert(
+    !points.some((c) => (c.points ?? []).some((p) => p.skillId === 'sync' || p.id === 'sync')),
+    '设置页定制列表里没有 sync（它不需要被定制）',
+  )
+  assert(!points.some((c) => c.categoryId === 'uncategorized'), '不再因为无类别技能多出 uncategorized 伪类别')
+}
+
 /* ── 4. 导出 ──────────────────────────────────────────────────────── */
 console.log('\n[4] 导出研究方法')
 {
   const def = EXPORT.buildMethodsExport({ now: new Date('2026-01-01T00:00:00Z') })
   const full = EXPORT.buildMethodsExport({ full: true, now: new Date('2026-01-01T00:00:00Z') })
 
-  assertEq(def.skillCount, docs.length, '导出全部技能')
+  assertEq(def.skillCount, methodDocs.length, '导出全部**研究方法**（操作类不进导出）')
   assertEq(def.categoryCount, 10, '导出全部类别')
   assertEq(def.full, false, '默认非 full')
   assert(def.markdown.includes('CxxPyy'), '头部说明编号规则')
@@ -199,11 +234,19 @@ console.log('\n[4] 导出研究方法')
   assert(def.markdown.includes('### C01P01 · 理解输入 · 输入理解'), '技能标题行 = 编号 + 类别 + 中文名')
   assert(CODES.skillLabel('literature-search') === '文献检索', '中文名映射')
 
-  // 编号锚点：每个技能恰好出现一次
-  for (const doc of docs) {
+  // 编号锚点：每个研究方法恰好出现一次
+  for (const doc of methodDocs) {
     const anchor = `### ${doc.code} ·`
     assertEq(def.markdown.split(anchor).length - 1, 1, `锚点唯一：${doc.code}`)
   }
+  /*
+   * 操作类技能不该混进"研究方法"导出文件。
+   *
+   * ⚠️ 不能用"文件里没有 sync 这个词"来判 —— 别的技能正文里本来就有英文词
+   * in sync / synchronous。所以按**特征文本**判：sync 技能的标题锚点与它独有的正文。
+   */
+  assert(!def.markdown.includes('### undefined ·'), '没有"无编号技能"留下的空锚点')
+  assert(!def.markdown.includes('备份目录的最终名字'), 'sync 的正文没有混进导出文件')
 
   // 导出含「至少一个技能有」的可定制章节锚点：Prerequisites 尚无技能声明时该节不出现
   const presentSections = new Set()

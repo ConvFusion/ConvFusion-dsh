@@ -394,12 +394,24 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
    * `workTab === 'mentor'` 提前命中，断言的其实不是顺序。
    */
   {
-    const tabOrder = [...community.matchAll(/<MiniTab active=\{workTab === '(\w+)'\}/g)].map((m) => m[1])
+    // ⚠️ 容忍属性换行（写多行是合法的；第一版正则只认行内写法，改排版就误报）
+    const tabOrder = [...community.matchAll(/<MiniTab[\s\S]{0,80}?active=\{workTab === '(\w+)'\}/g)].map((m) => m[1])
     assertEq(tabOrder, ['mine', 'mentor', 'joinable', 'mentorship'], 'Tab 顺序：我的 → 可指导 → 可加入 → 指导中')
   }
+  /*
+   * Tab 上的**条数**（【我的 (2)】）：取自同一个 state，所以与点进去的行数一致。
+   * `null`（未登录 / 还没读到 / 读失败）→ **不显示数字**：`0` 是断言"确实没有"，
+   * 把"还不知道"画成 (0) 就是用假信息掩盖状态。
+   */
+  {
+    const counts = [...community.matchAll(/count=\{(\w+)\?\.length \?\? null\}/g)].map((m) => m[1])
+    assertEq(counts, ['mine', 'works', 'joinable', 'proposals'], '四个 Tab 各带自己的列表条数')
+    assert(/typeof count === 'number' \? ` \(\$\{count\}\)` : ''/.test(src), '条数渲染成「 (N)」；null 时什么都不显示')
+  }
+
   // ⚠️ 【可指导】**只对导师显示**（v0.6.0 用户要求：研究者只看得到 我的/可加入/指导中）
   assert(
-    /\{canMentor \? \(\s*<MiniTab active=\{workTab === 'mentor'\}/.test(community),
+    /\{canMentor \? \(\s*<MiniTab[\s\S]{0,80}?active=\{workTab === 'mentor'\}/.test(community),
     '【可指导】按导师角色显示（没有导师角色就不显示这个 Tab）',
   )
   assert(
@@ -453,7 +465,8 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   // 用户的点法：在【我的】列表里点**这一项**的「寻找指导」——**只有点了才上传**。
   assert(/work\/publish/.test(community), '「寻找指导」走 work/publish（点了才发布）')
   assert(/doPublish/.test(community) && /openPublish/.test(community), '有发布动作（openPublish → 对话框 → doPublish）')
-  dictHas('community.action.seekMentor', '寻找指导', 'Find a mentor', '「寻找指导」按钮')
+  dictHas('community.action.seekMentor', '寻找线上导师', 'Find an online mentor', '「寻找线上导师」按钮')
+  dictHas('community.action.seekStudent', '寻找优秀学生', 'Find top students', '「寻找优秀学生」按钮')
   dictHas('community.action.republish', '更新', 'Update', '已发布后按钮变「更新」')
   dictHas('community.badge.inNetwork', '已在网络中', 'On the network', '已发布标记')
   dictHas('community.notice.published', '{title} · 研究状态 v{version}', '{title} · state v{version}', '发布成功回执（一行式）')
@@ -470,7 +483,10 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   )
   dictHas('community.hint.publishMissing', '网络上暂时看不到', 'not visible on the network', '缺字段时如实说明')
   // 未登录不能发布：按钮禁用 + 悬浮提示说明原因（不是点了没反应）
-  assert(/disabled=\{!account \|\| publishing !== null/.test(community), '未登录 / 发布中时按钮禁用')
+  assert(
+    /const disabled = !account \|\| publishing !== null \|\| dialogLoading !== null/.test(community),
+    '未登录 / 发布中时按钮禁用',
+  )
   dictHas('community.tip.publishNeedSignIn', '先登录 ConvFusion.com', 'Sign in to ConvFusion.com before publishing', '未登录时的提示')
   dictHas('community.tip.publish', '研究方法不会被上传', 'never uploaded', '发布只上传研究进展（方法留在本机）')
 
@@ -2168,6 +2184,97 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     '显示所选文件的合计体积与批次数（用户要求）',
   )
   assert(/mentor\/uploadProgress/.test(src), '上传期间按秒问进度（慢 ≠ 死）')
+  /*
+   * 进度条**两条上传路径共用**：2026-10 实测【我的】发布带附件的工作时界面上
+   * 根本没有进度条（只有导师回传那条画了），几十 MB 下只有一句「发布中…」。
+   */
+  assert(/function TransferProgress/.test(src), '进度条抽成共用组件（发布 / 导师回传同一根）')
+  assert(/progress=\{publishProgress\}/.test(src), '发布对话框也拿得到进度')
+  assert(/setPublishProgress\(v\)/.test(src), '发布期间按秒轮询（与回传同一条端点）')
+  /* 一个研究工作**只属于一个方向**的规则见下方 `publishActionPlan` 的行为断言。 */
+/**
+ * 读一个**客户端纯逻辑模块**并按 ESM 求值。
+ *
+ * 客户端的产物是 esbuild 打包的 `lib/client.js`（没有单文件 JS 产物），所以纯逻辑
+ * （不依赖 React）没法像宿主模块那样 `import(lib(...))`。这里用仓库已有的 esbuild
+ * 现场转译源码 —— 测的是**源码本身**，也不必为测试改构建布局。
+ */
+async function importClientModule(rel) {
+  const esbuild = await import('esbuild')
+  const code = readFileSync(join(PKG, 'src/client', rel), 'utf8')
+  const out = await esbuild.transform(code, { loader: 'ts', format: 'esm' })
+  return import(`data:text/javascript;base64,${Buffer.from(out.code).toString('base64')}`)
+}
+
+  {
+    // 字典片段直接读（`dictHas` 在后面的 i18n 段落里，作用域不同）
+    const zhDictText = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
+    const enDictText = readFileSync(join(PKG, 'src', 'client', 'i18n', 'en.ts'), 'utf8')
+    assert(zhDictText.includes("'community.action.republish': '更新研究工作'"), '已发布按钮是 6 字【更新研究工作】')
+    assert(enDictText.includes("'community.action.republish': 'Update research'"), '英文同步（Update research）')
+    assert(zhDictText.includes("'community.tip.morePublish'"), '分拆按钮箭头的提示词条存在')
+    assert(!/republishMentor|republishStudent/.test(zhDictText + enDictText), '旧的"更新指导/更新学生"文案已移除')
+  }
+  assert(/function PublishButton/.test(src), '发布动作抽成一个按钮组件（含导师的分拆下拉）')
+  /*
+   * 宽度一致由**布局**保证，而不是靠文案碰巧一样长：
+   * 同一列在不同角色/状态下文案不同（【寻找学生】/【寻找线上导师】/【更新研究工作】），
+   * 导师那一档还要再接一个 ▾ —— 所以固定宽度，普通按钮与拆分按钮都受它约束。
+   */
+  assert(/const PUBLISH_BUTTON_WIDTH = \d+/.test(src), '发布按钮有固定宽度常量')
+  {
+    // 宽度要放得下最长文案 + 箭头：6 个汉字 @12.5px×600 ≈ 80px，箭头约 22px
+    const width = Number(/const PUBLISH_BUTTON_WIDTH = (\d+)/.exec(src)?.[1] ?? 0)
+    assert(width >= 104, `按钮宽度 ${width}px 放得下 6 字文案 + 下拉箭头（≥104）`)
+  }
+  assert(
+    /width: PUBLISH_BUTTON_WIDTH/.test(src) && /flex: '1 1 auto'/.test(src),
+    '普通按钮用固定整宽；带下拉时主按钮占满同一宽度减去箭头',
+  )
+  assert(/community\.tip\.morePublish/.test(src), '分拆按钮的箭头有提示（说清下拉里是另一个方向）')
+  assert(
+    /alignItems: 'center',[\s\S]{0,700}?community\.badge\.inNetwork/.test(src),
+    '「已在网络中」徽章与按钮**垂直居中**（此前是 flex-start，只有一个按钮时徽章飘在按钮上方）',
+  )
+
+  /*
+   * ── 发布动作的角色规则（**行为级**，直接跑纯函数）────────────────────
+   *
+   * ```text
+   * 研究者    → 只有一个【寻找指导】
+   * 导师      → 主按钮【寻找学生】，【寻找指导】在下拉里
+   * 已发布    → 只有一个【更新文件】（更新它已经属于的那个方向）
+   * ```
+   */
+  const { publishActionPlan } = await importClientModule('publish-actions.ts')
+  const planOf = (canMentor, published) => publishActionPlan(canMentor, published)
+  assertEq(
+    planOf(false, []),
+    { primary: { direction: 'SEEK_MENTOR', kind: 'publish' }, more: [] },
+    '研究者：只有一个按钮（寻找指导）',
+  )
+  assertEq(
+    planOf(true, []),
+    {
+      primary: { direction: 'SEEK_STUDENT', kind: 'publish' },
+      more: [{ direction: 'SEEK_MENTOR', kind: 'publish' }],
+    },
+    '导师：主按钮是【寻找学生】，【寻找指导】收进下拉',
+  )
+  assertEq(
+    planOf(true, ['SEEK_STUDENT']),
+    { primary: { direction: 'SEEK_STUDENT', kind: 'update' }, more: [] },
+    '导师已发布选题 → 只有一个【更新文件】（方向不变）',
+  )
+  assertEq(
+    planOf(false, ['SEEK_MENTOR']),
+    { primary: { direction: 'SEEK_MENTOR', kind: 'update' }, more: [] },
+    '学生已发布工作 → 只有一个【更新文件】',
+  )
+  // 历史数据（旧版本允许一个工作两个方向各发一次）：主按钮一个，另一个进下拉而不是丢掉
+  const legacy = planOf(true, ['SEEK_MENTOR', 'SEEK_STUDENT'])
+  assertEq(legacy.more.length, 1, '历史双发：另一个方向进下拉（让用户仍有路可走，不静默丢掉）')
+  assert(!/republishMentor|republishStudent/.test(src), '两个方向各自的"更新"文案已从源码移除')
   assert(!/readAsDataURL/.test(src), '不再走 base64（宿主读盘取代了它）')
   // 只查**代码**：注释里还会提到 base64（解释为什么不用它），那不算违规
   assert(!/base64\s*:/.test(src) && !/atob\(/.test(src), '界面里没有 base64 编解码代码')
@@ -2198,6 +2305,11 @@ console.log('\n[13] 指导闭环：下载 / 上传')
   assert(/buildUploadPlan\(root, 'mentor'\)/.test(rpc), '清单来自扫描（mentor 口径）')
   assert(/allowed\.has\(rel\)/.test(rpc), '只上传扫描得到的文件（界面不能递任意路径读盘）')
   assert(/case 'mentor\/uploadProgress':/.test(rpc), '有上传进度端点（界面按秒问，宿主本地读）')
+  assert(/beginUploadProgress/.test(rpc), '宿主侧只留一个进度入口（发布与回传共用同一份记录）')
+  assert(
+    /uploadProgress\.keys\.includes\(projectId\)/.test(rpc),
+    '进度记录按"可认领的多把键"匹配（发布的界面用本机 id 轮询，导师回传用服务器项目 id）',
+  )
   assert(
     /fetchProjectFiles\(base, apiKey, projectId, \{ source, \.\.\.netOptions\(\) \}\)/.test(rpc) &&
       /onServer\.get\(rel\) === digest/.test(rpc),

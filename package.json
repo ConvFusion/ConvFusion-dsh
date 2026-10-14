@@ -42,7 +42,8 @@
     "verify:server-login": "node scripts/verify-server-login.mjs .",
     "verify:server-login-live": "node scripts/verify-server-login-live.mjs .",
     "clean": "rm -rf lib",
-    "verify:workspace-identity": "node scripts/verify-workspace-identity.mjs ."
+    "verify:workspace-identity": "node scripts/verify-workspace-identity.mjs .",
+    "verify:sync-command": "node scripts/verify-sync-command.mjs ."
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",

@@ -121,19 +121,22 @@ export const zh = {
   'upload.reason.literature-fulltext': '别人的论文原文：默认不上传，需要时单独勾选',
   'upload.reason.large-files': '单个文件 ≥10 MB：默认不上传，确认有用再勾选',
   'upload.reason.others': '未归类的文件：默认不上传',
-  'community.action.seekMentor': '寻找指导',
-  // ── 出题模式（v0.6.0）：一个工作区可在两个方向上发布 ──────────────
-  // 两个按钮上下排列，顺序由角色定（导师 → 寻找学生在上）；已发布过则变「更新…」。
-  'community.action.seekStudent': '寻找学生',
-  'community.action.republishMentor': '更新指导',
-  'community.action.republishStudent': '更新学生',
+  'community.action.seekMentor': '寻找线上导师',
+  // ── 出题模式（v0.6.0）：发布入口**按角色收敛成一个按钮** ──────────────
+  // 研究者 → 寻找线上导师；导师 → 寻找优秀学生（+ 下拉里的"另一个方向"）；
+  // 已发布 → 更新研究工作。一个研究工作只属于一个方向，所以永远只有一个发布入口。
+  // 三个按钮的中文都取 6 个字，宽度另有固定常量保证一致（settings.tsx）。
+  'community.action.seekStudent': '寻找优秀学生',
+  'community.tip.morePublish': '更多发布方式（另一个方向）',
+  'community.tip.republish': '更新这项工作在网络里的研究进展（研究方向不变：学生发布工作 → 找导师）。',
+  'community.tip.republishTopic': '更新这项选题在网络里的内容（研究方向不变：导师出题 → 招学生）。',
   'community.tip.publishTopic': '把这项选题发布到 ConvFusion.com，让学生能发现并出价加入。研究方法不会被上传。',
   // 学生侧的动作（【可加入】列表行）
   'community.action.bid': '出价',
   'community.action.viewStudent': '学生',
   'community.tip.bid': '向这个选题出价（免费，导师接受后才冻结押金）',
   'community.tip.bidded': '已经出过价：正在等待导师响应',
-  'community.action.republish': '更新',
+  'community.action.republish': '更新研究工作',
   'community.action.publishing': '发布中…',
   'community.badge.inNetwork': '已在网络中',
   'community.badge.published': '已发布',
@@ -329,67 +332,25 @@ export const zh = {
   // **另一项研究 → 先备份现有研究根（移动，不删），再解压成新的研究根**。
   // 标识读不到 / 服务器不给 → 先盘查、给出判断，等我确认后按对应的一支执行。
   // 两步走：第 1 步只读盘查并报告 → 我确认 → 第 2 步才动文件。
-  'community.merge.title': '整合提示词',
-  'community.merge.hint': '两步走：DSH 先只读盘查并报告，你确认后才动文件。同一项研究就融合（读两侧内容产出新文件，不是覆盖）；另一项研究就先备份现有研究根，再解压成新的。',
+  'community.merge.title': '同步命令',
+  'community.merge.hint': '把它发出去就行：agent 会先加载 `sync` 技能 —— 第 1 步**只读盘查**并报告，**停下等你确认**后才动文件。同一项研究就融合（读两侧内容产出新文件，不是覆盖）；另一项研究就先整体备份现有研究根，再解压成新的。',
   'community.merge.fill': '填入输入框',
   'community.merge.fillHint': '会替换输入框里现有的内容',
   'community.merge.copy': '复制提示词',
   'community.merge.copied': '提示词已复制到剪贴板。',
   'community.merge.copyFailed': '复制失败，请手动选中输入框里的提示词。',
   'community.merge.filled': '整合提示词已填入输入框，确认后发送。',
-  'community.merge.otherWorkspace': '已保存到 {dir}。这个工作区不是当前会话的工作区 —— 请到**那个工作区**的会话里发送提示词（DSH 只能写自己会话的工作区）。',
-  'community.merge.noComposer': '当前不在会话里：复制提示词，到目标工作区的会话里粘贴发送。',
+  'community.merge.otherWorkspace': '已保存到 {dir}。这个工作区不是当前会话的工作区 —— 请到**那个工作区**的会话里发送这条命令（DSH 只能写自己会话的工作区）。',
+  'community.merge.noComposer': '当前不在会话里：复制这条命令，到目标工作区的会话里粘贴发送。',
   'community.merge.plan.new': '本工作区**还没有**研究工作区：第 2 步把包内内容解压成新的研究根。',
   'community.merge.plan.same': '本工作区里已经是**同一项**研究（标识一致）：第 2 步把包内内容与本地内容**融合** —— 不是替换，两侧信息都要保留。',
   'community.merge.plan.other': '本工作区里现在是**另一项**研究（标识不一致）：第 2 步先把现有研究根**整体备份**（移动，不是删除），再把下载的这份解压成**新的**研究根。备份会留在原地，什么都不丢。',
   'community.merge.plan.unknown': '本工作区里有研究，但**读不到它的标识**，无法自动判断是不是同一项：请在盘查时对照两侧 `project.md` / `research-state.md` 的研究主题与研究问题，给出"同一项 / 另一项"的判断与依据，**等我确认后**再按对应的一支执行。',
   'community.merge.plan.unverifiable': '服务器没有提供研究工作标识，**无法自动判断**是不是同一项：请在盘查时对照两侧 `project.md` / `research-state.md` 的研究主题与研究问题，给出判断与依据，**等我确认后**再按对应的一支执行。',
-  'community.merge.action.new': '解压为新的研究根',
-  'community.merge.backupNameHint': '备份目录名**由你取**：**前缀固定 `workspace_`**，后面接**研究主题 / 方法的首字母缩写**与**日期**，形如 `workspace_LHRDP_20261011`；缩写以工作区里 `project.md` 的主题 / 方法为准。**同名就加 `-2`、`-3`**（别覆盖上一次的备份）。建议起点：`{suggested}`（只是按服务器上的项目标题猜的，你可以换更准的）。',
-  'community.merge.body.new': '把压缩包内的文件按相对路径解压到 {newRoot}（保持包内相对路径）。这个工作区里还没有研究数据，不需要备份。',
-  'community.merge.action.merge': '融合（同一项研究）',
-  'community.merge.body.merge': '对第 ④ 类的每个文件，先读两侧内容，再产出一份**融合后的新文件**：\n· 文本 / 结构化（.md/.tex/.json/.yaml/.csv…）：两侧的信息都必须保留。不是拼接，而是按这个文件的语义合并（research-state 按维度合并、plans 按计划项去重合并、论文按章节合并、证据/主张/文献列表取并集去重）。\n· 若两侧的同一个结论互相冲突（不能同时成立）：不要替我做决定、不要丢掉任何一侧 —— 把冲突原样列进报告，并在文件里保留可辨识的两说，等我裁决。\n· 二进制 / 媒体（图、PDF、压缩包…）：语义上无法融合 —— 保留修改时间较新的一份在原处，另一份**移到** {incoming}<原相对路径>（不删除），并在报告里给出两侧的修改时间。\n· 机器生成物（缓存 / 依赖 / 构建产物 / 备份）：跳过，只在报告里列一行。\n① 类（仅包内有）直接写入 {root}（保持包内相对路径）；② 类（仅本地有）一律不动。',
-  'community.merge.action.switch': '备份现有研究根，再解压为新的研究根',
-  'community.merge.body.switch': '1. **备份**（移动，不是删除）：把 {backupFrom} 整体移到**本工作区根下**的备份目录（与研究对象同级，别放进研究根里面）—— 用移动而不是复制，这样新研究根从零开始；备份必须留在原地、随时可恢复。\n   {backupNameHint}\n   {layoutNote}\n2. **解压**：把压缩包内的文件按相对路径解压到 {newRoot}。\n3. 备份目录里原有的东西一个都不要改、不要删。\n4. 在报告里给出**备份目录的最终名字**（我以后要靠它找回旧研究）。',
-  'community.merge.backupNote.nested': '（研究根就是 `<工作区>/workspace`，整个目录移走即可。）',
-  'community.merge.backupNote.legacy': '（这是**旧布局**：研究数据直接在工作区根。只把研究数据文件 / 目录移进备份目录；用户自己的材料（原始论文、数据集、笔记等）留在原处不要动。）',
-  'community.merge.action.decide': '按判断执行（同一项 → 融合；另一项 → 备份后新建）',
-  'community.merge.body.decide': '先在报告里给出判断（同一项 / 另一项）与依据，**等我确认**，再执行对应的一支：\n· **同一项** → 按"融合"做：对第 ④ 类的每个文件先读两侧内容，产出融合后的新文件，两侧信息都保留；结论冲突就原样列出来，不要自己裁决。仅包内有的直接写入 {root}；仅本地有的一律不动。\n· **另一项** → 按"备份 + 新建"做：把 {backupFrom} 整体移到**本工作区根下**的备份目录（移动不是复制，可恢复；名字见上一步的取名规则，并在报告里给出最终名字），再把包内文件按相对路径解压到 {newRoot}。\n两种情况下都不要删除任何一侧的内容。',
-  'community.merge.zipPending': '（文件名是**预检**猜的：若实际落盘的名字末尾多了 `-2` 之类序号，就用工作区里同前缀的那个 `.zip`；**若它还在下载中，先等落盘完成再开始**。）',
-  'community.merge.pendingHint': '下载中：整合提示词**已经先填进输入框**了 —— 等这一步落盘完成再发送（现在发，zip 还没写完）。',
+  'community.merge.pendingHint': '下载中：这条命令**已经先填进输入框**了 —— 等这一步落盘完成再发送（现在发，zip 还没写完；命令自己也会拦住）。',
   'community.merge.nameChanged': '服务器实际落盘的文件名是 `{name}`（与预检猜的不同）。',
-  'community.merge.refill': '按实际文件名更新提示词',
-  'community.merge.downloadFailedHint': '刚才填进输入框的提示词**先别发送** —— zip 还没有落盘。',
-  'community.merge.identityWrite': '最后写入 {identityFile}（这项研究的标识：换机器、被复制后靠它自证身份），并在报告里给出它的最终内容：\n{identityJson}',
-  'community.merge.identitySkip': '（服务器未提供研究工作标识，跳过写 {identityFile} 这一步。）',
-  'community.merge.prompt': `请把刚从 ConvFusion 下载的研究工作快照整合进本工作区 —— 注意是"融合 / 新建 / 替换"，不是无脑覆盖。
-
-压缩包：{zip}{zipNote}
-本工作区：{workspace}
-本工作区当前的研究根：{root}
-{plan}
-
-═══ 第 1 步：只读盘查（这一步不要改动、不要创建、不要删除任何文件）═══
-
-把压缩包内的文件清单（相对路径 + 大小）与 {root} 现有文件对照，分成四类逐条列出：
-  ① 仅包内有（会新增）            —— 列出全部
-  ② 仅本地有（必须原样保留）      —— 列出全部
-  ③ 两侧都有、内容相同（无需处理）—— 只报数量
-  ④ 两侧都有、内容不同            —— 逐个给出：路径、两侧大小与修改时间、类型（文本/结构化/二进制/机器生成物），以及一句话说明"差在哪"
-
-**报告完请停下来等我确认**，不要继续第 2 步。
-
-═══ 第 2 步：{actionTitle}（我确认后）═══
-
-{actionBody}
-{identity}
-
-═══ 报告 ═══
-1. 逐文件处置表：新增 n / 融合 m / 内容相同跳过 k / 仅本地保留 j / 二进制取新 b / 备份 b / 生成物跳过 c
-2. 融合或替换的每个文件：一句话说明合并了什么、哪一侧的什么被保住了
-3. 未能裁决的冲突清单（如果有）
-
-边界：只改动本工作区以内的内容；压缩包本身不要删；其它路径一概不动。`,
+  'community.merge.refill': '按实际文件名更新命令',
+  'community.merge.downloadFailedHint': '刚才填进输入框的那条命令**先别发送** —— zip 还没有落盘。',
   // 上传 = **回传我这一份工作区**（导师是在学生的 workspace/ 里继续推进研究的）：
   // 选工作区 → 勾文件 → 只说清"传什么、多少"，不解释背景
   'community.exchange.uploadTitle': '上传研究进展',

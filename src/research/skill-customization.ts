@@ -44,7 +44,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 import type { SkillDocument } from './skills.js'
-import { listSkillDocuments, skillMethod, skillPurpose, skillWhenToUse } from './skills.js'
+import { isMethodSkill, listSkillDocuments, skillMethod, skillPurpose, skillWhenToUse } from './skills.js'
 import { categoryName } from './taxonomy.js'
 import { categoryCodeInfo, looksLikeSkillCode, skillIdByCode, skillSortKey } from './skill-codes.js'
 import { findSection } from './markdown.js'
@@ -373,7 +373,12 @@ export function listCustomizationPoints(
   workspace: string,
   customizations: SkillCustomizations,
 ): CategoryCustomization[] {
-  const docs = listSkillDocuments(workspace)
+  /*
+   * 只列**研究方法**：操作类技能（`kind: 'operation'`，如 `sync`）没有类别，
+   * 会让这里多出一个 `uncategorized` 的伪类别（设置页"本地研究方法"里就多一栏空的）。
+   * 它本来就不是研究方法，不该出现在定制列表里。
+   */
+  const docs = listSkillDocuments(workspace).filter(isMethodSkill)
   const byCategory = new Map<string, CustomizationPoint[]>()
 
   for (const doc of docs) {

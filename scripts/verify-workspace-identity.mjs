@@ -183,186 +183,135 @@ section('[2] 两级身份记录：工作区内标记（权威、可移植）+ �
 }
 
 /* ════════════════════════════════════════════════════════════════════════
- * [3] 身份 JSON 同形：提示词写的 == 宿主读的
+ * 客户端 bundle（离线断言客户端那一半：命令形状、面板文案、对话框渲染）
+ *
+ * `lib/client.js` 是 IIFE：喂个假的 `window.__ModuleLoader__` 就能截到模块工厂，
+ * 再用真 require 建出导出对象 —— 不需要浏览器、不需要 DOM。
  * ════════════════════════════════════════════════════════════════════════ */
-section('[3] 身份 JSON 同形：提示词让 agent 写的，与宿主读回来的必须一致')
 let CLIENT = null
 {
   const bundleSource = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
   let captured = null
   new Function('window', bundleSource)({ __ModuleLoader__: { load: (m) => { captured = m } } })
   CLIENT = captured.factory(createRequire(join(PKG, 'x.js')))
-  assert(typeof CLIENT.buildMergePrompt === 'function', '客户端 bundle 导出了 buildMergePrompt（可离线断言）')
+  assert(typeof CLIENT.syncCommandLine === 'function', '客户端 bundle 导出了 syncCommandLine（可离线断言）')
+}
 
-  const now = new Date('2026-10-11T03:21:44.000Z')
-  const written = CLIENT.identityJsonFor({
-    workspaceId: WS_A,
-    projectId: PROJECT_ID,
-    serverUrl: 'https://convfusion.example:4747',
-    source: 'owner',
-    now,
-  })
-  // 宿主侧写同一份（`markerJson` 会补一个结尾换行，比对**解析后的值**）
-  const hostWritten = WI.markerJson({
-    workspaceId: WS_A,
-    projectId: PROJECT_ID,
-    serverUrl: 'https://convfusion.example:4747',
-    role: 'mentor',
-    updatedAt: now.toISOString(),
-  })
-  assertEq(JSON.parse(written), JSON.parse(hostWritten), 'identityJsonFor 与宿主 markerJson **同一个 JSON**')
+/* ════════════════════════════════════════════════════════════════════════
+ * [3] 身份文件：技能里的字段表 == 宿主读回来的
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[3] 身份文件：技能里写的字段表，与宿主读回来的必须一致')
 
-  // 真的写到盘上、再用宿主读取器读回来 —— 端到端闭环，而不是只比字符串
-  const round = join(work, 'ws-round', 'workspace')
-  mkdirSync(join(round, '.convfusion'), { recursive: true })
-  writeFileSync(WI.workMarkerPath(round), written, 'utf8')
-  assertEq(WI.readWorkMarker(round)?.workspaceId, WS_A, '提示词写出的文件，宿主读得回 workspace_id')
-  assertEq(WI.readWorkMarker(round)?.role, 'mentor', 'role 也读得回（owner 侧下载 = 我是导师）')
-  assertEq(
-    CLIENT.identityJsonFor({ workspaceId: WS_A, projectId: '', serverUrl: '', source: 'mentor', now }).includes('project_id'),
-    false,
-    '空字段不写进 JSON（与宿主 markerJson 的取舍一致）',
+/*
+ * 以前这一段比的是"客户端拼的 JSON == 宿主写的 JSON"（那时提示词里嵌着 JSON）。
+ * 现在 JSON 由**技能**指导 agent 写（流程搬进了 `skills/sync.md`），
+ * 所以这里比的是：**技能列的字段 == 宿主 `markerJson` 真实输出的键**。
+ * 一旦有人给身份文件加字段却忘了改技能，这条会响。
+ */
+{
+  const skill = readFileSync(join(PKG, 'skills', 'sync.md'), 'utf8')
+  const hostWritten = WI.markerJson(
+    WI.makeWorkIdentity({
+      workspaceId: WS_A,
+      projectId: PROJECT_ID,
+      serverUrl: 'https://s',
+      accountId: 'acc-1',
+      role: 'mentor',
+      now: new Date('2026-10-11T03:21:44Z'),
+    }),
   )
+  const hostKeys = Object.keys(JSON.parse(hostWritten))
+  const missing = hostKeys.filter((k) => !skill.includes(k))
+  assertEq(missing.length, 0, `技能里列全了身份字段：${hostKeys.join(', ')}`)
+  assert(skill.includes('.convfusion/work.json'), '技能指明身份文件路径（研究根相对）')
+  assert(
+    /same[^\n]{0,40}才|判定为 `?same`? *时才写|只在.*same.*写/.test(skill),
+    '技能写明"只有判定为 same 才写身份文件"（other 时写会把两项研究认成一项）',
+  )
+  assertEq(JSON.parse(hostWritten).workspace_id, WS_A, '宿主 markerJson 的 workspace_id 就是标识本身')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
  * [4] 提示词：五态各自的第 2 步 + 两步硬约束 + 融合纪律
  * ════════════════════════════════════════════════════════════════════════ */
-section('[4] 提示词五态：插件只构建提示词，干活的是会话里的 agent')
+section('[4] 同步：一行命令 + 技能里的固定流程')
 {
-  const ZH = (await import(join(PKG, 'src', 'client', 'i18n', 'zh.ts'))).zh
-  const t = (key, params) => {
-    const tpl = ZH[key] ?? key
-    return params ? tpl.replace(/\{(\w+)\}/g, (m, n) => (n in params ? String(params[n]) : m)) : tpl
-  }
-  const base = {
-    t,
-    // 备份名的**建议起点**取自项目标题（括号里的方法缩写优先）
-    projectTitle: 'Long-Horizon Scientific Decision (LH-RDP)',
-    // ⚠️ 这些是**占位符**，不是真实目录：本段只调纯函数，磁盘上什么都不碰
-    // （真跑的时候路径由宿主给：工作区根 = 用户选的那个 DSH 工作区）
-    zipPath: '<工作区>/学生甲-长上下文推理.zip',
-    workspace: '<工作区>',
-    researchRoot: '<工作区>/workspace',
-    workspaceId: WS_A,
-    projectId: PROJECT_ID,
-    serverUrl: 'https://convfusion.example:4747',
-    source: 'owner',
-    layout: 'nested',
-    now: new Date('2026-10-11T03:21:44.000Z'),
-  }
-  const build = (patch) => CLIENT.buildMergePrompt({ ...base, ...patch })
-
-  // —— 两种情形都要有的硬约束（两步走 + 只读盘查 + 停下来等确认）——
-  for (const [name, prompt] of [
-    ['new', build({ state: 'new' })],
-    ['same', build({ state: 'same' })],
-    ['other', build({ state: 'other' })],
-    ['unknown', build({ state: 'unknown' })],
-  ]) {
-    assert(prompt.includes('只读盘查'), `[${name}] 第 1 步是只读盘查`)
-    assert(prompt.includes('不要改动、不要创建、不要删除任何文件'), `[${name}] 第 1 步明确不动文件`)
-    assert(prompt.includes('停下来等我确认'), `[${name}] 报告后**停下来等确认**（两步走）`)
-    assert(prompt.includes('<工作区>/学生甲-长上下文推理.zip'), `[${name}] 带上 ZIP 的绝对路径`)
-    assert(prompt.includes('只改动本工作区以内的内容'), `[${name}] 划清边界（不动工作区以外的东西）`)
-  }
-
-  // —— same：融合，不是覆盖 ——
-  const same = build({ state: 'same' })
-  assert(same.includes('同一项'), 'same：说清"同一项研究"')
-  assert(same.includes('融合'), 'same：第 2 步是融合')
-  assert(same.includes('两侧的信息都必须保留'), 'same：两侧信息都必须保留')
-  assert(same.includes('不要替我做决定、不要丢掉任何一侧'), 'same：结论冲突不裁决、不丢弃')
-  assert(!/把 {root} 整体移到/.test(same), 'same：**没有**"备份整根"这一步（融合不需要）')
-  assert(same.includes('保留修改时间较新的一份在原处'), 'same：二进制的处置规则写清了')
-  assert(same.includes('<工作区>/workspace/.convfusion/incoming/2026-10-11T03-21-44Z/'), 'same：二进制落败方进 .convfusion/incoming/<时间戳>/')
-
-  // —— other：备份（移动，不删）+ 解压成新的 ——
-  const other = build({ state: 'other' })
-  assert(other.includes('另一项'), 'other：说清"另一项研究"')
-  assert(other.includes('备份'), 'other：第 2 步先备份')
-  assert(other.includes('**整体备份**') || other.includes('整体移到'), 'other：备份是"整体"搬走')
-  assert(other.includes('移动，不是删除'), 'other：备份是**移动**不是删除（可恢复）')
-  // —— 备份目录名：**由 DSH 取**（缩写 + 日期，同名加序号），插件只给规则与建议起点 ——
-  assert(other.includes('备份目录名**由你取**'), 'other：明确"名字由 DSH 取"')
-  assert(other.includes('前缀固定 `workspace_`'), 'other：前缀固定 workspace_（与研究根同名，一眼认出是同一份）')
-  assert(other.includes('首字母缩写**与**日期'), 'other：给出取名规则（缩写 + 日期）')
-  assert(other.includes('workspace_LHRDP_20261011'), 'other：规则里带形状示例')
-  assert(other.includes('同名就加 `-2`、`-3`'), 'other：同名加序号（不覆盖上一次的备份）')
-  assert(other.includes('本工作区根下'), 'other：备份放在**工作区根下**（与研究对象同级）')
-  assert(other.includes('备份目录的最终名字'), 'other：要求把**最终名字**写进报告（用户以后要靠它找回旧研究）')
-  assert(other.includes('建议起点：`workspace_LHRDP_20261011`'), 'other：给出建议起点（括号里的方法缩写 + 日期）')
-  assert(other.includes('2. **解压**') && other.includes('<工作区>/workspace'), 'other：再把包内文件解压成新的研究根')
-  assert(!other.includes('不能下载到这里'), 'other：**不再**出现"不能下载"（插件不拦了）')
-
   /*
-   * —— new：解压成**本工作区的研究根** `<工作区>/workspace`（哪一侧下载都一样）——
-   *
-   * 口径（2026-10 用户定，一句话）：**"我们只要求复制到工作区下的工作目录是 `workspace/`
-   * 而已"**。一个工作区只有一个研究根；"同一个工作区里放多个学生的研究"靠**备份 + 换根**
-   * 轮换（见下面 other 那一段），而不是给每个包各起一个目录名。
+   * 2026-10 用户拍板：同步不再往输入框塞几十行提示词 ——
+   * **固定流程写成技能** `skills/sync.md`，用户只发一行 `/research sync @某.zip`。
+   * 所以这一段分两半：命令的形状（客户端）+ 流程确实写在技能里（内容断言）。
    */
-  const fresh = build({ state: 'new' })
-  assert(fresh.includes('解压为新的研究根'), 'new：标题是"新的研究根"')
-  assert(fresh.includes('解压到 <工作区>/workspace'), 'new：落点 = <工作区>/workspace')
-  assert(fresh.includes('不需要备份'), 'new：明确不需要备份（这一支没有旧根可备）')
+
+  // ── 4a：一行命令的形状 ────────────────────────────────────────────
+  assert(typeof CLIENT.syncCommandLine === 'function', '客户端 bundle 导出了 syncCommandLine（可离线断言）')
+  assertEq(
+    CLIENT.syncCommandLine('/w/ku-Jev-Paper2.zip'),
+    '/research sync @/w/ku-Jev-Paper2.zip',
+    '普通路径：@<绝对路径>',
+  )
+  assertEq(
+    CLIENT.syncCommandLine('/w/my research/x.zip'),
+    '/research sync @"/w/my research/x.zip"',
+    '**含空格**的路径写成 @"…"（否则空格会把参数切断，命令只看到前半段）',
+  )
+  assertEq(
+    CLIENT.syncCommandLine('  /w/x.zip  '),
+    '/research sync @/w/x.zip',
+    '两侧空白先去掉',
+  )
   assert(
-    !build({ state: 'new', source: 'owner' }).includes('并排'),
-    'new：**没有**"按包名并排"那种支路（落点统一是 workspace/）',
+    CLIENT.syncCommandLine('/w/x.zip').split('\n').length === 1,
+    '它就是**一行**（这正是不再需要一大段提示词的意思）',
   )
 
-  // —— unknown / unverifiable：先给判断，等确认后按对应的一支 ——
-  for (const state of ['unknown', 'unverifiable']) {
-    const p = build({ state })
-    assert(p.includes('同一项') && p.includes('另一项'), `${state}：让 agent 给出"同一项/另一项"的判断`)
-    assert(p.includes('project.md') && p.includes('research-state.md'), `${state}：判断依据 = 两侧的主题文件`)
-    assert(p.includes('融合') && p.includes('备份'), `${state}：两支都写清（与确认后按一支执行）`)
+  // ── 4b：固定流程确实写在技能里（技能是这段流程的单一事实源）──────
+  const skill = readFileSync(join(PKG, 'skills', 'sync.md'), 'utf8')
+  const must = [
+    ['两步走', '两步走纪律（先盘查、后动手）'],
+    ['只读盘查', '第 1 步是只读盘查'],
+    ['停下来等用户确认', '盘查完**停下等确认**再动文件'],
+    ['仅包内有', '盘查的四类清单'],
+    ['就地融合', 'same → 就地融合'],
+    ['不是覆盖', '融合不是覆盖'],
+    ['解压成新的研究根', 'new → 解压成新的研究根'],
+    ['整体移到本工作区根下', 'other → 先整体备份（移动）'],
+    ['workspace_', '备份名前缀固定 workspace_'],
+    ['首字母缩写', '备份名带研究缩写'],
+    ['同名就加', '备份名同名加序号'],
+    ['备份目录的最终名字', '报告里必须给出备份目录名'],
+    ['.convfusion/incoming', '二进制落败方进 incoming 暂存'],
+    ['不要替用户决定', '结论冲突不替用户裁决'],
+    ['same` 时才写', '只有判定 same 才写身份文件'],
+    ['压缩包**不要删', '边界：不删压缩包'],
+    ['只改动**本工作区以内**', '边界：只动本工作区以内'],
+  ]
+  for (const [needle, label] of must) {
+    assert(skill.includes(needle), `技能包含：${label}`)
   }
+  assert(
+    /^---[\s\S]*?kind: operation[\s\S]*?---/m.test(skill),
+    '技能 frontmatter 声明了 kind: operation（不是研究方法）',
+  )
+  // 技能里不该再出现"要不要下载"这类插件侧判断 —— 它只描述流程
+  assert(!skill.includes('不要下载'), '技能不管"能不能下"（判定只决定流程说法）')
 
-  /*
-   * 备份名的**建议算法**（纯函数）：括号里的方法缩写优先，其次逐词首字母，中文退化成前几个字。
-   * ⚠️ 这只是"起点"：真正的名字由 DSH 按工作区里的 project.md 取。
-   */
-  const day = new Date('2026-10-11T03:21:44.000Z')
-  assertEq(CLIENT.WORKSPACE_PREFIX, 'workspace_', '备份名前缀固定 workspace_（与研究根同名）')
-  assertEq(CLIENT.backupNameOf('Long-Horizon Scientific Decision (LH-RDP)', day), 'workspace_LHRDP_20261011', '括号里的方法缩写优先')
-  assertEq(CLIENT.backupNameOf('Retrieval Augmented Reasoning', day), 'workspace_RAR_20261011', '无括号 → 逐词首字母')
-  assertEq(CLIENT.backupNameOf('长时程科研决策', day), 'workspace_长时程科研决_20261011', '中文标题 → 前几个字（可读即可）')
-  assertEq(CLIENT.backupNameOf('', day), 'workspace_research_20261011', '取不出来 → research 兜底')
-  assert(CLIENT.backupNameOf('A '.repeat(40), day).length <= 26, '再长的标题也不会取出一个超长目录名')
-  assertEq(CLIENT.dateOf(day), '2026-10-11', '人读日期形如 YYYY-MM-DD')
-  assertEq(CLIENT.compactDateOf(day), '20261011', '目录名里的日期是紧凑的 YYYYMMDD（名字仍是干净三段）')
-
-  /*
-   * —— "下载前先填提示词"那一条：文件名还是**预检猜的**时要附一句"以实际为准" ——
-   *
-   * 用户 2026-10 实测反馈：下载完才出现提示词，等得难受。于是提示词改成**点下载就先填**，
-   * 代价是文件名只能用预检猜的值（服务器才是命名权威，同名还会加 `-2`）——
-   * 所以这一版必须自己说清楚"以实际落盘的名字为准，且还在下载中就先别开始"。
-   */
-  const pendingName = build({ state: 'other', zipNamePending: true })
-  assert(pendingName.includes('文件名是**预检**猜的'), '预检猜名版：提示词里说明文件名是猜的')
-  assert(pendingName.includes('先等落盘完成再开始'), '预检猜名版：说明"还在下载中就先别开始"')
-  assert(!other.includes('预检**猜的'), '落盘确认版：**不带**这句（名字已经确定）')
-
-  // —— 旧布局：备份只搬研究数据（工作区根还混着用户的材料）——
-  const legacy = build({ state: 'other', layout: 'legacy', researchRoot: '<工作区>', workspace: '<工作区>' })
-  assert(legacy.includes('旧布局'), 'legacy：识别旧布局')
-  assert(legacy.includes('用户自己的材料'), 'legacy：只搬研究数据，不动用户材料')
-
-  // —— 服务器不给标识：跳过写身份文件（老服务器上功能仍然可用）——
-  const noId = build({ state: 'unverifiable', workspaceId: null })
-  assert(noId.includes('跳过写'), '没有标识 → 提示词明说跳过写身份文件')
-  assert(!noId.includes('"workspace_id"'), '没有标识 → 提示词里不出现身份 JSON')
-
-  // —— 身份段：给了标识就写清路径与内容 ——
-  assert(other.includes('<工作区>/workspace/.convfusion/work.json'), '身份文件路径是**研究根相对**的 .convfusion/work.json')
-  assert(other.includes(`"workspace_id": "${WS_A}"`), '身份 JSON 带上标识')
-  assert(other.includes('"role": "mentor"'), '身份 JSON 带 role（下 owner 侧 = 当导师）')
-  assert(build({ state: 'same', source: 'mentor' }).includes('"role": "owner"'), '下 mentor 侧 = role 是 owner')
-  // ② 类（仅本地有）绝不能被删 —— 三种情形都要说
-  assert(same.includes('② 类（仅本地有）一律不动'), 'same：仅本地有的文件一律不动')
-  assert(other.includes('备份目录里原有的东西一个都不要改、不要删'), 'other：备份里的东西不许改')
+  // ── 4c：面板五种情形的说明（两种语言都要有）──────────────────────
+  const ZH = (await import(join(PKG, 'src', 'client', 'i18n', 'zh.ts'))).zh
+  const EN = (await import(join(PKG, 'src', 'client', 'i18n', 'en.ts'))).en
+  for (const state of ['new', 'same', 'other', 'unknown', 'unverifiable']) {
+    assert(typeof ZH[`community.merge.plan.${state}`] === 'string', `中文有 plan.${state}`)
+    assert(typeof EN[`community.merge.plan.${state}`] === 'string', `英文有 plan.${state}`)
+  }
+  // 面板给用户的说明里，三种"会自动做"的情形必须说清**是融合还是换根**
+  assert(ZH['community.merge.plan.same'].includes('融合'), 'same 的说明写了"融合"')
+  assert(ZH['community.merge.plan.other'].includes('备份'), 'other 的说明写了"先备份"')
+  assert(ZH['community.merge.plan.new'].includes('新的研究根'), 'new 的说明写了"新的研究根"')
+  // 判不出来的两种：**先给判断、等确认**
+  for (const state of ['unknown', 'unverifiable']) {
+    assert(ZH[`community.merge.plan.${state}`].includes('确认'), `${state} 的说明要求等确认`)
+  }
+  // 一行命令的说明里点明"先加载技能"
+  assert(ZH['community.merge.hint'].includes('sync'), '面板说明里点出 sync 技能')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -627,80 +576,56 @@ section('[6] 静态边界：插件不拦、只填不发送、标记不进上传'
   // ② 插件不解压：下载路径里没有任何解压/展开动作（提示词才是干活的地方）
   assert(!/extract|unzip|解压/.test(rpcSrc.slice(rpcSrc.indexOf("case 'mentor/download':"), rpcSrc.indexOf("case 'mentor/downloadProgress':")).replace(/\/\*[\s\S]*?\*\//g, '')),
     '② 宿主**不解压**（下载完磁盘上只有 ZIP；解压交给提示词里的 agent）')
-  // ③ 落点：`<工作区>/workspace`；备份是它的**兄弟**，不在 workspace 里面
+  /*
+   * ③ 落点与备份纪律现在写在**技能**里（`skills/sync.md`），插件侧只负责把 ZIP 落对地方。
+   * 这一段因此断言两件事：宿主仍然只把 ZIP 写到工作区根；技能里写清了落点与"备份是移动"。
+   */
   {
-    const ZH2 = (await import(join(PKG, 'src', 'client', 'i18n', 'zh.ts'))).zh
-    const t2 = (k, p) => {
-      const tpl = ZH2[k] ?? k
-      return p ? tpl.replace(/\{(\w+)\}/g, (m, n) => (n in p ? String(p[n]) : m)) : tpl
-    }
-    const args = {
-      t: t2,
-      projectTitle: 'Long-Horizon Scientific Decision (LH-RDP)',
-      zipPath: '<工作区>/Jev-Paper2.zip',
-      workspace: '<工作区>',
-      researchRoot: '<工作区>/workspace',
-      workspaceId: WS_A,
-      projectId: PROJECT_ID,
-      serverUrl: 'https://s',
-      source: 'owner',
-      layout: 'nested',
-      now: new Date('2026-10-11T03:21:44Z'),
-    }
-    for (const state of ['new', 'other', 'unknown']) {
-      const prompt = CLIENT.buildMergePrompt({ ...args, state })
-      assert(prompt.includes('解压到 <工作区>/workspace'), `③ ${state}：解压落点 = <工作区>/workspace`)
-      assert(!prompt.includes('mentors/'), `③ ${state}：提示词里**不出现** mentors/（落点是所选工作区下的 workspace/）`)
-    }
-    const otherPrompt = CLIENT.buildMergePrompt({ ...args, state: 'other' })
-    assert(otherPrompt.includes('先') || otherPrompt.includes('1. **备份**'), '③ other：**先**备份现有 workspace/')
-    assert(
-      otherPrompt.includes('把 <工作区>/workspace 整体移到**本工作区根下**的备份目录'),
-      '③ other：备份 = 把现有 workspace/ 整体移走（不是删）',
-    )
-    assert(otherPrompt.includes('<工作区>/workspace.backup') === false, '③ other：备份目录不是塞在 workspace/ 里面')
+    const skillSrc = readFileSync(join(PKG, 'skills', 'sync.md'), 'utf8')
+    assert(rpcSrc.includes('target.path'), '③ 宿主把 ZIP 写到**所选工作区根**（与 workspace/ 平级）')
+    assert(skillSrc.includes('<工作区>/workspace'), '③ 技能里写清了研究根就是 `<工作区>/workspace`')
+    assert(skillSrc.includes('移动，不是删除'), '③ 技能里写明备份是**移动**（可恢复），不是删除')
+    assert(skillSrc.includes('与研究对象同级'), '③ 备份目录与研究对象**同级**（不塞进研究根里面）')
+    assert(!skillSrc.includes('mentors/'), '③ 技能里不出现 mentors/（落点相对于所选工作区）')
   }
 
   /*
-   * ⑨ **先填提示词、再下载**（2026-10 用户实测反馈）
+   * ⑨ **先把同步命令填进输入框、再下载**（2026-10 用户实测反馈）
    *
    * "下载完之后对话框没有马上出现提示词，好像过一下才出现" —— 于是顺序倒过来：
-   * 点【下载】就用**预检**的值把提示词填进输入框（文件名是猜的 → 提示词自带"以实际为准"），
-   * 下载跑完再把判定/路径按落盘实测值核准；名字对不上时给一个"按实际文件名更新"的按钮。
+   * 点【下载】就拼好 `/research sync @<zip>` 填进输入框（**只有文件名是猜的**），
+   * 下载跑完按落盘实测值核准；真名不同时给一个"按实际文件名更新"的按钮。
+   *
+   * 名字猜错的代价比过去小得多：命令自己会校验 —— 文件不存在时它把**同前缀候选**列出来
+   * （见 `research/sync-request.ts` 的 `siblingCandidates`），所以正文里不必再写"以实际为准"。
    */
   {
-    const buildAt = settingsSrc.indexOf('const provisionalPrompt = buildPrompt(')
+    const provisionalAt = settingsSrc.indexOf('const provisionalPrompt =')
     const postAt = settingsSrc.indexOf("await post('mentor/download'")
-    assert(buildAt > 0 && postAt > 0 && buildAt < postAt, '⑨ 提示词在**发下载请求之前**就构建好（不再等落盘）')
-    // 两处调用：预检那一版传 true（文件名是猜的），落盘后那一版传 false（已确认）
-    assert(/zipNamePending: pendingName/.test(settingsSrc), '⑨ 构建函数把"是否猜名"透传给提示词')
     assert(
-      /buildPrompt\([\s\S]{0,400}?\btrue,\s*\)/.test(settingsSrc) &&
-        /buildPrompt\([\s\S]{0,400}?\bfalse,\s*\)/.test(settingsSrc),
-      '⑨ 预检那一版标了"文件名还是猜的"，落盘后那一版是确认版',
+      provisionalAt > 0 && postAt > 0 && provisionalAt < postAt,
+      '⑨ 同步命令在**发下载请求之前**就拼好（不再等落盘）',
+    )
+    assert(
+      settingsSrc.includes('syncCommandLine(`${provisionalDir}/${provisionalName}`)'),
+      '⑨ 预检那一版用**预检猜的文件名**拼命令',
+    )
+    assert(
+      settingsSrc.includes('syncCommandLine(`${v.dir}/${v.name}`)'),
+      '⑨ 落盘后那一版用**实际落盘的文件名**拼命令',
     )
     assert(/phase: 'pending'/.test(settingsSrc) && /phase: 'ready'/.test(settingsSrc),
       '⑨ 面板分 pending / ready 两相（下载中就显示"已填好，等落盘再发"）')
     assert(settingsSrc.includes("t('community.merge.pendingHint')"), '⑨ 下载中明说"已经填好了，等写完再发"')
-    assert(settingsSrc.includes("t('community.merge.downloadFailedHint')"), '⑨ 下载失败时提醒"先别发送输入框里那段"')
+    assert(settingsSrc.includes("t('community.merge.downloadFailedHint')"), '⑨ 下载失败时提醒"先别发送输入框里那条命令"')
     assert(/nameChanged/.test(settingsSrc) && /correctedPrompt/.test(settingsSrc),
       '⑨ 实际文件名与猜的不同 → 备一个更正版（点了才替换，不静默改输入框）')
-    assert(settingsSrc.includes("t('community.merge.refill')"), '⑨ 并给「按实际文件名更新提示词」按钮')
+    assert(settingsSrc.includes("t('community.merge.refill')"), '⑨ 并给「按实际文件名更新命令」按钮')
     // 下载进行中不许改目标：请求已经发出去了，改了只会让人以为换成功了
     assert(/disabled=\{busy\}/.test(settingsSrc), '⑨ 下载进行中工作区不可改（避免误以为换了目标）')
+    // 长提示词那套机器已经搬走：客户端不该再有它
+    assert(!/buildMergePrompt/.test(settingsSrc), '⑨ 客户端不再拼长提示词（流程在技能里）')
   }
-
-  /*
-   * ⑩ 默认选中**当前工作区**（用户 2026-10 要求）。
-   *
-   * 预选优先级：① 当前会话的工作区（唯一能把提示词填进输入框的目标）→ ② 这项工作已发布到的
-   * 那个工作区 → ③ 第一个。第一条必须排在前面 —— 否则默认落在一个"填不进去"的目标上，
-   * 用户会以为提示词功能坏了。
-   */
-  assert(
-    /const preferred = \[current, own, \.\.\.v\.items\]\.find/.test(settingsSrc),
-    '⑩ 预选第一顺位 = **当前会话的工作区**（默认选中它）',
-  )
 
   // ⑥ 协议号与历史
   assertEq(PROTO.HOST_PROTOCOL, 26, 'HOST_PROTOCOL = 26（v0.6.0 研究工作名）')

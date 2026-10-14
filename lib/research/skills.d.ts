@@ -60,6 +60,8 @@ export interface SkillDocument {
     /** 中文名（与 `code` 同表维护）—— 界面与导出展示用。 */
     label?: string;
     type: SkillType;
+    /** 研究方法 / 操作流程（见 {@link SkillKind}）。 */
+    kind: SkillKind;
     status: SkillStatus;
     version: string;
     /** 正文全部章节。 */
@@ -78,6 +80,19 @@ export interface SkillDocument {
 }
 /** 系统 Skill Library 的目录名（包内）。 */
 export declare const SKILLS_DIR = "skills";
+/**
+ * 技能种类。
+ *
+ * - `method`（缺省）：**研究方法** —— 进编号表（`CxxPyy`）、分类树、设置页定制层、导出文件；
+ * - `operation`：**操作流程**（如 `sync`：把下载下来的研究工作区快照同步进来）——
+ *   它以"agent 可按需加载的能力"存在，**不进**上述任何一处：
+ *   它不是研究方法，研究者既不需要定制它，也不该在导出方法文件时带上它。
+ *
+ * 由 frontmatter 的 `kind: operation` 声明（缺省 = `method`）。
+ */
+export type SkillKind = 'method' | 'operation';
+/** 是否是**研究方法**技能（`operation` 类不是，见 {@link SkillKind}）。 */
+export declare function isMethodSkill(doc: Pick<SkillDocument, 'kind'>): boolean;
 /** `## Purpose` 内容。 */
 export declare function skillPurpose(doc: SkillDocument): string;
 /** `## When to Use` 内容。 */
@@ -97,6 +112,7 @@ export declare function serializeSkillDocument(input: {
     name: string;
     category?: string;
     type?: SkillType;
+    kind?: SkillKind;
     status?: SkillStatus;
     version?: string;
     sections: Array<{

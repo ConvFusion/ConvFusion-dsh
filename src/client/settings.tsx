@@ -50,7 +50,8 @@ import {
   translateOr,
   type Translate,
 } from './i18n/index.js'
-import { buildMergePrompt, planKeyOf } from './merge-prompt.js'
+import { syncCommandLine } from './sync-command.js'
+import { publishActionPlan, type PublishActionItem } from './publish-actions.js'
 
 /* ════════════════════════════════════════════════════════════════════════
  * 跨插件服务的结构化契约（镜像，不 import）
@@ -766,10 +767,18 @@ function TabButton({
 function MiniTab({
   active,
   onClick,
+  count,
   children,
 }: {
   active: boolean
   onClick: () => void
+  /**
+   * 列表条数（显示成「我的 (2)」）。`null` = **还没读到** → 不显示数字。
+   *
+   * ⚠️ 与"0 条"必须分开：`0` 是一个**断言**（确实没有），`null` 是"还不知道"
+   * （未登录 / 还在读 / 读失败）。把后者画成 `(0)` 就是在用假信息掩盖状态。
+   */
+  count?: number | null
   children: React.ReactNode
 }): JSX.Element {
   return (
@@ -788,6 +797,7 @@ function MiniTab({
       }}
     >
       {children}
+      {typeof count === 'number' ? ` (${count})` : ''}
     </button>
   )
 }
@@ -1717,20 +1727,6 @@ function publishedIn(
   return w.published.find((r) => r.direction === direction) ?? null
 }
 
-/**
- * 【我的】里两个发布按钮的**上下顺序**（v0.6.0 用户拍板）：
- *
- * - 导师（`MENTOR`/`ADMIN`）→ 【寻找学生】在上（他这一版的主要动作是出题）；
- * - 其余（研究者 / 未登录 / 角色未知）→ 【寻找指导】在上。
- *
- * 两个按钮**都在**（双按钮），变的只是顺序 —— 所以这是一个纯粹的排序问题，
- * 不要写成"只显示一个"。
- */
-function publishButtonOrder(canMentor: boolean): [HostProjectDirection, HostProjectDirection] {
-  return canMentor
-    ? ['SEEK_STUDENT', 'SEEK_MENTOR']
-    : ['SEEK_MENTOR', 'SEEK_STUDENT']
-}
 
 /**
  * 发布对话框的数据（宿主 `work/uploadPlan` 的镜像）。
@@ -1861,6 +1857,211 @@ interface HostDownloadTarget {
  * `mentor` = 导师回传的那份。同一路径两侧并存、互不覆盖。
  */
 type HostFileSide = 'owner' | 'mentor'
+
+/**
+ * 发布按钮的**固定宽度**（px）。
+ *
+ * 为什么不用"字数碰巧一样"：同一行的按钮文案随角色与状态变
+ * （【寻找学生】/【寻找线上导师】/【更新研究工作】），导师那一档还要再接一个 ▾ ——
+ * 让它们各自按内容撑宽，同一列在不同角色、不同状态下就宽度不一
+ * （2026-10 用户实测：带 ▾ 的【寻找学生】明显更宽）。所以给一个固定宽度，
+ * 宽度一致由**布局**保证，而不是靠文案长度。
+ *
+ * 最长文案是 6 个汉字（【寻找优秀学生】/【寻找线上导师】/【更新研究工作】），
+ * 12.5px × 600 字重下约 80px，加内边距 ≈ 96px；带下拉时还要腾出箭头那一段
+ * （约 22px）→ 取 128 留出余量，避免文案贴边或折行。
+ */
+const PUBLISH_BUTTON_WIDTH = 128
+
+/**
+ * 发布动作按钮：**一个主按钮**，次要动作收进拆分按钮的下拉里。
+ *
+ * ```text
+ * 研究者    → 【寻找指导】
+ * 导师      → 【寻找学生】 ▾（下拉里有【寻找指导】）
+ * 已发布    → 【更新文件】
+ * ```
+ *
+ * 为什么做成"一个按钮 + 下拉"：两个方向是**两种身份**（学生发布自己的工作 / 导师发布一个
+ * 选题），一个工作只属于一个；而导师的【寻找指导】极少使用 —— 把它留在主线上会让
+ * 导师每次都要在两行按钮里挑。谁是主按钮由 {@link publishActionPlan} 决定（可自检）。
+ */
+function PublishButton({
+  t,
+  item,
+  more,
+  busyHere,
+  busyLabel,
+  disabled,
+  onPick,
+}: {
+  t: Translate
+  item: PublishActionItem
+  more: readonly PublishActionItem[]
+  busyHere: boolean
+  /** 发布中的文案（含百分比）；不在忙时为 null。 */
+  busyLabel: string | null
+  disabled: boolean
+  onPick: (direction: HostProjectDirection) => void
+}): JSX.Element {
+  const [open, setOpen] = React.useState(false)
+  /** 主按钮文案（含方向与"首次发布 / 更新"的区别）。 */
+  const label = (it: PublishActionItem): string =>
+    it.kind === 'update'
+      ? t('community.action.republish')
+      : it.direction === 'SEEK_STUDENT'
+        ? t('community.action.seekStudent')
+        : t('community.action.seekMentor')
+  /** 提示语说清"发到哪一类列表"（同一条产品承诺：研究方法不会被上传）。 */
+  const tip = (it: PublishActionItem): string =>
+    it.kind === 'update'
+      ? t(it.direction === 'SEEK_STUDENT' ? 'community.tip.republishTopic' : 'community.tip.republish')
+      : t(it.direction === 'SEEK_STUDENT' ? 'community.tip.publishTopic' : 'community.tip.publish')
+
+  // 点空白处收起下拉（否则它只能靠再点一次箭头关掉）
+  React.useEffect(() => {
+    if (!open) return
+    const close = (): void => setOpen(false)
+    document.addEventListener('pointerdown', close)
+    return () => document.removeEventListener('pointerdown', close)
+  }, [open])
+
+  /** 主按钮：单独用时就是整宽；带下拉时占满固定宽度减去箭头那一小段。 */
+  const main = (withCaret: boolean): JSX.Element => (
+    <button
+      type="button"
+      style={{
+        ...S.ghostBtn,
+        ...(withCaret
+          ? { flex: '1 1 auto', padding: '6px 8px', borderTopRightRadius: 0, borderBottomRightRadius: 0 }
+          : { width: PUBLISH_BUTTON_WIDTH }),
+      }}
+      disabled={disabled}
+      title={tip(item)}
+      onClick={() => onPick(item.direction)}
+    >
+      {busyHere ? (busyLabel ?? t('community.action.loading')) : label(item)}
+    </button>
+  )
+
+  if (more.length === 0) return main(false)
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'stretch',
+        width: PUBLISH_BUTTON_WIDTH,
+      }}
+    >
+      {main(true)}
+      <button
+        type="button"
+        style={{
+          ...S.ghostBtn,
+          padding: '6px 6px',
+          borderLeft: 'none',
+          borderTopLeftRadius: 0,
+          borderBottomLeftRadius: 0,
+        }}
+        disabled={disabled}
+        title={t('community.tip.morePublish')}
+        aria-label={t('community.tip.morePublish')}
+        aria-expanded={open}
+        onClick={(e) => {
+          // 别让 document 的 pointerdown 立刻把刚打开的下拉关掉
+          e.stopPropagation()
+          setOpen((v) => !v)
+        }}
+      >
+        ▾
+      </button>
+      {open ? (
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            right: 0,
+            marginTop: 4,
+            zIndex: 30,
+            display: 'flex',
+            flexDirection: 'column',
+            padding: 4,
+            minWidth: 132,
+            borderRadius: 8,
+            border: '1px solid var(--dsw-alias-border-l2)',
+            background: 'var(--dsw-alias-bg-layer-1)',
+            boxShadow: '0 6px 20px rgba(0,0,0,.16)',
+          }}
+        >
+          {more.map((it) => (
+            <button
+              key={it.direction}
+              type="button"
+              style={{ ...S.ghostBtn, border: 'none', textAlign: 'left', padding: '6px 8px' }}
+              disabled={disabled}
+              title={tip(it)}
+              onClick={() => {
+                setOpen(false)
+                onPick(it.direction)
+              }}
+            >
+              {label(it)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * 传输进度条（**两条上传路径共用**：发布研究工作、导师回传文件）。
+ *
+ * 抽成组件的理由不是省代码，而是**两条路径必须显示同一根条** ——
+ * 各画一遍迟早分叉：2026-10 实测【我的】→ 发布带附件的工作时**根本没有进度**
+ * （只有导师回传那条画了），几十 MB 下用户看到的就是一句「发布中…」。
+ */
+function TransferProgress({
+  t,
+  busy,
+  progress,
+}: {
+  t: Translate
+  busy: boolean
+  progress: HostUploadProgress | null
+}): JSX.Element | null {
+  if (!busy) return null
+  const pct =
+    progress && progress.totalBytes > 0
+      ? Math.min(100, Math.round((progress.sentBytes / progress.totalBytes) * 100))
+      : null
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <div style={S.hint}>
+        {progress && progress.totalFiles > 0
+          ? t('community.exchange.uploading', {
+              done: progress.doneFiles,
+              files: progress.totalFiles,
+              sent: formatBytes(progress.sentBytes),
+              total: formatBytes(progress.totalBytes),
+            })
+          : t('community.action.loading')}
+      </div>
+      <div style={{ height: 4, borderRadius: 2, background: 'var(--dsw-alias-border-l1)', overflow: 'hidden' }}>
+        <div
+          style={{
+            height: '100%',
+            width: `${pct ?? 0}%`,
+            background: 'var(--dsw-alias-brand-primary, #4a43ea)',
+            transition: 'width 400ms linear',
+          }}
+        />
+      </div>
+    </div>
+  )
+}
 
 /** 回传进度（宿主 `mentor/uploadProgress` 的镜像）。 */
 interface HostUploadProgress {
@@ -2438,6 +2639,7 @@ function PublishDialog({
   remember,
   expanded,
   busy,
+  progress,
   onToggleCategory,
   onToggleFile,
   onToggleExpand,
@@ -2451,6 +2653,8 @@ function PublishDialog({
   remember: boolean
   expanded: ReadonlySet<string>
   busy: boolean
+  /** 上传进度（宿主按批上报）——附件大时这一行就是"慢 ≠ 死"的唯一判据。 */
+  progress: HostUploadProgress | null
   onToggleCategory: (categoryId: string, files: string[], next: boolean) => void
   onToggleFile: (relPath: string, next: boolean) => void
   onToggleExpand: (categoryId: string) => void
@@ -2574,6 +2778,10 @@ function PublishDialog({
             >
               {busy ? t('community.action.publishing') : t('community.publish.confirm')}
             </button>
+            {/* 发布中：与导师回传同一根进度条（附件阶段是几十 MB 的一串请求） */}
+            <div style={{ flexBasis: '100%' }}>
+              <TransferProgress t={t} busy={busy} progress={progress} />
+            </div>
           </div>
         </div>
       </div>
@@ -3863,37 +4071,7 @@ function UploadDialog({
           ) : null}
 
           {/* 上传中：真实进度（宿主按批上报；慢链路下界面必须动） */}
-          {busy ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <div style={S.hint}>
-                {progress && progress.totalFiles > 0
-                  ? t('community.exchange.uploading', {
-                      done: progress.doneFiles,
-                      files: progress.totalFiles,
-                      sent: formatBytes(progress.sentBytes),
-                      total: formatBytes(progress.totalBytes),
-                    })
-                  : t('community.action.loading')}
-              </div>
-              <div
-                style={{
-                  height: 4,
-                  borderRadius: 2,
-                  background: 'var(--dsw-alias-border-l1)',
-                  overflow: 'hidden',
-                }}
-              >
-                <div
-                  style={{
-                    height: '100%',
-                    width: `${pct ?? 0}%`,
-                    background: 'var(--dsw-alias-brand-primary, #4a43ea)',
-                    transition: 'width 400ms linear',
-                  }}
-                />
-              </div>
-            </div>
-          ) : null}
+          <TransferProgress t={t} busy={busy} progress={progress} />
 
           {notice ? (
             <div
@@ -4180,6 +4358,8 @@ export function CommunityTab({
    * 两个按钮共用一个工作区，只记 id 的话两个按钮会同时显示「发布中…」，
    * 用户看不出点的是哪一个（而发布方向恰恰是这一版的核心信息）。
    */
+  /** 发布进度（宿主 `mentor/uploadProgress`；与导师回传同一根进度条）。 */
+  const [publishProgress, setPublishProgress] = React.useState<HostUploadProgress | null>(null)
   const [publishing, setPublishing] = React.useState<
     { id: string; direction: HostProjectDirection } | null
   >(null)
@@ -5041,16 +5221,16 @@ export function CommunityTab({
     setDownloadReceived(null)
 
     /*
-     * ═══ 第一件事：**先把提示词填进输入框**（2026-10 用户要求）═══
+     * ═══ 第一件事：**先把同步命令填进输入框**（2026-10 用户要求）═══
      *
-     * 下载一份快照要几秒到两分钟，而提示词只是一段"等下要用的文本" —— 没必要让用户干等到
-     * 落盘完成才看见它。所以这里**在下载之前**就用**预检**的值构建一版并填好：
-     * 工作区 / 研究根 / 判定 / 标识在预检时都已经知道，**只有文件名是猜的**
-     * （真正以服务器落盘的名字为准，也可能因为同名而带上 `-2`）——
-     * 所以这一版的提示词里附一句"以实际落盘的名字为准"，并在下载完成后提供更正版。
+     * 下载一份快照要几秒到两分钟 —— 没必要让用户干等到落盘完成才看见要发的那一行。
+     * 所以这里**在下载之前**就把 `/research sync @<zip>` 填好：**只有文件名是猜的**
+     * （服务器才是命名的权威，同名还会加 `-2`）。
+     *
+     * 名字猜错的代价很小：命令自己会校验——文件不存在时它会把同前缀的候选列出来。
+     * 所以这里不再往文本里塞"以实际为准"的说明，落盘后真名不同时给一个更正按钮即可。
      */
     const provisionalDir = chosen?.path ?? ''
-    const provisionalRoot = chosenTarget?.researchRoot ?? `${provisionalDir}/workspace`
     const provisionalState = mergeStateOf(chosenTarget?.status)
     const provisionalName = target.fileName
     /*
@@ -5064,41 +5244,7 @@ export function CommunityTab({
       : !session
         ? t('community.merge.noComposer')
         : t('community.merge.otherWorkspace', { dir: provisionalDir })
-    const buildPrompt = (
-      dir: string,
-      root: string,
-      name: string,
-      status: HostDownloadTarget['status'] | undefined,
-      layout: HostDownloadTarget['layout'] | null | undefined,
-      workspaceId: string | null,
-      pendingName: boolean,
-    ): string =>
-      dir
-        ? buildMergePrompt({
-            t,
-            // 只用于**建议**备份目录名（真正取缩写的是 DSH，它读得到工作区里的 project.md）
-            projectTitle: target.proposal.projectTitle ?? '',
-            zipPath: `${dir}/${name}`,
-            workspace: dir,
-            researchRoot: root,
-            state: mergeStateOf(status),
-            layout: layout ?? null,
-            workspaceId,
-            projectId,
-            serverUrl: state?.serverUrl ?? '',
-            source: target.source,
-            zipNamePending: pendingName,
-          })
-        : ''
-    const provisionalPrompt = buildPrompt(
-      provisionalDir,
-      provisionalRoot,
-      provisionalName,
-      chosenTarget?.status,
-      chosenTarget?.layout,
-      target.remoteWorkspaceId,
-      true,
-    )
+    const provisionalPrompt = provisionalDir ? syncCommandLine(`${provisionalDir}/${provisionalName}`) : ''
     /*
      * 输入框空着就直接填好（用户少一步）；里面已经有内容就**绝不动它** ——
      * 只把提示词备着，等用户点「填入输入框」才替换（那句提示会说"会替换"）。
@@ -5114,7 +5260,7 @@ export function CommunityTab({
               phase: 'pending',
               dir: provisionalDir,
               name: provisionalName,
-              plan: t(`community.merge.plan.${planKeyOf(provisionalState)}`),
+              plan: t(`community.merge.plan.${provisionalState}`),
               prompt: provisionalPrompt,
               correctedPrompt: null,
               canFill,
@@ -5153,6 +5299,8 @@ export function CommunityTab({
         projectId,
         workspaceId: target.selection,
         prefix: downloadPrefix(target.proposal),
+        // 便签用它做展示（`/research sync` 的交接文本里给出"这是哪个项目"）
+        projectTitle: target.proposal.projectTitle ?? '',
         // 与预检**同一侧**：否则会出现"预检说有 3 个文件、点下去 404"
         source: target.source,
         // v23：预检时那一侧的标识。宿主据此**在落盘前再判一次**，并用归档响应头复核。
@@ -5198,19 +5346,10 @@ export function CommunityTab({
     }
     /*
      * 下载成功**不等于**事情做完：ZIP 还在工作区根上躺着，要解压并和本地内容**融合**
-     * 才算研究前进了一步。那一步交给用户会话里的 agent —— 提示词上面**已经填好了**，
-     * 这里只做两件事：把判定/路径**按落盘实测值核准**，以及文件名对不上时给一个更正版。
+     * 才算研究前进了一步。那一步交给用户会话里的 agent —— 那一行命令上面**已经填好了**，
+     * 这里只做一件事：文件名与预检猜的不同时，给一个"按实际文件名更新"的更正版。
      */
-    const finalRoot = v.researchRoot ?? `${v.dir}/workspace`
-    const correctedPrompt = buildPrompt(
-      v.dir,
-      finalRoot,
-      v.name,
-      v.workspaceStatus,
-      v.workspaceLayout ?? chosenTargetLayout(v.workspaceStatus, finalRoot, v.dir),
-      v.workspaceId ?? target.remoteWorkspaceId,
-      false,
-    )
+    const correctedPrompt = syncCommandLine(`${v.dir}/${v.name}`)
     const nameChanged = Boolean(correctedPrompt) && v.name !== provisionalName
     setDownload((prev) =>
       prev
@@ -5221,7 +5360,7 @@ export function CommunityTab({
               phase: 'ready',
               dir: v.dir,
               name: v.name,
-              plan: t(`community.merge.plan.${planKeyOf(mergeStateOf(v.workspaceStatus))}`),
+              plan: t(`community.merge.plan.${mergeStateOf(v.workspaceStatus)}`),
               // 没变就是同一个文本；变了则保留"已填进去的那一版"，更正版放另一栏等用户点
               prompt: nameChanged ? provisionalPrompt : correctedPrompt,
               correctedPrompt: nameChanged ? correctedPrompt : null,
@@ -5365,7 +5504,32 @@ export function CommunityTab({
   ): Promise<void> => {
     setPublishing({ id: w.id, direction })
     setPublishNotice(null)
-    const res = await post('work/publish', { id: w.id, direction, selection, remember })
+    /*
+     * 上传期间按秒问进度（与导师回传同一条端点、同一根进度条）。
+     *
+     * 附件阶段是一串请求，`work/publish` 要等全部批次做完才返回 —— 没有这个轮询，
+     * 【我的】里发布一个带附件的工作时界面上只有按钮的「发布中…」，慢与死分不出来。
+     * 轮询失败不打断发布（那只是好看，不能把主流程弄挂）。
+     */
+    setPublishProgress(null)
+    let publishTimer: ReturnType<typeof setInterval> | undefined
+    const stopPublishPoll = (): void => {
+      if (publishTimer !== undefined) clearInterval(publishTimer)
+      publishTimer = undefined
+    }
+    publishTimer = setInterval(() => {
+      void post('mentor/uploadProgress', { projectId: w.id }).then((p) => {
+        if (!p.ok) return
+        const v = p.value as HostUploadProgress | undefined
+        if (v && typeof v.doneFiles === 'number') setPublishProgress(v)
+      })
+    }, 1000)
+    let res: Awaited<ReturnType<typeof post>>
+    try {
+      res = await post('work/publish', { id: w.id, direction, selection, remember })
+    } finally {
+      stopPublishPoll()
+    }
     setPublishing(null)
     if (!res.ok) {
       const staleHost = res.error?.code === 'unknown-endpoint'
@@ -6155,6 +6319,7 @@ export function CommunityTab({
           remember={dialog.remember}
           expanded={dialog.expanded}
           busy={publishing !== null}
+          progress={publishProgress}
           onToggleCategory={(categoryId, files, next) =>
             setDialog((d) => {
               if (!d) return d
@@ -6449,19 +6614,24 @@ export function CommunityTab({
         <div style={S.cardHead}>
           {/* 卡片标题：只说"这一片是什么"，视图的名字交给后面的 Tab */}
           <span style={{ marginRight: 4 }}>{t('community.work.title')}</span>
-          <MiniTab active={workTab === 'mine'} onClick={() => setWorkTab('mine')}>
+          {/*
+            Tab 上的条数取自**同一个 state**，所以它和点进去看到的行数永远一致
+            （`trackItems` 是 `proposals` 的 1:1 映射，`mine`/`works`/`joinable` 直接渲染）。
+            未读到 → `null` → 不显示数字（不是 `(0)`）。
+          */}
+          <MiniTab active={workTab === 'mine'} count={mine?.length ?? null} onClick={() => setWorkTab('mine')}>
             {t('community.tab.mine')}
           </MiniTab>
           {canMentor ? (
-            <MiniTab active={workTab === 'mentor'} onClick={() => setWorkTab('mentor')}>
+            <MiniTab active={workTab === 'mentor'} count={works?.length ?? null} onClick={() => setWorkTab('mentor')}>
               {t('community.tab.mentor')}
             </MiniTab>
           ) : null}
-          <MiniTab active={workTab === 'joinable'} onClick={() => setWorkTab('joinable')}>
+          <MiniTab active={workTab === 'joinable'} count={joinable?.length ?? null} onClick={() => setWorkTab('joinable')}>
             {t('community.tab.joinable')}
           </MiniTab>
           {/* 「指导中」= 我发起的 + 我收到的指导提案（发起 / 接受 / 拒绝都在这里） */}
-          <MiniTab active={workTab === 'mentorship'} onClick={() => setWorkTab('mentorship')}>
+          <MiniTab active={workTab === 'mentorship'} count={proposals?.length ?? null} onClick={() => setWorkTab('mentorship')}>
             {t('community.tab.mentorship')}
           </MiniTab>
           <span style={{ flex: '1 1 auto' }} />
@@ -6900,21 +7070,29 @@ export function CommunityTab({
                         </div>
                       </div>
                       {/*
-                       * **两个发布按钮**（v0.6.0 用户拍板）：【寻找指导】与【寻找学生】
-                       * **上下排列**，顺序由角色定（导师 → 寻找学生在上）。
+                       * **发布动作随角色与发布状态收敛成"一个按钮"**（2026-10 用户拍板）：
                        *
-                       * 两个方向是服务器上**两个不同的项目**：一个工作区可以同时
-                       * "求指导"并"招学生"，各自的发布状态、附件指纹互不影响，
-                       * 所以这里对每个方向**各渲染一次**，状态也各读各的
-                       * （`publishedIn`）。
+                       * ```text
+                       * 研究者（非导师）  → 【寻找指导】
+                       * 导师              → 【寻找学生】 ▾（下拉里收着【寻找指导】）
+                       * 已发布（任一方向） → 【更新文件】
+                       * ```
                        *
-                       * 「已在网络中」徽章只出现一次（任一方向已发布）—— 两个按钮
-                       * 各自的"更新"文案已经说清是哪一个方向了。
+                       * 三个理由：
+                       *   ① 一个研究工作**只属于一个方向**（要么导师出题，要么学生发布自己的工作），
+                       *      发布过一种就不可能再发另一种（宿主侧换方向直接拒绝：`already-published`）；
+                       *   ② 研究者本来就不该看到"招学生"（那是导师的动作）；
+                       *   ③ 导师的【寻找指导】**极少使用**，留在主线上会让导师每次都要在两行里挑 ——
+                       *      收进拆分按钮的下拉，主按钮就是他的主要动作。
+                       * 规则本身在 `research/publish-actions.ts`（纯函数，自检直接调用它）。
+                       *
+                       * 「已在网络中」徽章与按钮**垂直居中**对齐（`alignItems: 'center'`）——
+                       * 只有一个按钮了，顶部对齐会显得徽章飘在按钮上方。
                        */}
                       <div
                         style={{
                           display: 'flex',
-                          alignItems: 'flex-start',
+                          alignItems: 'center',
                           gap: 6,
                           flex: '0 0 auto',
                         }}
@@ -6922,49 +7100,37 @@ export function CommunityTab({
                         {w.published.length > 0 ? (
                           <Badge tone="success">{t('community.badge.inNetwork')}</Badge>
                         ) : null}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'stretch' }}>
-                          {publishButtonOrder(canMentor).map((direction) => {
-                            const published = publishedIn(w, direction)
-                            const busyHere =
-                              (publishing?.id === w.id && publishing.direction === direction) ||
-                              (dialogLoading?.id === w.id && dialogLoading.direction === direction)
-                            return (
-                              <button
-                                key={direction}
-                                type="button"
-                                style={{
-                                  ...S.ghostBtn,
-                                  opacity: account && publishing === null && dialogLoading === null ? 1 : busyHere ? 1 : 0.55,
-                                }}
-                                disabled={!account || publishing !== null || dialogLoading !== null}
-                                title={
-                                  // 两个方向的提示语必须不同：都要说清"会传到哪一类列表"，
-                                  // 以及"研究方法不会被上传"这条产品承诺（同 publishTip）。
-                                  account
-                                    ? t(
-                                        direction === 'SEEK_STUDENT'
-                                          ? 'community.tip.publishTopic'
-                                          : 'community.tip.publish',
-                                      )
-                                    : t('community.tip.publishNeedSignIn')
-                                }
-                                onClick={() => void openPublish(w, direction)}
-                              >
-                                {busyHere
-                                  ? publishing?.id === w.id
-                                    ? t('community.action.publishing')
-                                    : t('community.action.loading')
-                                  : direction === 'SEEK_STUDENT'
-                                    ? published
-                                      ? t('community.action.republishStudent')
-                                      : t('community.action.seekStudent')
-                                    : published
-                                      ? t('community.action.republishMentor')
-                                      : t('community.action.seekMentor')}
-                              </button>
-                            )
-                          })}
-                        </div>
+                        {(() => {
+                          const plan = publishActionPlan(
+                            canMentor,
+                            w.published.map((r) => r.direction),
+                          )
+                          /** 这个工作正在发布/取计划（只有一个按钮，所以不再按方向分）。 */
+                          const busyHere = publishing?.id === w.id || dialogLoading?.id === w.id
+                          const busyLabel =
+                            publishing?.id === w.id
+                              ? /* 无对话框的「更新文件」路径也要看得见进度（附件仍在传） */
+                                `${t('community.action.publishing')}${
+                                  publishProgress && publishProgress.totalBytes > 0
+                                    ? ` ${Math.min(100, Math.round((publishProgress.sentBytes / publishProgress.totalBytes) * 100))}%`
+                                    : ''
+                                }`
+                              : t('community.action.loading')
+                          const disabled = !account || publishing !== null || dialogLoading !== null
+                          return (
+                            <div style={{ opacity: account && !busyHere && disabled ? 0.55 : 1 }}>
+                              <PublishButton
+                                t={t}
+                                item={plan.primary}
+                                more={plan.more}
+                                busyHere={busyHere}
+                                busyLabel={busyLabel}
+                                disabled={disabled}
+                                onPick={(direction) => void openPublish(w, direction)}
+                              />
+                            </div>
+                          )
+                        })()}
                       </div>
                     </div>
                   </div>

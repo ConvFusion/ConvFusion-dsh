@@ -58,6 +58,7 @@ import {
 import { createFileCustomizationStore } from './research/skill-customization.js'
 import { createFilePublishedStore } from './research/published-store.js'
 import { createFileWorkIdentityStore } from './research/work-identity.js'
+import { createFileSyncNoteStore } from './research/sync-note.js'
 import { createFilePaidBriefStore } from './research/paid-briefs.js'
 import { createFileSyncWatermarkStore } from './research/sync-watermarks.js'
 import { systemLibraryStatus } from './research/skill-customization.js'
@@ -269,6 +270,14 @@ export function apply(ctx: Context, liveConfig: Partial<LiveConfig> = {}): void 
   const workIdentityStore = createFileWorkIdentityStore(() =>
     join(dirname(resolveCustomizationPath(currentConfig())), 'work-identities.json'),
   )
+  /*
+   * 「待同步便签」：下载成功时记下"这个 ZIP 是服务器上的哪项研究"，
+   * `/research sync @这个.zip` 据此判定（同一项 → 融合；另一项 → 先备份再换）。
+   * 与身份注册表同目录 —— 都是"本机事实"，不进研究工作区。
+   */
+  const syncNoteStore = createFileSyncNoteStore(() =>
+    join(dirname(resolveCustomizationPath(currentConfig())), 'pending-syncs.json'),
+  )
   ctx.logger?.info(
     `[convfusion] user customizations: ${customizationStore.description}` +
       ` · system skills: ${systemLibraryStatus().skillCount}`,
@@ -380,7 +389,14 @@ export function apply(ctx: Context, liveConfig: Partial<LiveConfig> = {}): void 
   ctx.inject(['commands'], (cmdCtx) => {
     const disposers = [
       // 传定制 store：`/research 导出研究方法` 要导**生效版本**（基线 + 用户定制）
-      ...(defineResearchCommand(cmdCtx, resolveCurrentWorkspace, customizationStore) ?? []),
+      ...(defineResearchCommand(
+        cmdCtx,
+        resolveCurrentWorkspace,
+        customizationStore,
+        // `/research sync @某.zip` 要用它们：便签（服务器标识）+ 本机标识注册表
+        syncNoteStore,
+        workIdentityStore,
+      ) ?? []),
     ]
     if (disposers.length === 0) return
     cmdCtx.effect(() => () => {
@@ -556,6 +572,8 @@ export function apply(ctx: Context, liveConfig: Partial<LiveConfig> = {}): void 
       syncStore: syncWatermarkStore,
       // 目标工作区的身份（判"同一项研究 / 另一项研究"，见 research/work-identity.ts）
       workIdentity: workIdentityStore,
+      // 下载便签：写下来，之后 `/research sync @这个.zip` 才不用猜是哪项研究
+      syncNotes: syncNoteStore,
       // 注册表读取放在这里（入口持有 ctx），过滤与进度计算在 settings-rpc 里
       /**
        * 读宿主的工作区注册表并归一成纯数据（**与 dsh-additive 的 `listWorkspaces` 同款做法**：

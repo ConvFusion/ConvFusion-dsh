@@ -76,6 +76,7 @@ import type { SkillCustomizationStore } from './research/skill-customization.js'
 import type { PaidBriefStore } from './research/paid-briefs.js';
 import { type WorkIdentityStore, type WorkspaceStatus } from './research/work-identity.js';
 import type { SyncWatermarkStore } from './research/sync-watermarks.js';
+import type { SyncNoteStore } from './research/sync-note.js';
 import type { Config } from './config.js';
 import { type SecretField } from './config.js';
 import { type FetchLike, type ProjectDirection, type TokenBalance } from './server-client.js';
@@ -552,6 +553,13 @@ export interface SettingsRpcDeps {
      * 缺省 = 没有第二级记录（只剩工作区内标记这一级）。
      */
     workIdentity?: WorkIdentityStore;
+    /**
+     * 下载便签：记下"这个 ZIP 是服务器上的哪项研究"。
+     *
+     * `/research sync @这个.zip` 靠它判定"同一项研究 → 融合 / 另一项 → 先备份再换"。
+     * 没配也能用：那时判定退化为 `unverifiable`（技能里"先盘查再判断"那一支）。
+     */
+    syncNotes?: SyncNoteStore;
 }
 /**
  * 比较两个版本串（容忍 `v` 前缀与 `-rc.x` 后缀）：按点分数字段比较，

@@ -32,7 +32,7 @@
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { listSystemSkills, type SkillDocument } from './skills.js'
+import { isMethodSkill, listSystemSkills, type SkillDocument } from './skills.js'
 import { CATEGORY_CODES, categoryCodeInfo } from './skill-codes.js'
 import {
   CUSTOMIZABLE_SECTIONS,
@@ -137,7 +137,9 @@ function renderSkillBody(
  */
 export function buildMethodsExport(opts: MethodsExportOptions = {}): MethodsExportResult {
   const full = opts.full === true
-  const docs = listSystemSkills() // 已按 CxxPyy 排序
+  // 已按 CxxPyy 排序；**只导出研究方法** —— 操作类技能（`kind: 'operation'`）不是方法，
+  // 混进导出文件会让研究者的"方法集"里多出一条插件操作说明。
+  const docs = listSystemSkills().filter(isMethodSkill)
   const customizations = opts.store?.load() ?? {}
   const groups = groupByCategory(docs)
   const now = opts.now ?? new Date()

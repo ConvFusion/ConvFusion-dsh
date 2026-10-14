@@ -45,6 +45,8 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { SkillCustomizationStore } from './skill-customization.js';
+import type { SyncNoteStore } from './sync-note.js';
+import type { WorkIdentityStore } from './work-identity.js';
 /** 品牌展示。 */
 export declare const RESEARCH_LABEL = "/research";
 /**
@@ -60,5 +62,9 @@ export declare function actionConstructionStatus(workspace: string): string[];
  * @param customizationStore 用户定制来源：导出研究方法时要导**生效版本**（基线 + 定制）
  * @returns disposer 数组（命令运行时缺失时返回 `null`，不影响插件其余功能）。
  */
-export declare function defineResearchCommand(ctx: Context, resolveCurrentWorkspace: () => string, customizationStore?: SkillCustomizationStore): (() => void)[] | null;
+export declare function defineResearchCommand(ctx: Context, resolveCurrentWorkspace: () => string, customizationStore?: SkillCustomizationStore, 
+/** 下载便签（判定用）：`/research sync` 靠它知道"这个 ZIP 是服务器上的哪项研究"。 */
+syncNoteStore?: SyncNoteStore, 
+/** 本机工作标识注册表（解压前也读得到身份）。 */
+workIdentity?: WorkIdentityStore): (() => void)[] | null;
 //# sourceMappingURL=commands.d.ts.map

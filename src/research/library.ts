@@ -28,7 +28,7 @@ import { SYSTEM_CATEGORIES, categoryGroup, categoryName, systemGroups } from './
 import type { SkillCustomizationStore, SkillCustomizations } from './skill-customization.js'
 import { composeSkillContent, createMemoryCustomizationStore } from './skill-customization.js'
 import type { SkillDocument, SkillType } from './skills.js'
-import { filterSkills, listSystemSkills, skillMethod, skillPurpose, skillWhenToUse } from './skills.js'
+import { filterSkills, isMethodSkill, listSystemSkills, skillMethod, skillPurpose, skillWhenToUse } from './skills.js'
 
 /* ════════════════════════════════════════════════════════════════════════
  * 视图
@@ -92,7 +92,12 @@ export function effectiveSkillContent(doc: SkillDocument, customizations: SkillC
  */
 export function loadSkillLibrary(workspace: string, store?: SkillCustomizationStore): SkillLibraryView {
   const customizations = store?.load() ?? {}
-  const docs = listSystemSkills()
+  /*
+   * 只列**研究方法**：操作类技能（`kind: 'operation'`，如把下载的快照同步进来的 `sync`）
+   * 不是研究方法 —— 设置页不该让用户去"定制"它，命令行也不需要它出现在方法选择器里。
+   * 它仍然会在**技能通道**里（`createConvFusionSkillProvider`）供 agent 按需加载。
+   */
+  const docs = listSystemSkills().filter(isMethodSkill)
 
   const entries: SkillEntry[] = docs.map((document) => {
     const overrides = customizations[document.id] ?? {}

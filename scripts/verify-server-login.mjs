@@ -1658,7 +1658,13 @@ section('[6e] 发布本机研究（work/publish）')
   const K = fs.realpathSync(root)
 
   /** 一个记账用的假服务器：按顺序记下 create / state / publish。 */
-  const makePublisher = ({ conflictOnce = false, failPublish = false, serverVersion = null } = {}) => {
+  const makePublisher = ({
+    conflictOnce = false,
+    failPublish = false,
+    serverVersion = null,
+    /* 附件请求**进行中**的钩子：测试据此在那一刻读进度端点（模拟界面按秒轮询）。 */
+    onFilesPost = null,
+  } = {}) => {
     const calls = []
     // `serverVersion` = 服务器上已有的版本（模拟"别的客户端已经传过"）
     let stateVersion = serverVersion
@@ -1690,6 +1696,7 @@ section('[6e] 发布本机研究（work/publish）')
         // 附件端点（发布现在也会传附件）；返回与请求对齐的元数据
         const form = init.body instanceof FormData ? init.body : undefined
         const relPaths = form ? form.getAll('relative_paths') : []
+        if (onFilesPost) await onFilesPost({ relPaths })
         return json(201, relPaths.map((rp, i) => ({ id: `f${i}`, relative_path: rp, size: 4, sha256: `sha256:${i}` })))
       }
       if (url.endsWith('/projects/srv-project-1/publish')) {
@@ -1759,6 +1766,38 @@ section('[6e] 发布本机研究（work/publish）')
           kinds.indexOf('POST /projects/srv-project-1/publish'),
       '附件在"传状态之后、发布之前"上传（服务器要求 state_version 存在）',
     )
+
+    /*
+     * ── 发布也**上报进度**（与导师回传同一根进度条）──
+     *
+     * 2026-10 用户实测：【我的】→ 发布一个带附件的工作时界面上**没有任何进度条**，
+     * 几十 MB 下只有按钮上的「发布中…」——慢与死分不出来。
+     * 这里在**附件请求进行中**那一刻读进度端点，模拟界面按秒轮询看到的东西。
+     */
+    {
+      const seen = []
+      let host = null
+      const progressServer = makePublisher({
+        onFilesPost: async () => {
+          seen.push(await host('mentor/uploadProgress', { projectId: 'ws-pub' }))
+        },
+      })
+      host = makePubHost(progressServer, PUB.createMemoryPublishedStore())
+      const published = await host('work/publish', { id: 'ws-pub' })
+      assert(published.ok, '带进度上报的发布成功')
+      assert(seen.length > 0, '附件请求进行中能读到进度端点')
+      const mid = seen[0].value
+      assertEq(mid.running, true, '附件上传中：running = true（界面据此显示进度条）')
+      assert(mid.totalFiles > 0, `进度里有**总数**（界面能显示 0/N 与百分比；实测 ${mid.totalFiles} 个文件）`)
+      assert(mid.totalBytes > 0, `进度里有**总字节**（百分比的分母；实测 ${mid.totalBytes} B）`)
+      // 认领键（服务器项目 id / 本机工作区 id）是宿主内部的东西，不该出现在界面契约里
+      assertEq('keys' in mid, false, '回给界面的进度里没有内部认领键')
+      const after = await host('mentor/uploadProgress', { projectId: 'ws-pub' })
+      assertEq(after.value.running, false, '传完 → running = false（进度条不再"永远在跑"）')
+      // 别的项目问同一个端点：回 0/未在跑，不能把这次上传的数字当成它的
+      const other = await host('mentor/uploadProgress', { projectId: 'ws-other' })
+      assertEq(other.value.totalFiles, 0, '别的项目读到的是空进度（不串台）')
+    }
     const stateCall = server.calls.find((c) => c.method === 'POST' && c.url.endsWith('/state'))
     const payload = JSON.parse(stateCall.body)
     assertEq(payload.base_version, null, '首传 base_version=null（服务器此时还没有状态）')
@@ -2525,11 +2564,22 @@ section('[6i] 出题模式：两个方向（求指导 / 招学生）')
   fs.writeFileSync(path.join(root, 'project.md'), '# 选题\n\n一个可证伪的问题\n')
   fs.writeFileSync(path.join(root, 'research-state.md'), '## Problem\n\n动机\n')
 
+  // 第二个工作区：真实的"两个方向"是两个**不同的工作**各发一个方向（导师的选题 / 学生的工作）
+  const ws2 = path.join(HOME7, 'proj2')
+  const root2 = path.join(ws2, 'workspace')
+  fs.mkdirSync(path.join(root2, 'research'), { recursive: true })
+  fs.writeFileSync(path.join(root2, 'project.md'), '# 我的工作\n\n一个可证伪的问题\n')
+  fs.writeFileSync(path.join(root2, 'research-state.md'), '## Problem\n\n动机\n')
+
   const lister = async () => ({
     available: true,
-    items: [{ id: 'ws-dir', title: '出题工作区', path: ws, updatedAt: '' }],
+    items: [
+      { id: 'ws-dir', title: '出题工作区', path: ws, updatedAt: '' },
+      { id: 'ws-dir-2', title: '学生工作区', path: ws2, updatedAt: '' },
+    ],
   })
   const K = fs.realpathSync(root)
+  const K2 = fs.realpathSync(root2)
 
   /** 按方向发不同 project_id 的假服务器：能验出"两个方向真的是两个项目"。 */
   const makeDirServer = () => {
@@ -2602,14 +2652,41 @@ section('[6i] 出题模式：两个方向（求指导 / 招学生）')
     assertEq(storedRecord(store, K, 'SEEK_STUDENT'), undefined, '另一个方向没有被误写')
   }
 
-  // ── 同一工作区两个方向：**两个项目**、两条记录，互不复用 ──
+  /*
+   * ── 一个研究工作**只属于一个方向**（2026-10 用户拍板）──
+   *
+   * "求指导"与"招学生"不是同一份工作的两种发布方式，而是**两种身份**：
+   * 前者是学生发布自己的工作，后者是导师发布一个选题。发布过一种就不能再发另一种
+   * （否则网络上同一个工作以两个身份各出现一次，状态与附件还各传一份）。
+   */
   {
     const server = makeDirServer()
     const store = PUB.createMemoryPublishedStore()
     const h = makeDirHost(server, store)
     const seek = await h('work/publish', { id: 'ws-dir' })
+    assert(seek.ok, '先按默认方向发布成功')
     const topic = await h('work/publish', { id: 'ws-dir', direction: 'SEEK_STUDENT' })
-    assert(seek.ok && topic.ok, '两个方向都发布成功')
+    assertEq(topic.ok, false, '同一工作换方向发布 → 拒绝')
+    assertEq(topic.error?.code, 'already-published', '原因码 already-published（界面据此提示"只能更新"）')
+    assert(/求指导/.test(topic.error?.message ?? ''), `提示里说清已经以哪个身份发布过（${topic.error?.message ?? ''}）`)
+    assertEq(
+      server.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/api/v1/projects')).length,
+      1,
+      '拒绝时**不建第二个项目**（不能悄悄多出一个网络身份）',
+    )
+    assertEq(storedRecord(store, K, 'SEEK_STUDENT'), undefined, '另一个方向不留记录')
+    // 同一个方向仍然照常更新（拒绝的只是"换方向"）
+    assert((await h('work/publish', { id: 'ws-dir' })).ok, '同一方向的【更新】照常可用')
+  }
+
+  // ── 两个**不同的工作**：各自一个方向 → 两个项目、两条记录，互不复用 ──
+  {
+    const server = makeDirServer()
+    const store = PUB.createMemoryPublishedStore()
+    const h = makeDirHost(server, store)
+    const seek = await h('work/publish', { id: 'ws-dir' })
+    const topic = await h('work/publish', { id: 'ws-dir-2', direction: 'SEEK_STUDENT' })
+    assert(seek.ok && topic.ok, '两个工作各发一个方向：都成功')
     assertEq(
       server.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/api/v1/projects')).length,
       2,
@@ -2620,13 +2697,17 @@ section('[6i] 出题模式：两个方向（求指导 / 招学生）')
       .map((c) => JSON.parse(c.body))
       .find((b) => b.direction === 'SEEK_STUDENT')
     assert(topicCreate, '招学生方向的建项目请求带上了 direction=SEEK_STUDENT')
-    assertEq(storedRecord(store, K, 'SEEK_MENTOR')?.projectId, 'seek-1', '求指导记录')
-    assertEq(storedRecord(store, K, 'SEEK_STUDENT')?.projectId, 'topic-1', '招学生记录')
-    assertEq(storedRecord(store, K, 'SEEK_STUDENT')?.direction, 'SEEK_STUDENT', '记录里带方向')
-    // `work/mine` 两个方向各一条
+    assertEq(storedRecord(store, K, 'SEEK_MENTOR')?.projectId, 'seek-1', '求指导记录写在发布它的那个工作下')
+    assertEq(storedRecord(store, K2, 'SEEK_STUDENT')?.projectId, 'topic-1', '招学生记录写在另一个工作下')
+    assertEq(storedRecord(store, K2, 'SEEK_STUDENT')?.direction, 'SEEK_STUDENT', '记录里带方向')
+    // `work/mine`：两个工作各自带出**自己那一个**方向的发布状态
     const mine = await h('work/mine', {})
-    assertEq(pubOf(mine.value.items[0], 'SEEK_MENTOR')?.projectId, 'seek-1', '我的：求指导方向在')
-    assertEq(pubOf(mine.value.items[0], 'SEEK_STUDENT')?.projectId, 'topic-1', '我的：招学生方向也在')
+    const w1 = mine.value.items.find((x) => x.id === 'ws-dir')
+    const w2 = mine.value.items.find((x) => x.id === 'ws-dir-2')
+    assertEq(pubOf(w1, 'SEEK_MENTOR')?.projectId, 'seek-1', '我的：工作 1 是"求指导"，在')
+    assertEq(pubOf(w1, 'SEEK_STUDENT'), null, '我的：工作 1 没有"招学生"那一份（只属于一个方向）')
+    assertEq(pubOf(w2, 'SEEK_STUDENT')?.projectId, 'topic-1', '我的：工作 2 是"招学生"，在')
+    assertEq(pubOf(w2, 'SEEK_MENTOR'), null, '我的：工作 2 也没有另一个方向')
   }
 
   // ── 上传计划按方向找记录：另一个方向的"记住的选择"不能拿来用 ──

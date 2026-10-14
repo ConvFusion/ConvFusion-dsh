@@ -41,7 +41,7 @@ export { CommunityView };
  * 「整合提示词」的构建（**纯函数**）：离线自检直接调它断言模板与占位符，
  * 不必去渲染整个对话框。
  */
-export { IDENTITY_FILE_REL, WORKSPACE_PREFIX, backupNameOf, backupTagOf, buildMergePrompt, compactDateOf, dateOf, identityFileOf, identityJsonFor, incomingDirOf, planKeyOf, stampOf, } from './merge-prompt.js';
+export { syncCommandLine } from './sync-command.js';
 /** 闸门（按会话条件注册 / 注销）与它的常量。 */
 export { COMMUNITY_VIEW_ID, COMMUNITY_VIEW_ORDER, CONVFUSION_VIEW_SLOT, PROGRESS_VIEW_ID, PROGRESS_VIEW_ORDER, convfusionTabSpecs, currentMainSessionId, installConvFusionTabs, percentText, };
 interface ScopeSnapshot {

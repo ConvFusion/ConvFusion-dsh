@@ -978,7 +978,16 @@ console.log('\n[live.7] 寻找指导：本机研究 → 发布 → 被另一个�
   }
   const sum = await finder.handler('work/summary', { projectId: serverProjectId })
   assertEq(sum.ok, true, '另一个账号能读摘要（免费）')
-  assertEq(sum.value?.work?.summary, '现场验证：裁剪证据与失败判定', '摘要 = 本机主题句')
+  /*
+   * ⚠️ v0.6.1 起：工作名**就是**这句主题（没有论文时名字取主题），而"与名字逐字相同的
+   * 展示字段不再上送" —— 所以摘要不是"等于主题"，而是**空**。
+   * 这里不写死""，因为服务器对缺字段可能是 null 或 undefined 或缺席，三种都算"没重复送"。
+   */
+  const liveSummary = sum.value?.work?.summary
+  assert(
+    liveSummary === null || liveSummary === undefined || liveSummary === '',
+    `摘要不与名字重复（实测：${JSON.stringify(liveSummary)}）`,
+  )
   // 「按 (viewer, project) 买一次」的正反两面都在**同一个账号**上验到：
   //   换一个**新项目** → 真的扣 1；同一项目换 Key 再读 → 不扣。
   // 只验"不扣"的话，"永远不扣费"这种回归也能通过。

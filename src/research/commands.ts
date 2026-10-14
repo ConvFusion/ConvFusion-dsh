@@ -59,6 +59,16 @@ import { listEvidence } from './evidence.js'
 import { readActionRecords, readActionState, summariseActionRecords } from './action-construction/index.js'
 import { writeMethodsExport } from './methods-export.js'
 import type { SkillCustomizationStore } from './skill-customization.js'
+import {
+  buildSyncText,
+  collectSyncFacts,
+  isSyncArg,
+  resolveZipReference,
+  syncReceipt,
+  zipRefOf,
+} from './sync-request.js'
+import type { SyncNoteStore } from './sync-note.js'
+import type { WorkIdentityStore } from './work-identity.js'
 
 /**
  * 是否是「导出研究方法」指令。
@@ -346,15 +356,25 @@ export function defineResearchCommand(
   ctx: Context,
   resolveCurrentWorkspace: () => string,
   customizationStore?: SkillCustomizationStore,
+  /** 下载便签（判定用）：`/research sync` 靠它知道"这个 ZIP 是服务器上的哪项研究"。 */
+  syncNoteStore?: SyncNoteStore,
+  /** 本机工作标识注册表（解压前也读得到身份）。 */
+  workIdentity?: WorkIdentityStore,
 ): (() => void)[] | null {
   const commands = ctx.get('commands') as CommandRuntimeLike | undefined
   if (!commands || typeof commands.register !== 'function') return null
+  /**
+   * 同步分支要用它读"这次下载的是哪项研究"的便签，以及本机标识注册表。
+   * 都没配也能跑：判定退化为 `unverifiable`（技能里"先盘查再判断"那一支）。
+   */
+  const syncNotes: Pick<SyncNoteStore, 'get'> | undefined = syncNoteStore
+  const identities: Pick<WorkIdentityStore, 'get'> | undefined = workIdentity
 
   return [
     commands.register({
       name: 'research',
       description: 'Open, inspect or continue the ConvFusion research project in this workspace.',
-      input: { hint: '<what to do next> — omit to show the current research state' },
+      input: { hint: '<what to do next> | sync @workspace.zip — omit to show the current research state' },
       recordInput: true,
       handler: (invocation: CommandInvocation): CommandResult => {
         const arg = (invocation.rawInput ?? '').trim()
@@ -412,6 +432,53 @@ export function defineResearchCommand(
               kind: 'error',
               text: '当前 Harness 不提供 agent.followup()，无法把研究任务交给 Agent。',
             } as CommandResult
+          }
+
+          // ── 同步下载的研究工作区：`/research sync @某.zip` ──────────────
+          //
+          // 必须**先于** followup 判定（同 `导出研究方法`）：否则这一行会被当成研究意图
+          // 丢给 Agent，而 Agent 每次拼出的流程都会漂。这里只**解析 + 校验 + 给参数**，
+          // 流程本身在 `skills/sync.md`（agent 按需加载）—— 一行命令，一套写死的流程。
+          if (isSyncArg(arg)) {
+            const sessionWorkspace = sessionWorkspaceOf(invocation)
+            const ref = zipRefOf(arg)
+            const resolved = resolveZipReference(ref, sessionWorkspace)
+            if (!resolved.ok) {
+              const hint = ['在输入框里打 `@` 选文件，会自动带出路径。']
+              if (resolved.candidates.length > 0) {
+                hint.push('', '同前缀的候选（宿主同名会加序号）：')
+                for (const c of resolved.candidates) hint.push(`- \`${c}\``)
+              }
+              return {
+                kind: 'error',
+                text: [`${resolved.error ?? '无法解析压缩包'}`, '', ...hint].join('\n'),
+              } as CommandResult
+            }
+            // ZIP 必须**真的能用**：不完整 / 还在下载中就别让 agent 去解半成品
+            const facts = collectSyncFacts({
+              zip: resolved.path,
+              sessionWorkspace,
+              researchRoot: workspace,
+              ...(syncNotes ? { noteStore: syncNotes } : {}),
+              ...(identities ? { identityStore: identities } : {}),
+            })
+            /*
+             * ZIP 必须**真的能用**：不完整 / 还在下载中 / 根本不是 ZIP 时，
+             * 直接把问题说清楚，别让 agent 去解一个半成品（它会读到一个坏包，
+             * 然后花几轮才反应过来）。
+             */
+            if (!facts.zipOk) {
+              return {
+                kind: 'error',
+                text: [
+                  facts.zipError ?? '这个压缩包现在不能用',
+                  '',
+                  '下载完成之后再发一次这条命令即可。',
+                ].join('\n'),
+              } as CommandResult
+            }
+            followup(ctx, agent, buildSyncText(facts, root), 'continue')
+            return { kind: 'success', text: syncReceipt(facts) } as CommandResult
           }
 
           // ── 尚无研究项目：这句话即为研究主题，建好后**立即开跑** ──────
