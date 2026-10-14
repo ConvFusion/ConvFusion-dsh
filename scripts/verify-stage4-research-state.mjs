@@ -453,7 +453,7 @@ console.log('\n[§16/§36] 结构与边界')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
- * [自进化] 产物 → Research State 的自动同步（v0.6.0）
+ * [自进化] 产物 → Research State 的自动同步（v0.6.1）
  *
  * 架构定的那条环是 `Evidence produced → Paper evolves → **Research State changes** →
  * Harness decides again`。中间那一环以前没有任何机制：实测一次真实工作区里

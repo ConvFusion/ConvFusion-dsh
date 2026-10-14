@@ -660,7 +660,7 @@ export function defineResearchTools(
             evidenceWithoutRawArtifact: index.evidenceWithoutRawArtifact,
           },
           /*
-           * 产物 ↔ 状态对账（v0.6.0）：自动同步之后正常情况下恒为"已反映"；
+           * 产物 ↔ 状态对账（v0.6.1）：自动同步之后正常情况下恒为"已反映"；
            * 报出来是为了 ① 老工作区一眼看出落后在哪 ② 验证同步真的发生了。
            */
           artifacts: reconcileStateWithArtifacts(ws),
@@ -893,7 +893,7 @@ export function defineResearchTools(
         /*
          * **默认直接写入**（`apply: false` 才留成待处置提案）。
          *
-         * 为什么改默认（v0.6.0，用户拍板"直接自动写入"）：状态是"当前研究对象的可更新表示"，
+         * 为什么改默认（v0.6.1，用户拍板"直接自动写入"）：状态是"当前研究对象的可更新表示"，
          * 而"提案待确认"在真实使用中变成了"永远不确认" —— 实测：8 条决策落在
          * `research/decisions/`，状态里连 Decisions 维度都没有。写入仍然**可回退**
          * （旧版本先进 `research/state-history/`），也仍然留痕（`applied.json`），
