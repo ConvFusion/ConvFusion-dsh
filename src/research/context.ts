@@ -75,8 +75,16 @@ export const RESEARCH_GUIDE_ORDER = 400
 
 /** 注入段名（Harness 要求唯一；重复注册会抛错）。 */
 export const RESEARCH_CONTEXT_NAME = 'convfusion:research-context'
-/** Research State 文件引用（相对 workspace）。 */
-const RESEARCH_STATE_REF = 'research/research-state.md'
+/**
+ * Research State 文件引用（相对研究根）。
+ *
+ * ⚠️ 它必须与 `research-data.ts` 的 `RESEARCH_STATE_FILE` **字面一致** ——
+ * 这是唯一一处"告诉模型去哪儿找 / 写状态"的地方。曾经它写成
+ * `research/research-state.md`（多了 `research/` 一层），于是**按上下文给的路径写回
+ * 就会写到一个孤儿文件上**，`loadResearchState()` 永远读不到，技能结果看起来"没保存"。
+ * 自检见 `scripts/verify-stage4-research-state.mjs`（断言两者相等）。
+ */
+export const RESEARCH_STATE_REF = 'research-state.md'
 export const RESEARCH_GUIDE_NAME = 'convfusion:research-guide'
 
 /**
@@ -427,7 +435,7 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
 
   // ── Research State（§12 / §25 / §26）────────────────────────────────
   // 只给「已建立维度的标题 + 成熟度」，**不复制正文** —— 正文在
-  // research/research-state.md 里，模型需要时自己读（§8：不无条件全量注入）。
+  // research-state.md 里，模型需要时自己读（§8：不无条件全量注入）。
   if (ctx.state) {
     const established = Object.entries(ctx.state.dimensions)
       .filter(([, v]) => v)
@@ -540,6 +548,21 @@ export function renderResearchContext(ctx: ResearchContext, userInput = ''): str
       lines.push(
         `Current stage: **${ctx.process.current.stage.label}** — ${ctx.process.current.stage.produces}.`,
       )
+      /*
+       * 「自进化」那条链的落点：阶段说清"产出什么"，这里说清"产出之后 Research State
+       * 里该出现什么" —— 不写出来的话，方法技能的结论就只停在对话里
+       * （实测：8 条 decisions 落在 `research/decisions/`，状态里连 Decisions 维度都没有）。
+       *
+       * `state` 只在**阶段定义里写了**才有（用户自定过程可以不带这一段）。
+       */
+      const stageState = ctx.process.current.stage.state ?? []
+      if (stageState.length > 0) {
+        lines.push(
+          `Write-back: this stage's results belong in the Research State dimension(s) ` +
+            `${stageState.map((d) => `\`${d}\``).join(' / ')} — use \`research_state_propose\` ` +
+            `(artifact-indexed dimensions are auto-synced into \`${RESEARCH_STATE_REF}\`).`,
+        )
+      }
       lines.push(`Basis: ${ctx.process.current.evidence}.`)
     } else {
       lines.push('Every stage of the research process has landed artifacts; there is no obvious missing step.')

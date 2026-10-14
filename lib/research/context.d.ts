@@ -50,6 +50,16 @@ export declare const RESEARCH_CONTEXT_ORDER = 200;
 export declare const RESEARCH_GUIDE_ORDER = 400;
 /** 注入段名（Harness 要求唯一；重复注册会抛错）。 */
 export declare const RESEARCH_CONTEXT_NAME = "convfusion:research-context";
+/**
+ * Research State 文件引用（相对研究根）。
+ *
+ * ⚠️ 它必须与 `research-data.ts` 的 `RESEARCH_STATE_FILE` **字面一致** ——
+ * 这是唯一一处"告诉模型去哪儿找 / 写状态"的地方。曾经它写成
+ * `research/research-state.md`（多了 `research/` 一层），于是**按上下文给的路径写回
+ * 就会写到一个孤儿文件上**，`loadResearchState()` 永远读不到，技能结果看起来"没保存"。
+ * 自检见 `scripts/verify-stage4-research-state.mjs`（断言两者相等）。
+ */
+export declare const RESEARCH_STATE_REF = "research-state.md";
 export declare const RESEARCH_GUIDE_NAME = "convfusion:research-guide";
 /**
  * 科研模式指引（**稳定段**，不随 workspace 变化）。

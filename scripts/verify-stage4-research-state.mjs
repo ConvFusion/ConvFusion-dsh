@@ -452,6 +452,295 @@ console.log('\n[§16/§36] 结构与边界')
   assertEq(fm.b, '[x, y]', '受限 frontmatter 不解析列表（阻止 schema 蔓延）')
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+ * [自进化] 产物 → Research State 的自动同步（v0.6.0）
+ *
+ * 架构定的那条环是 `Evidence produced → Paper evolves → **Research State changes** →
+ * Harness decides again`。中间那一环以前没有任何机制：实测一次真实工作区里
+ * `research/decisions/` 有 8 条决策，而 `research-state.md` 连 Decisions 维度都没有。
+ *
+ * 这一节钉住四件事：① 汇总什么；② 只写自动段、不碰人手写的内容；
+ * ③ 没变化不写盘（不涨版本号）；④ 写入可回退（旧版本先进 state-history）。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[自进化] 产物 → Research State 自动同步')
+{
+  const SYNC = await import(lib('research/state-sync.js'))
+  const CTX = await import(lib('research/context.js'))
+  const RDATA = await import(lib('research/research-data.js'))
+  const RS = await import(lib('research/research-state.js'))
+  const fsx = await import('node:fs')
+  const osx = await import('node:os')
+  const pathx = await import('node:path')
+
+  // ① 注入给模型的 state 路径必须 == loader 读的路径（曾经写成 research/research-state.md，
+  //    于是"按上下文写回"会写到孤儿文件上，状态永远不变）
+  assertEq(
+    CTX.RESEARCH_STATE_REF,
+    RDATA.RESEARCH_STATE_FILE,
+    '① 注入的 Research State 路径 = loader 读的路径（防再次漂移）',
+  )
+
+  const home = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'cf-sync-'))
+  const root = pathx.join(home, 'workspace')
+  fsx.mkdirSync(root, { recursive: true })
+  fsx.writeFileSync(
+    pathx.join(root, 'project.md'),
+    '---\ntype: research-project\ntopic: 自进化验证\n---\n\n# Research Project\n',
+  )
+  RS.ensureResearchState(root)
+
+  // ② 没有任何产物 → 同步是 no-op（不写盘、不涨版本）
+  const idle = SYNC.syncStateFromArtifacts(root)
+  assertEq(idle.synced, [], '② 没有产物 → 不写盘')
+  assertEq(idle.version, undefined, '② 版本号不动')
+
+  // ③ 落两条决策 + 一条 claim + 一条 evidence + 一个实验
+  fsx.mkdirSync(pathx.join(root, 'research', 'decisions'), { recursive: true })
+  fsx.writeFileSync(
+    pathx.join(root, 'research', 'decisions', 'D001.md'),
+    '---\ntype: decision\nid: D001\nstatus: decided\n---\n\n# Decision: 先做理论\n\n## Decision\n\n先补信息论界再跑实验。\n\n## Reason\n\n没有界就没有可证伪的预测。\n',
+  )
+  fsx.writeFileSync(
+    pathx.join(root, 'research', 'decisions', 'D002.md'),
+    '---\ntype: decision\nid: D002\nstatus: decided\n---\n\n# Decision: 用 LoCoMo\n\n## Decision\n\n主数据集用 LoCoMo。\n',
+  )
+  fsx.mkdirSync(pathx.join(root, 'research', 'evidence'), { recursive: true })
+  fsx.writeFileSync(
+    pathx.join(root, 'research', 'evidence', 'E001.md'),
+    '---\nname: 分层检索的召回率\nsource_kind: experiment\nstatus: supported\n---\n\n# Evidence: 分层检索的召回率\n\n## Result\n\n0.83\n',
+  )
+  fsx.writeFileSync(
+    pathx.join(root, 'research', 'evidence', 'E002.md'),
+    '---\nname: 某篇信息论综述\nsource_kind: literature\nstatus: unverified\n---\n\n# Evidence: 某篇信息论综述\n',
+  )
+  fsx.mkdirSync(pathx.join(root, 'experiments', 'depth-sweep', 'results'), { recursive: true })
+  fsx.writeFileSync(pathx.join(root, 'experiments', 'depth-sweep', 'results', 'main.json'), '{}')
+
+  const first = SYNC.syncStateFromArtifacts(root)
+  assert(first.synced.includes('Decisions'), '③ 决策落盘后 → Decisions 维度被自动写入')
+  assert(first.synced.includes('Evidence'), '③ 证据 → Evidence 维度')
+  assert(first.synced.includes('Literature'), '③ 文献类证据 → Literature 维度')
+  assert(first.synced.includes('Experiments'), '③ 实验目录 → Experiments 维度')
+  assert(Boolean(first.version?.from) && first.version.to !== first.version.from, `③ 升了版本号（${first.version?.from} → ${first.version?.to}）`)
+  assert(Boolean(first.archived), `③ 旧版本已归档（${first.archived}）—— 自动写入同样可回退`)
+
+  const after = RS.loadResearchState(root)
+  const dec = after.dimensions.Decisions ?? ''
+  assert(dec.includes(SYNC.STATE_AUTO_HEADING), '③ 状态里出现自动段小标题')
+  assert(dec.includes('D001') && dec.includes('D002'), '③ 两条决策都在里面')
+  assert(dec.includes('先补信息论界再跑实验'), '③ 决策正文（一句话）也在里面')
+  assert(
+    (after.dimensions.Literature ?? '').includes('E002'),
+    '③ 文献维度只收文献类证据',
+  )
+  assert(!(after.dimensions.Literature ?? '').includes('E001'), '③ 实验类证据不进 Literature')
+
+  // ④ **幂等**：再同步一次没有变化 → 不写盘（否则每次工具调用都涨版本）
+  const versionBefore = after.version
+  const idempotent = SYNC.syncStateFromArtifacts(root)
+  assertEq(idempotent.synced, [], '④ 内容没变 → 第二次同步不写盘')
+  assertEq(RS.loadResearchState(root).version, versionBefore, '④ 版本号不动')
+
+  // ⑤ **不碰人手写的内容**：人手写的正文留在自动段之前
+  const doc = RS.loadResearchState(root)
+  const edited = {
+    ...doc.dimensions,
+    Decisions: `研究者自己的判断：这两个决策都还成立。\n\n${doc.dimensions.Decisions}`,
+  }
+  const { writeFileSync } = fsx
+  writeFileSync(
+    doc.path,
+    RS.serializeResearchState({ version: doc.version, dimensions: edited, maturity: doc.maturity, createdAt: doc.createdAt }),
+    'utf8',
+  )
+  fsx.writeFileSync(
+    pathx.join(root, 'research', 'decisions', 'D003.md'),
+    '---\ntype: decision\nid: D003\nstatus: decided\n---\n\n# Decision: 第三个决策\n\n## Decision\n\n再加一条。\n',
+  )
+  SYNC.syncStateFromArtifacts(root)
+  const merged = RS.loadResearchState(root).dimensions.Decisions ?? ''
+  assert(merged.includes('研究者自己的判断'), '⑤ 人手写的内容被保留（在自动段之前）')
+  assert(merged.includes('D003'), '⑤ 新产物被追加进自动段')
+  assert(
+    merged.indexOf('研究者自己的判断') < merged.indexOf(SYNC.STATE_AUTO_HEADING),
+    '⑤ 人手写的内容在自动段**之前**（自动段只占该维度末尾）',
+  )
+
+  // ⑥ 项目主题自动收敛（`project.md` 的 topic 跟着论文标题走）
+  {
+    const PROJ = await import(lib('research/project.js'))
+    // 没有论文 → **不动**主题（主题是研究者自己的陈述）
+    const noPaper = SYNC.syncProjectTopic(root)
+    assertEq(noPaper.changed, false, '⑥ 没有论文标题 → 不碰项目主题')
+    assertEq(SYNC.selfEvolve(root).topic.changed, false, '⑥ selfEvolve 一并覆盖主题（没有论文时同样不动）')
+
+    /*
+     * 加一篇论文（真标题）→ 主题自动收敛，并留下可审计的 reason。
+     *
+     * ⚠️ 两处都要写：一篇论文在本插件里 = **能解析出 `paper.md` / `metadata.md` 的目录**
+     * （`listPapers` 的口径，进度面板也用它）；`latex/main.tex` 是**其中标题的权威来源**
+     * （正文以它为准），只有它、没有 `paper.md` 的目录不算一篇论文。
+     */
+    fsx.mkdirSync(pathx.join(root, 'papers', 'paper-main', 'latex'), { recursive: true })
+    fsx.writeFileSync(
+      pathx.join(root, 'papers', 'paper-main', 'paper.md'),
+      '# 过期的草稿标题（不该被采用）\n\n正文\n',
+    )
+    fsx.writeFileSync(
+      pathx.join(root, 'papers', 'paper-main', 'latex', 'main.tex'),
+      '\\documentclass{article}\n\\title{Hierarchical Memory: Theory and Guarantees}\n\\begin{document}\n',
+    )
+    const topic = SYNC.syncProjectTopic(root)
+    assertEq(topic.changed, true, '⑥ 有论文标题 → 主题自动收敛')
+    assertEq(topic.current, 'Hierarchical Memory: Theory and Guarantees', '⑥ 主题 = 论文标题')
+    assert(
+      !topic.current.includes('过期的草稿标题'),
+      '⑥ 标题取自 latex/main.tex（权威）而不是 paper.md 的 H1（可能是过期草稿）',
+    )
+    assert(
+      typeof topic.reason === 'string' && topic.reason.includes('papers/paper-main/'),
+      `⑥ 变更带具体依据（${topic.reason ?? ''}）`,
+    )
+    const project = PROJ.loadProjectFile(root)
+    assertEq(project?.topic, 'Hierarchical Memory: Theory and Guarantees', '⑥ project.md 的 topic 已更新')
+    assertEq(project?.initialTopic, '自进化验证', '⑥ initial_topic 保留原主题（初始输入不丢）')
+    const history = PROJ.listTopicChanges(root)
+    assertEq(history.length, 1, '⑥ 变更进了 research/topic-history.json')
+    assertEq(history[0].from, '自进化验证', '⑥ 历史记下 from')
+    assert(
+      typeof history[0].reason === 'string' && history[0].reason.length > 0,
+      '⑥ 历史记下 reason（没有理由的主题变更不可审计，工具层面就会拒）',
+    )
+
+    // 幂等：已经等于论文标题 → 不再改、不再写历史
+    assertEq(SYNC.syncProjectTopic(root).changed, false, '⑥ 主题已与论文标题一致 → 幂等 no-op')
+    assertEq(PROJ.listTopicChanges(root).length, 1, '⑥ 幂等时不追加历史')
+
+    // 模板占位标题（`Title`）不算论文标题 → 不动主题
+    fsx.writeFileSync(
+      pathx.join(root, 'papers', 'paper-main', 'latex', 'main.tex'),
+      '\\documentclass{article}\n\\title{Title}\n',
+    )
+    fsx.writeFileSync(pathx.join(root, 'papers', 'paper-main', 'paper.md'), '# Title\n')
+    assertEq(SYNC.syncProjectTopic(root).changed, false, '⑥ 模板占位标题不算 → 不动主题')
+  }
+
+  // ⑦ 对账：全部反映之后没有"落后"的行
+  const rows = SYNC.reconcileStateWithArtifacts(root)
+  const notReflected = rows.filter((r) => r.hasArtifacts && (!r.hasAutoBlock || r.stateEmpty))
+  assertEq(notReflected.map((r) => r.dimension), [], '⑦ 对账：产物都已反映进状态')
+
+  fsx.rmSync(home, { recursive: true, force: true })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * [自进化] 研究定义（project.md）的章节：**只在还是占位时才填**
+ *
+ * 为什么单独钉：`Research Questions` / `Scope` / `Domain` 这些章节**几十个版本以来
+ * 没有过任何写入路径**（`serializeProject` 只能在创建时写，`Scope` 连创建时都写不进去），
+ * 于是永远停在 `<!-- 尚未凝练出可检验的研究问题 -->` 这种脚手架注释上 ——
+ * 实测真实工作区里第一条真实研究问题早就在 Research State 里，而 project.md 还是注释。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[自进化] 研究定义的章节同步')
+{
+  const SYNC = await import(lib('research/state-sync.js'))
+  const RS = await import(lib('research/research-state.js'))
+  const PROJ = await import(lib('research/project.js'))
+  const fsx = await import('node:fs')
+  const osx = await import('node:os')
+  const pathx = await import('node:path')
+
+  const home = fsx.mkdtempSync(pathx.join(osx.tmpdir(), 'cf-def-'))
+  const root = pathx.join(home, 'workspace')
+  fsx.mkdirSync(root, { recursive: true })
+  const projectFile = pathx.join(root, 'project.md')
+
+  /** 一个与真实工作区同形的 project.md（含脚手架注释，且**没有** Motivation 段）。 */
+  const writeFresh = () =>
+    fsx.writeFileSync(
+      projectFile,
+      '---\ntype: research-project\ntopic: 初始输入主题\ninitial_topic: 初始输入主题\n' +
+        'created_at: 2026-01-01T00:00:00.000Z\nupdated_at: 2026-01-01T00:00:00.000Z\n---\n\n' +
+        '# Research Project\n\n## Research Statement\n\n初始输入主题\n\n' +
+        '## Research Questions\n\n<!-- 尚未凝练出可检验的研究问题 -->\n\n' +
+        '## Scope\n\n<!-- 这项研究包含什么、明确不包含什么 -->\n\n' +
+        '## Domain\n\n<!-- 研究领域 -->\n',
+    )
+  writeFresh()
+
+  const doc = RS.ensureResearchState(root)
+  fsx.writeFileSync(
+    doc.path,
+    RS.serializeResearchState({
+      version: '1',
+      dimensions: {
+        Problem: '问题段：分层记忆缺少可检验的保证。',
+        'Research Questions': '- Q1：界是否成立？\n- Q2：代价常数是多少？',
+      },
+      maturity: {},
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }),
+    'utf8',
+  )
+  fsx.mkdirSync(pathx.join(root, 'papers', 'p1', 'latex'), { recursive: true })
+  fsx.writeFileSync(pathx.join(root, 'papers', 'p1', 'paper.md'), '# 草稿\n')
+  fsx.writeFileSync(pathx.join(root, 'papers', 'p1', 'latex', 'main.tex'), '\\title{收敛后的题目}\n')
+
+  // ① 一次性把所有有来源的章节填上
+  const first = SYNC.selfEvolve(root)
+  const fields = first.definition.filled.map((f) => f.field).sort()
+  assertEq(fields, ['motivation', 'questions', 'statement'], '① 陈述/研究问题/动机一次填齐（有来源的三个）')
+  const p1 = PROJ.loadProjectFile(root)
+  assertEq(p1.topic, '收敛后的题目', '① 研究陈述 = 当前主题')
+  assertEq(p1.questions, ['Q1：界是否成立？', 'Q2：代价常数是多少？'], '① 研究问题来自状态的 Research Questions 维度')
+  assertEq(p1.goal, '问题段：分层记忆缺少可检验的保证。', '① 动机来自状态的 Problem 维度')
+
+  // ② **回归**：Motivation 段必须留在"下一节之前"，不能被后一次 statement 写入吃掉
+  const text = fsx.readFileSync(projectFile, 'utf8')
+  assert(/^##\s+Motivation\s*$/m.test(text), '② Motivation 段存在')
+  assert(
+    text.indexOf('## Motivation') < text.indexOf('## Research Questions'),
+    '② Motivation 插在 Research Questions **之前**（语义顺序正确）',
+  )
+
+  // ③ 幂等：再同步一次不改写、且 Motivation 仍在
+  const second = SYNC.selfEvolve(root)
+  assertEq(second.definition.filled, [], '③ 第二次同步不写盘（幂等）')
+  assert(/^##\s+Motivation\s*$/m.test(fsx.readFileSync(projectFile, 'utf8')), '③ Motivation 没被吞掉（曾经的 bug）')
+  assertEq(PROJ.loadProjectFile(root).goal, p1.goal, '③ 动机仍可解析')
+
+  // ④ 人手写过 → 永不覆盖（这正是原来那条"正文零改动"纪律要保护的东西）
+  fsx.writeFileSync(projectFile, fsx.readFileSync(projectFile, 'utf8').replace('问题段：分层记忆缺少可检验的保证。', '人手改写的动机句。'))
+  const third = SYNC.selfEvolve(root)
+  assert(
+    third.definition.skipped.some((x) => x.field === 'motivation'),
+    '④ 动机已有人手写内容 → 跳过并说明原因',
+  )
+  assert(fsx.readFileSync(projectFile, 'utf8').includes('人手改写的动机句。'), '④ 人手内容原样保留')
+
+  // ⑤ 判断类字段（Scope / Domain）**不猜**，要用显式写入；写入进 history 且带 field
+  const wrote = PROJ.updateProjectDefinition(root, {
+    field: 'scope',
+    value: '文本记忆、单调增长；\n不包含：多模态记忆。',
+    reason: '依据手稿讨论章的范围陈述',
+  })
+  assertEq(wrote.changed, true, '⑤ Scope 可显式写入')
+  assertEq(PROJ.loadProjectFile(root).scope, '文本记忆、单调增长；\n不包含：多模态记忆。', '⑤ 多行范围**保留换行**（不被压成一行）')
+  const logged = PROJ.listTopicChanges(root)
+  assert(logged.some((h) => h.field === 'scope'), '⑤ 变更进 history 并带 field')
+  assert(logged.some((h) => typeof h.reason === 'string' && h.reason.includes('手稿')), '⑤ 变更带 reason（可审计）')
+
+  // ⑥ 没有 force 时，已有人手写内容的章节不会被覆盖
+  const blocked = PROJ.updateProjectDefinition(root, { field: 'scope', value: '别的范围', reason: '测试' })
+  assertEq(blocked.changed, false, '⑥ 非 force 写法拒绝覆盖已有内容')
+  assert(
+    'error' in blocked && String(blocked.error).includes('hand-written'),
+    '⑥ 拒绝时说明原因，而不是静默跳过',
+  )
+
+  fsx.rmSync(home, { recursive: true, force: true })
+}
+
 rmSync(ws, { recursive: true, force: true })
 
 console.log(`\n${failed === 0 ? '✅' : '❌'} stage4-research-state: ${passed} passed, ${failed} failed`)

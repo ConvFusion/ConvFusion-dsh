@@ -349,6 +349,15 @@ export function listStateUpdateLog(workspace: string): StateUpdateRecord[] {
   }
 }
 
+/**
+ * 追加一条状态处置记录（`research/state-proposals/applied.json`）。
+ *
+ * 导出给 `state-sync.ts` 用：自动同步也必须留痕 —— "状态为什么变了"永远只有一个地方要查。
+ */
+export function appendStateUpdateRecord(workspace: string, record: StateUpdateRecord): void {
+  appendUpdateLog(workspace, record)
+}
+
 function appendUpdateLog(workspace: string, record: StateUpdateRecord): void {
   const log = listStateUpdateLog(workspace)
   log.push(record)

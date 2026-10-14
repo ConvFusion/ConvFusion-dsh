@@ -26,16 +26,16 @@ Use this skill when:
 The stages below are a **default**, not a pipeline: they describe what a research project must eventually produce, not the order in which it must be produced. Real work moves back and forth between them, and nothing here blocks or schedules anything.
 Each stage is judged by **artifacts on disk**, never by conversation content: a stage has landed only when the artifact it produces actually exists.
 Edit the block below to define your own process. The first block containing `stage:` lines wins, and your customisation is composed **before** the default text — so your definition takes precedence without any extra setting.
-Format: `stage: <id> | <display name> | <capability category> | <signal> | <what this stage produces>`. Signals come from a fixed vocabulary (see the header of this skill file in the repository); an empty or unknown signal means the stage is displayed but does not count towards the current-stage decision.
+Format: `stage: <id> | <display name> | <capability category> | <signal> | <what this stage produces> | state=<Research State dimensions, comma separated>`. Signals come from a fixed vocabulary (see the header of this skill file in the repository); an empty or unknown signal means the stage is displayed but does not count towards the current-stage decision. The optional last field names the **Research State** dimensions this stage's results belong to — it is what keeps the state self-evolving (unknown dimension names are dropped, an omitted field simply means "no dimension").
 
 ```text
-stage: topics | 提出话题 | research-understanding | topic-proposed | 研究话题（research/topics.md）
-stage: literature | 文献调研 | literature | literature-evidence | 实际检索到的文献证据（research/evidence/）
-stage: innovation | 创新假设 | innovation | claims | 已确定的研究问题与主题、可检验的假设与主张（project.md / research/claims/）
-stage: planning | 计划管理 | research-planning | method-plan | 可执行的研究计划与方法设计（research/plans/）
+stage: topics | 提出话题 | research-understanding | topic-proposed | 研究话题（research/topics.md） | state=Problem
+stage: literature | 文献调研 | literature | literature-evidence | 实际检索到的文献证据（research/evidence/） | state=Literature,Current Knowledge
+stage: innovation | 创新假设 | innovation | claims | 已确定的研究问题与主题、可检验的假设与主张（project.md / research/claims/） | state=Innovation,Hypotheses
+stage: planning | 计划管理 | research-planning | method-plan | 可执行的研究计划与方法设计（research/plans/） | state=Method
 stage: resource | 资源评估 | resource-estimation | resource-estimate | 资源需求、成本与可行性估计（research/plans/）
-stage: decision | 研究决策 | research-decision | decisions | 已记录理由的研究决策（research/decisions/）
-stage: experiment | 实验验证 | experiment | experiments | 实验产物与经确认的结果证据（experiments/<name>/results/）
+stage: decision | 研究决策 | research-decision | decisions | 已记录理由的研究决策（research/decisions/） | state=Decisions
+stage: experiment | 实验验证 | experiment | experiments | 实验产物与经确认的结果证据（experiments/<name>/results/） | state=Experiments,Evidence
 stage: writing | 论文写作 | academic-writing | manuscript | 手稿正文（papers/<id>/latex/main.tex 及其编译产物 main.pdf）
 ```
 

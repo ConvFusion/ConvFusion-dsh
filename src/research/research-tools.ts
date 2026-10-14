@@ -111,6 +111,7 @@ import {
   openQuestions,
 } from './research-state.js'
 import { buildResearchIndex } from './research-state.js'
+import { reconcileStateWithArtifacts, selfEvolve, syncStateFromArtifacts } from './state-sync.js'
 import {
   EVIDENCE_SOURCES,
   EVIDENCE_STATUSES,
@@ -164,7 +165,13 @@ import {
   MIN_LEGIBLE_PT,
   renderSchematic,
 } from './schematic/index.js'
-import { listTopicChanges, loadProjectFile, updateProjectTopic } from './project.js'
+import {
+  listTopicChanges,
+  loadProjectFile,
+  updateProjectDefinition,
+  updateProjectTopic,
+} from './project.js'
+import { researchWorkName } from './work-name.js'
 import {
   DECISION_TYPES,
   EVIDENCE_REQUIREMENT_TYPES,
@@ -339,27 +346,64 @@ export function defineResearchTools(
           for (const c of created.supports) linkEvidenceToClaim(ws, created.id, c, 'supports')
           for (const c of created.contradicts) linkEvidenceToClaim(ws, created.id, c, 'contradicts')
           const fresh = listEvidence(ws).find((e) => e.id === created.id) ?? created
+          /*
+           * **自进化**：产物落盘后立刻把对应维度汇总进 Research State
+           * （旧版本先进 `state-history/`，`applied.json` 留痕）。
+           *
+           * 为什么在这里而不是"等 Agent 记得 propose"：实测这样不成立 ——
+           * 8 条决策躺在 `research/decisions/`，状态里连 Decisions 维度都没有。
+           */
+          const evolved = selfEvolve(ws)
+          const syncNote = evoNote(evolved)
           return losslessJson({
             ok: true,
             evidence: { id: fresh.id, name: fresh.name, status: fresh.status, supports: fresh.supports, contradicts: fresh.contradicts },
             note: 'Evidence recorded. It starts as `unverified` until someone validates it.',
+            ...syncNote,
           }) as unknown as Record<string, JsonValue>
         }
 
         if (action === 'status') {
           const updated = setEvidenceStatus(ws, String(a.id ?? ''), String(a.status ?? 'unverified') as EvidenceStatus)
           if (isEvidenceWriteError(updated)) return fail(updated.error)
-          return losslessJson({ ok: true, evidence: { id: updated.id, status: updated.status } }) as unknown as Record<string, JsonValue>
+          /*
+           * **自进化**：产物落盘后立刻把对应维度汇总进 Research State
+           * （旧版本先进 `state-history/`，`applied.json` 留痕）。
+           *
+           * 为什么在这里而不是"等 Agent 记得 propose"：实测这样不成立 ——
+           * 8 条决策躺在 `research/decisions/`，状态里连 Decisions 维度都没有。
+           */
+          const stateSync = syncStateFromArtifacts(ws)
+          const syncNote = 'error' in stateSync
+            ? { stateSync: { error: stateSync.error } }
+            : stateSync.synced.length > 0
+              ? { stateSync: { synced: stateSync.synced, version: stateSync.version } }
+              : {}
+          return losslessJson({ ok: true, evidence: { id: updated.id, status: updated.status }, ...syncNote }) as unknown as Record<string, JsonValue>
         }
 
         if (action === 'supersede') {
           const res = supersedeEvidence(ws, String(a.id ?? ''), String(a.superseded_by ?? ''), a.reason ? String(a.reason) : undefined)
           if (isEvidenceWriteError(res)) return fail(res.error)
+          /*
+           * **自进化**：产物落盘后立刻把对应维度汇总进 Research State
+           * （旧版本先进 `state-history/`，`applied.json` 留痕）。
+           *
+           * 为什么在这里而不是"等 Agent 记得 propose"：实测这样不成立 ——
+           * 8 条决策躺在 `research/decisions/`，状态里连 Decisions 维度都没有。
+           */
+          const stateSync = syncStateFromArtifacts(ws)
+          const syncNote = 'error' in stateSync
+            ? { stateSync: { error: stateSync.error } }
+            : stateSync.synced.length > 0
+              ? { stateSync: { synced: stateSync.synced, version: stateSync.version } }
+              : {}
           return losslessJson({
             ok: true,
             superseded: res.old,
             supersededBy: res.next,
             note: 'The older evidence is kept and marked superseded — history is never erased.',
+            ...syncNote,
           }) as unknown as Record<string, JsonValue>
         }
 
@@ -437,7 +481,20 @@ export function defineResearchTools(
             ...(a.paper ? { paper: String(a.paper) } : {}),
           })
           if (isIdWriteError(created)) return fail(created.error)
-          return losslessJson({ ok: true, claim: { id: created.id, status: created.status } }) as unknown as Record<string, JsonValue>
+          /*
+           * **自进化**：产物落盘后立刻把对应维度汇总进 Research State
+           * （旧版本先进 `state-history/`，`applied.json` 留痕）。
+           *
+           * 为什么在这里而不是"等 Agent 记得 propose"：实测这样不成立 ——
+           * 8 条决策躺在 `research/decisions/`，状态里连 Decisions 维度都没有。
+           */
+          const stateSync = syncStateFromArtifacts(ws)
+          const syncNote = 'error' in stateSync
+            ? { stateSync: { error: stateSync.error } }
+            : stateSync.synced.length > 0
+              ? { stateSync: { synced: stateSync.synced, version: stateSync.version } }
+              : {}
+          return losslessJson({ ok: true, claim: { id: created.id, status: created.status }, ...syncNote }) as unknown as Record<string, JsonValue>
         }
         if (action === 'reconcile') {
           const rec = reconcileClaimEvidence(ws, String(a.id ?? ''))
@@ -503,7 +560,10 @@ export function defineResearchTools(
             ...(a.alternatives ? { alternatives: String(a.alternatives) } : {}),
           })
           if (isIdWriteError(created)) return fail(created.error)
-          return losslessJson({ ok: true, decision: { id: created.id, status: created.status } }) as unknown as Record<string, JsonValue>
+          // 自进化：决策落盘后立刻汇总进 Research State 的 Decisions 维度（见 evidence 段的说明）
+          const evolved = selfEvolve(ws, { dimensions: ['Decisions'] })
+          const syncNote = evoNote(evolved)
+          return losslessJson({ ok: true, decision: { id: created.id, status: created.status }, ...syncNote }) as unknown as Record<string, JsonValue>
         }
         return fail(`Unknown action "${action}".`, { allowed: ['create', 'list'] })
       } catch (e) {
@@ -513,13 +573,37 @@ export function defineResearchTools(
     presentCall: () => ({ card: 'generic', title: 'Research decision', kind: 'execute' }),
   })
 
+  /**
+   * 自进化的回执（工具返回值里的 `stateSync` / `topicSync`）。
+   *
+   * 为什么要报：状态与主题是**自动**改的，Agent 必须知道"磁盘上刚刚变了什么"，
+   * 否则它会以为自己没写、又去写一遍（或向用户描述一个已经过期的状态）。
+   */
+  const evoNote = (evolved: {
+    state: { synced?: readonly string[]; version?: { from: string; to: string } } | { error: string }
+    topic: { changed: boolean; current?: string; reason?: string; error?: string }
+  }): Record<string, unknown> => {
+    const out: Record<string, unknown> = {}
+    if ('error' in evolved.state) out.stateSync = { error: evolved.state.error }
+    else if ((evolved.state.synced ?? []).length > 0) {
+      out.stateSync = { synced: evolved.state.synced, version: evolved.state.version }
+    }
+    if (evolved.topic.changed) out.topicSync = { topic: evolved.topic.current, reason: evolved.topic.reason }
+    else if (evolved.topic.error) out.topicSync = { error: evolved.topic.error }
+    return out
+  }
+
   /* ── Research State: read ───────────────────────────────────────────── */
   const stateReadTool = defineTool({
     name: STATE_READ_TOOL,
     description:
       'Read the current Research State: which dimensions are established, maturity, open questions, ' +
       'and where the evidence gaps are (claims without evidence, contested claims, evidence with no ' +
-      'raw artifact reference). Use this before deciding what the research needs next.',
+      'raw artifact reference). Use this before deciding what the research needs next.\n' +
+      'It also reports the **artifact ↔ state reconciliation**: which indexed dimensions ' +
+      '(Decisions / Claims / Evidence / Literature / Experiments) have artifacts on disk but are ' +
+      'not reflected in the state (those are auto-synced; a row still showing `none` means the ' +
+      'sync could not run).',
     parameters: {},
     output: {
       schema: { type: 'object', additionalProperties: true },
@@ -532,6 +616,7 @@ export function defineResearchTools(
           missing?: string[]
           openQuestions?: string[]
           gaps?: { unsupportedClaims: string[]; contestedClaims: string[]; evidenceWithoutRawArtifact: string[] }
+          artifacts?: Array<{ dimension: string; hasArtifacts: boolean; hasAutoBlock: boolean; stateEmpty: boolean }>
         }
         if (v.ok === false) return [{ type: 'text' as const, text: `Research state unavailable: ${v.error ?? ''}` }]
         const lines = [`Research State v${v.version ?? '?'}`]
@@ -543,6 +628,11 @@ export function defineResearchTools(
           if (v.gaps.contestedClaims.length) lines.push(`Contested claims: ${v.gaps.contestedClaims.join(', ')}`)
           if (v.gaps.evidenceWithoutRawArtifact.length)
             lines.push(`Evidence lacking raw artifact: ${v.gaps.evidenceWithoutRawArtifact.join(', ')}`)
+        }
+        // 产物 ↔ 状态：**没有反映进状态的产物**必须报出来（"说同步了但状态里没有"要能发现）
+        const notReflected = (v.artifacts ?? []).filter((r) => r.hasArtifacts && (!r.hasAutoBlock || r.stateEmpty))
+        if (notReflected.length > 0) {
+          lines.push(`Artifacts not reflected in the state: ${notReflected.map((r) => r.dimension).join(', ')}`)
         }
         return [{ type: 'text' as const, text: lines.join('\n') }]
       },
@@ -569,6 +659,27 @@ export function defineResearchTools(
             contestedClaims: index.contestedClaims,
             evidenceWithoutRawArtifact: index.evidenceWithoutRawArtifact,
           },
+          /*
+           * 产物 ↔ 状态对账（v0.6.0）：自动同步之后正常情况下恒为"已反映"；
+           * 报出来是为了 ① 老工作区一眼看出落后在哪 ② 验证同步真的发生了。
+           */
+          artifacts: reconcileStateWithArtifacts(ws),
+          /*
+           * 主题对齐：`project.md` 的 topic 是否已收敛到论文标题。
+           * 与"产物 ↔ 状态"同一个道理 —— 显示用的主题必须是**当前**的主题。
+           */
+          topic: (() => {
+            const project = loadProjectFile(ws)
+            const current = project?.topic ?? ''
+            const work = researchWorkName(ws, current)
+            return {
+              current,
+              ...(work.source === 'paper' && work.paperTitle
+                ? { converged: work.paperTitle, aligned: work.paperTitle.trim() === current.trim(), source: `papers/${work.paperId}/` }
+                : { converged: null, aligned: true }),
+              changes: listTopicChanges(ws).length,
+            }
+          })(),
           note: 'A missing dimension is normal — research is rarely complete in every dimension.',
         }) as unknown as Record<string, JsonValue>
       } catch (e) {
@@ -582,17 +693,27 @@ export function defineResearchTools(
   const stateProposeTool = defineTool({
     name: STATE_PROPOSE_TOOL,
     description:
-      'Work with Research State updates. `propose` records a *proposal* (a data file, not a state ' +
-      'change) and reports the maturity levels derived from the current assets; `list` shows the ' +
-      'proposals awaiting disposition; `apply` applies one, writes the Research State, bumps its ' +
-      'version and records the disposition in `applied.json`.\n' +
-      'A proposal carries both the dimension texts and the derived maturity changes, so a single ' +
-      '`apply` brings the state and its progress bar up to date — no manual frontmatter editing.\n' +
-      'Use it when new evidence changes what the research understands (a hypothesis is now ' +
-      'supported, a method is settled, an open question is resolved, a new risk appeared).\n' +
-      'Actions: `propose` | `list` | `apply`.',
+      'Work with Research State updates (the self-evolving record of what the research currently is).\n' +
+      '`propose` **writes the dimensions into `research-state.md` right away** (archiving the old ' +
+      'version and bumping the version number), and records the disposition in `applied.json`; pass ' +
+      '`apply: false` when you want a *pending* proposal instead (someone reviews it, then `apply`).\n' +
+      '`sync` re-derives the artifact-indexed dimensions (Decisions / Claims / Evidence / ' +
+      'Literature / Experiments) from the files on disk — the same job the platform runs ' +
+      'automatically after every `research_decision` / `research_claim` / `research_evidence` write.\n' +
+      '`list` shows the proposals awaiting disposition; `apply` applies a pending one.\n' +
+      '**Use `propose` whenever a method result belongs in the state** — a theme, a hypothesis, a ' +
+      'settled method, a resolved open question, a new risk. The current stage in the context names ' +
+      'the dimension(s) it belongs to; a result that only exists in the conversation is not part of ' +
+      'the research state.\n' +
+      'Actions: `propose` | `list` | `apply` | `sync`.',
     parameters: {
-      action: { type: 'string', description: 'One of: propose | list | apply.', enum: ['propose', 'list', 'apply'] },
+      action: { type: 'string', description: 'One of: propose | list | apply | sync.', enum: ['propose', 'list', 'apply', 'sync'] },
+      apply: {
+        type: 'boolean',
+        description:
+          'For `propose`: write immediately (default true). Pass false to leave a pending proposal ' +
+          'for review instead.',
+      },
       changes: {
         type: 'object',
         additionalProperties: true,
@@ -705,8 +826,32 @@ export function defineResearchTools(
             maturityChanges: merged,
           }) as unknown as Record<string, JsonValue>
         }
+        if (action === 'sync') {
+          /*
+           * 手动触发一次"产物 → 状态"的自动同步。
+           *
+           * 平台在每次 decisions / claims / evidence 写入后已经自动跑同一条路径，
+           * 这个动作是给"老工作区补一次"和"我刚手工改了产物文件"用的。
+           */
+          const evolved = selfEvolve(ws, { reason: 'manual sync' })
+          if ('error' in evolved.state) return fail(evolved.state.error)
+          const synced = evolved.state
+          return losslessJson({
+            ok: true,
+            synced: synced.synced,
+            ...(synced.version ? { version: synced.version } : {}),
+            ...(synced.archived ? { archived: synced.archived } : {}),
+            ...(evolved.topic.changed ? { topic: { now: evolved.topic.current, reason: evolved.topic.reason } } : {}),
+            ...(evolved.topic.error ? { topicError: evolved.topic.error } : {}),
+            note:
+              synced.synced.length === 0 && !evolved.topic.changed
+                ? 'Research State and the project topic already match the artifacts — nothing to write.'
+                : 'Re-derived from disk: artifact-indexed dimensions and/or the project topic (old versions archived).',
+          }) as unknown as Record<string, JsonValue>
+        }
+
         if (action !== 'propose') {
-          return fail(`Unknown action "${action}".`, { allowed: ['propose', 'list', 'apply'] })
+          return fail(`Unknown action "${action}".`, { allowed: ['propose', 'list', 'apply', 'sync'] })
         }
 
         const rawChanges = (a.changes ?? {}) as Record<string, unknown>
@@ -745,6 +890,33 @@ export function defineResearchTools(
           actor: 'agent',
         })
 
+        /*
+         * **默认直接写入**（`apply: false` 才留成待处置提案）。
+         *
+         * 为什么改默认（v0.6.0，用户拍板"直接自动写入"）：状态是"当前研究对象的可更新表示"，
+         * 而"提案待确认"在真实使用中变成了"永远不确认" —— 实测：8 条决策落在
+         * `research/decisions/`，状态里连 Decisions 维度都没有。写入仍然**可回退**
+         * （旧版本先进 `research/state-history/`），也仍然留痕（`applied.json`），
+         * 所以"自动"没有牺牲可审计性。
+         */
+        const applyNow = a.apply !== false
+        if (applyNow) {
+          const applied = applyStateUpdate(
+            ws,
+            { ...proposal, maturityChanges: proposal.maturityChanges },
+            { action: 'accepted', by: 'agent' },
+          )
+          if (isStateWriteError(applied)) return fail(applied.error)
+          return losslessJson({
+            ok: true,
+            applied: { id: proposal.id, version: applied.version, maturity: applied.maturity },
+            appliedDimensions: Object.keys(changes),
+            ...(rejected.length ? { ignoredDimensions: rejected } : {}),
+            maturityChanges: proposal.maturityChanges,
+            note: 'Written into the Research State (old version archived). Pass `apply: false` for a pending proposal instead.',
+          }) as unknown as Record<string, JsonValue>
+        }
+
         return losslessJson({
           ok: true,
           proposal: {
@@ -778,12 +950,33 @@ export function defineResearchTools(
       '- `set_topic`: update the project topic to the finally-adopted one. The originally-input ' +
       'topic is preserved as the initial topic, and the change is logged ' +
       '(from → to, reason, evidence) — never silently, never without a reason.\n' +
+      '- `set`: write other parts of the definition — `questions` / `scope` / `domain` / ' +
+      '`motivation` / `statement`. Use it for what **only a judgement can supply** (scope: what ' +
+      'is in and out; domain: the field) — the plugin never guesses those. Each write is ' +
+      'logged in `research/topic-history.json` with the reason, and **hand-written content is ' +
+      'never overwritten unless `force: true`** (`questions` / `motivation` / `statement` are ' +
+      'filled automatically from the Research State while they are still empty).\n' +
       'Call `set_topic` only when the research has genuinely converged on a different, sharper ' +
       'statement of the topic (e.g. after problem refinement or a scoping decision is accepted) ' +
       '— not for cosmetic rewordings.',
     parameters: {
-      action: { type: 'string', description: 'One of: status | set_topic.', enum: ['status', 'set_topic'] },
+      action: { type: 'string', description: 'One of: status | set_topic | set.', enum: ['status', 'set_topic', 'set'] },
       topic: { type: 'string', description: 'For `set_topic`: the finally-adopted topic (one line).' },
+      field: {
+        type: 'string',
+        description: 'For `set`: which part of the definition to write.',
+        enum: ['statement', 'questions', 'scope', 'domain', 'motivation'],
+      },
+      value: {
+        type: 'string',
+        description:
+          'For `set`: the text (for `questions`, one question per line — they are rendered as a ' +
+          'list).',
+      },
+      force: {
+        type: 'boolean',
+        description: 'For `set`: overwrite a section that already has hand-written content (default false).',
+      },
       reason: {
         type: 'string',
         description:
@@ -845,6 +1038,40 @@ export function defineResearchTools(
             ...(project.initialTopic ? { initialTopic: project.initialTopic } : {}),
             ...(project.updatedAt ? { updatedAt: project.updatedAt } : {}),
             history,
+          }) as unknown as Record<string, JsonValue>
+        }
+        if (action === 'set') {
+          const field = String(a.field ?? '').trim() as 'statement' | 'questions' | 'scope' | 'domain' | 'motivation'
+          const allowed = ['statement', 'questions', 'scope', 'domain', 'motivation']
+          if (!allowed.includes(field)) {
+            return fail(`Unknown \`field\` "${field}".`, { allowed })
+          }
+          const reason = String(a.reason ?? '').trim()
+          if (!reason) {
+            return fail('Provide `reason`: what this rests on (a decision, a file, a measurement). A definition change without a reason is not auditable.')
+          }
+          const raw = String(a.value ?? '').trim()
+          if (!raw) return fail('Provide `value`.')
+          const value = field === 'questions'
+            ? raw.split(/\r?\n/).map((x) => x.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim()).filter(Boolean)
+            : raw
+          const res = updateProjectDefinition(ws, {
+            field,
+            value,
+            reason,
+            ...(a.force === true ? { force: true } : {}),
+          })
+          if (!res.changed && 'error' in res) return fail(res.error)
+          if (!res.changed) {
+            return losslessJson({ ok: true, changed: false, field, current: res.current }) as unknown as Record<string, JsonValue>
+          }
+          return losslessJson({
+            ok: true,
+            changed: true,
+            field,
+            previous: res.previous,
+            current: res.current,
+            note: 'Logged in `research/topic-history.json`. Hand-written sections are never overwritten without `force: true`.',
           }) as unknown as Record<string, JsonValue>
         }
         if (action === 'set_topic') {

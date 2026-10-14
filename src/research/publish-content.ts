@@ -100,6 +100,21 @@ export interface PublishContent {
    * 所以这个字段今天就能收；投影需要后端配合，见 `dev-notes/v0.6.0-work-name-api.md`）。
    */
   work_name?: string
+  /**
+   * **研究主题**（当前采纳的那句，来自 `project.md` 的 `topic`）—— 上送的是**事实**。
+   *
+   * 为什么上送：服务器在 **`work_name` 缺省**时（更早发布的工作、没有算过名字的其它客户端）
+   * 需要有名字可显示。它与 `work_name` 今天是同一个字符串也无妨：`work_name` 是"客户端
+   * 已经算好的名字"（给不认识解析链的服务端直接用），`topic` 是"事实"，用途不同。
+   * 解析链见 `dev-notes/v0.6.0-work-name-api.md`。
+   */
+  topic?: string
+  /**
+   * 开题时的初始输入主题（**只在主题演进过、且与 `topic` 不同**时上送）。
+   *
+   * 与 `topic` 相同时省略：同一句话不必发两遍 —— 这一级的价值恰恰在于"主题演进过"。
+   */
+  initial_topic?: string
   research_question?: string
   summary?: string
   motivation?: string
@@ -191,13 +206,30 @@ export function buildPublishContent(input: PublishContentInput): {
         }))
       : input.evidence
 
+  /*
+   * 这项研究工作的名字。**随内容一起上送**，因为网络列表读的是服务器上的数据 ——
+   * 看列表的人本机不一定有这份 workspace（见文件头）。
+   *
+   * ⚠️ 提前到这里算：下面的"研究问题 / 摘要"要用它做**去重** ——
+   * 主题一旦收敛到论文标题，那几个字段就会与标题逐字相同（同一句话在卡片上出现三次）。
+   */
+  const work = input.workName
+    ? { name: input.workName, source: 'fallback' as WorkNameSource }
+    : researchWorkName(input.researchRoot, input.workspaceTitle)
+
+  /** 与名字逐字相同的文本不该再上送（重复的字段会让卡片看起来像坏了）。 */
+  const duplicatesName = (text: string): boolean =>
+    text.trim() !== '' && text.trim() === work.name.trim()
+
   // 研究问题：project.md 的 Research Questions 优先（那是研究者显式写下的），
   // 其次是状态文档的同名维度，最后退回主题句。
   const questions =
     project?.questions && project.questions.length > 0
       ? project.questions.join('；')
       : dimension(state, 'Research Questions')
-  const researchQuestion = clip(questions || project?.topic || '', PUBLISH_FIELD_LIMIT)
+  const questionSource = questions || project?.topic || ''
+  // ⚠️ 主题已收敛到论文标题（= 名字）时**不再重复送**：那个字段与标题逐字相同，没有信息
+  const researchQuestion = duplicatesName(questionSource) ? '' : clip(questionSource, PUBLISH_FIELD_LIMIT)
 
   // 动机：优先 `project.md` 的 Motivation（研究者自己写下的一句话，适合做 Brief 的一行），
   // 其次状态文档的 `Problem` 段（更长，按上限截断）。
@@ -222,19 +254,39 @@ export function buildPublishContent(input: PublishContentInput): {
   const stageId = input.progress.progress.stage?.id ?? null
   const stage = stageId ? PROCESS_STAGE_TO_SERVER_STAGE[stageId] : undefined
 
+
+
   /*
-   * 这项研究工作的名字。**随内容一起上送**，因为网络列表读的是服务器上的数据 ——
-   * 看列表的人本机不一定有这份 workspace（见文件头）。
+   * 摘要：本来是"这项工作在做什么"的一行（服务器文档里它是"进度概览"）。
+   *
+   * ⚠️ 主题一旦收敛到论文标题，这一栏就会与**标题**逐字相同 —— 同一句话出现在标题与摘要
+   * 两处，会让人以为卡片坏了。这时**宁可不送**：
+   *   · 退回"动机/问题"是错的 —— 那与 `motivation` 又重复一次（等于把重复换个位置）；
+   *   · 本机确实没有第二句更合适的话时，空着比重复诚实。
+   * （`missing` 不报它：那是"本机没有这个内容"，而这里是"内容与名字重复、故意不重复送"。）
    */
-  const work = input.workName
-    ? { name: input.workName, source: 'fallback' as WorkNameSource }
-    : researchWorkName(input.researchRoot, input.workspaceTitle)
+  const summarySource = project?.topic ?? ''
+  const summary = summarySource && !duplicatesName(summarySource)
+    ? clip(summarySource, PUBLISH_SUMMARY_LIMIT)
+    : ''
+
+  /*
+   * 主题两级事实：`topic` = 当前采纳的主题；`initial_topic` = 开题时的初始输入。
+   *
+   * ⚠️ 与"摘要去重"不同：那两个是**展示字段**，重复会让人以为卡片坏了；
+   * 这两个是**供服务端兜底的事实**，即使今天与 `work_name` 同值也必须上送
+   * （其它客户端、以及服务器上更早发布的工作都靠它们取名）。
+   */
+  const topic = (project?.topic ?? '').trim()
+  const initialTopic = (project?.initialTopic ?? '').trim()
 
   const content: PublishContent = {
     schema_version: 1,
     work_name: work.name,
+    ...(topic ? { topic } : {}),
+    ...(initialTopic && initialTopic !== topic ? { initial_topic: initialTopic } : {}),
     ...(researchQuestion ? { research_question: researchQuestion } : {}),
-    ...(project?.topic ? { summary: clip(project.topic, PUBLISH_SUMMARY_LIMIT) } : {}),
+    ...(summary ? { summary } : {}),
     ...(motivation ? { motivation } : {}),
     ...(hypothesis ? { hypothesis } : {}),
     ...(coreIdea ? { core_idea: coreIdea } : {}),

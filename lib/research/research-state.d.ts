@@ -102,6 +102,12 @@ export declare function listStateProposals(workspace: string): StateUpdatePropos
 export declare function readStateProposal(workspace: string, id: string): StateUpdateProposal | undefined;
 /** 读取处置历史（who / when / based on what）。 */
 export declare function listStateUpdateLog(workspace: string): StateUpdateRecord[];
+/**
+ * 追加一条状态处置记录（`research/state-proposals/applied.json`）。
+ *
+ * 导出给 `state-sync.ts` 用：自动同步也必须留痕 —— "状态为什么变了"永远只有一个地方要查。
+ */
+export declare function appendStateUpdateRecord(workspace: string, record: StateUpdateRecord): void;
 /** 版本递增（整数语义：v1 → v2）。 */
 export declare function bumpStateVersion(version: string): string;
 /**

@@ -1765,7 +1765,12 @@ section('[6e] 发布本机研究（work/publish）')
     assert(typeof stateCall.headers['idempotency-key'] === 'string' && stateCall.headers['idempotency-key'].length > 0, '上传带 Idempotency-Key')
     // 内容映射：从本机文件真实提取
     assertEq(payload.content.research_question, '裁剪证据能否改善失败判定？；校准缺口有多大？', '研究问题取自 project.md 的 Research Questions')
-    assertEq(payload.content.summary, '低算力视觉语言方向的可证伪问题', '摘要 = 主题句')
+    /*
+     * 这个 fixture 没有论文 → 工作名就是主题句；此时**摘要不再重复送同一句话**
+     * （标题与摘要逐字相同会让人以为卡片坏了，见 publish-content 的注释）。
+     */
+    assertEq(payload.content.work_name, '低算力视觉语言方向的可证伪问题', '没有论文 → 工作名 = 主题句')
+    assertEq(payload.content.summary, undefined, '名字 = 主题句 → 摘要不重复送同一句话')
     assertEq(payload.content.hypothesis, 'H1：收益是强样本条件性的。', '假设取自 research-state.md 的 Hypotheses')
     assertEq(payload.content.core_idea, '把裁剪当作可证伪的干预来研究。', '核心想法取自 Innovation')
     assertEq(payload.content.method_overview, '三组对照 + oracle 上界。', '方法概览取自 Method（**方法留在本机**指的是提示词/工作流，不是研究方法的表述）')
@@ -2838,6 +2843,54 @@ section('[6j] 研究工作的名字（论文标题 > 主题 > 兜底）')
   assertEq(plan.value.title, 'Hierarchical Memory: Theory and Practice', '⑧ 计划里的 `title` = 要发布的名字')
   assertEq(plan.value.workspaceTitle, '低算力 VL 方向', '⑧ 另给本机工作区名（两者不同时界面用一行提示指认）')
   assertEq(plan.value.workNameSource, 'paper', '⑧ 名字来源 = paper（诊断用）')
+
+  // ── ⑨ 名字与摘要/研究问题**不重复**（主题收敛到论文标题之后尤其容易撞）──
+  {
+    const PC = await import(lib('research/publish-content.js'))
+    const build = (over = {}) =>
+      PC.buildPublishContent({
+        researchRoot: root,
+        workspaceTitle: '低算力 VL 方向',
+        progress: { overall: 0.5, paper: true, stateVersion: '1', progress: { stage: null, dimensions: [] }, counts: [] },
+        generatedAt: '2026-10-13T00:00:00.000Z',
+        project: { topic: 'Hierarchical Memory: Theory and Practice', goal: '给机器人策略做数据过滤。', domain: '', questions: [] },
+        state: null,
+        ...over,
+      }).content
+    assertEq(build().summary, undefined, '⑨ 主题 == 名字 → **不送** summary（同一句话不出现在标题与摘要两处）')
+    assertEq(
+      build({ project: { topic: '另一个主题', goal: '动机句。', domain: '', questions: [] } }).summary,
+      '另一个主题',
+      '⑨ 主题 ≠ 名字 → summary 照旧送主题句',
+    )
+    assertEq(
+      build({ project: { topic: 'Hierarchical Memory: Theory and Practice', goal: '', domain: '', questions: [] } }).research_question,
+      undefined,
+      '⑨ 没有研究问题、主题又等于名字 → 不拿名字去顶 research_question',
+    )
+
+    /*
+     * ── ⑩ 两级主题事实随信封上送（服务器在 `work_name` 缺省时用它兜底取名）──
+     *
+     * 与⑨的"去重"**不矛盾**：⑨ 去重的是**展示字段**（重复会让卡片看起来像坏了），
+     * 这里上送的是**供服务端兜底的事实** —— 即使今天与 `work_name` 同值也必须带，
+     * 因为其它客户端、以及服务器上更早发布的工作都靠它取名。
+     */
+    const evolved = build({ project: { topic: '当前采纳的主题句', initialTopic: '开题时的初始输入', goal: '', domain: '', questions: [] } })
+    assertEq(evolved.topic, '当前采纳的主题句', '⑩ topic 随信封上送（= project.md 的当前主题）')
+    assertEq(evolved.initial_topic, '开题时的初始输入', '⑩ initial_topic 随信封上送（主题演进过）')
+    assertEq(
+      build({ project: { topic: '同一个句子', initialTopic: '同一个句子', goal: '', domain: '', questions: [] } }).initial_topic,
+      undefined,
+      '⑩ initial_topic 与 topic 相同时省略（同一句话不发两遍）',
+    )
+    assertEq(typeof evolved.paper?.title, 'string', '⑩ paper.title 也在信封里（解析链的第二级）')
+    assertEq(
+      Object.keys(evolved).slice(0, 4).join(','),
+      'schema_version,work_name,topic,initial_topic',
+      '⑩ 信封顶层顺序：work_name 之后紧跟两级主题事实（契约可读）',
+    )
+  }
 
   fs.rmSync(HOME8, { recursive: true, force: true })
 }

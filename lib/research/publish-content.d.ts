@@ -74,6 +74,21 @@ export interface PublishContent {
      * 所以这个字段今天就能收；投影需要后端配合，见 `dev-notes/v0.6.0-work-name-api.md`）。
      */
     work_name?: string;
+    /**
+     * **研究主题**（当前采纳的那句，来自 `project.md` 的 `topic`）—— 上送的是**事实**。
+     *
+     * 为什么上送：服务器在 **`work_name` 缺省**时（更早发布的工作、没有算过名字的其它客户端）
+     * 需要有名字可显示。它与 `work_name` 今天是同一个字符串也无妨：`work_name` 是"客户端
+     * 已经算好的名字"（给不认识解析链的服务端直接用），`topic` 是"事实"，用途不同。
+     * 解析链见 `dev-notes/v0.6.0-work-name-api.md`。
+     */
+    topic?: string;
+    /**
+     * 开题时的初始输入主题（**只在主题演进过、且与 `topic` 不同**时上送）。
+     *
+     * 与 `topic` 相同时省略：同一句话不必发两遍 —— 这一级的价值恰恰在于"主题演进过"。
+     */
+    initial_topic?: string;
     research_question?: string;
     summary?: string;
     motivation?: string;

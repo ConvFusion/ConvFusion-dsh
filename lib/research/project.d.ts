@@ -30,6 +30,7 @@ export declare function serializeProject(input: {
     domain?: string;
     goal?: string;
     questions?: readonly string[];
+    scope?: string;
     createdAt?: string;
     updatedAt?: string;
 }): string;
@@ -46,6 +47,10 @@ export declare function saveProjectFile(workspace: string, input: {
 }): ResearchProject;
 /** 主题变更记录。 */
 export interface TopicChange {
+    /**
+     * 改的是哪个字段。缺省 = `topic`（历史记录里旧条目没有这个键，读作 topic）。
+     */
+    field?: 'topic' | 'statement' | 'questions' | 'scope' | 'domain' | 'motivation';
     from: string;
     to: string;
     /** ISO 8601。 */
@@ -90,4 +95,41 @@ export declare function updateProjectTopic(workspace: string, input: {
 export declare function hasProjectDefinition(workspace: string): boolean;
 /** 供工具/命令：取研究主题。 */
 export declare function projectTopic(workspace: string): string | undefined;
+/**
+ * 读一个 `## 章节` 的正文（去掉注释；章节不存在 → null）。
+ *
+ * ⚠️ `Research Statement` 的"上一版"**必须**这样读：`loadProjectFile` 的 `topic` 优先取
+ * frontmatter，主题演进后它与正文那段就不一致了 —— 拿 `topic` 当 statement 的现值，
+ * 会永远判成"没变化"，正文于是永远停在初始输入（这个 bug 已经修过一次）。
+ */
+export declare function readProjectSection(workspace: string, section: string): string | null;
+/** 一个章节的正文是否还是"空占位"（没有人类内容）。 */
+export declare function isPlaceholderSection(workspace: string, section: string): boolean;
+export type DefinitionField = Exclude<NonNullable<TopicChange['field']>, 'topic'>;
+export type DefinitionUpdateResult = {
+    changed: true;
+    field: DefinitionField;
+    previous: string;
+    current: string;
+} | {
+    changed: false;
+    field: DefinitionField;
+    current: string;
+} | {
+    changed: false;
+    field: DefinitionField;
+    error: string;
+};
+/**
+ * 更新研究定义的一个章节（外科手术式，只动那一段）。
+ *
+ * @param input.field `statement` / `questions` / `scope` / `domain` / `motivation`
+ * @param input.force 章节里已有手写内容时是否仍覆盖（默认 false = 只填占位）
+ */
+export declare function updateProjectDefinition(workspace: string, input: {
+    field: DefinitionField;
+    value: string | readonly string[];
+    reason?: string;
+    force?: boolean;
+}): DefinitionUpdateResult;
 //# sourceMappingURL=project.d.ts.map

@@ -64,6 +64,13 @@ export interface ResearchProject {
   questions?: string[]
   /** 期望产出 / 目标描述。 */
   goal?: string
+  /**
+   * 研究范围（`## Scope`）：这项研究**包含什么、明确不包含什么**。
+   *
+   * 与 `topic` 同属"研究定义"，但它是**判断**而非事实：只有研究者/方法技能能写，
+   * 插件不会从产物里推断（`syncProjectDefinition` 只在它仍是空占位时才用有来源的字段填）。
+   */
+  scope?: string
   /** 创建与更新时间（ISO 8601）。 */
   createdAt?: string
   updatedAt?: string

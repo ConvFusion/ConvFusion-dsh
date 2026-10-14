@@ -37,6 +37,7 @@
  */
 
 import { STAGE_SIGNALS, buildSignalContext, judgeSignal, type StageSignal } from './stage-signals.js'
+import { STATE_DIMENSIONS, type StateDimension } from './research-data.js'
 
 // 信号词表与判定逻辑抽到 `stage-signals.ts` 共享（阶段模型 + 技能前置依赖共用同一份）。
 // 这里重新导出，保持 `PROC.STAGE_SIGNALS` 等既有引用不变。
@@ -54,6 +55,21 @@ export interface ResearchStage {
   signal?: StageSignal
   /** 这个阶段要产出什么（用于"最缺什么"的说明）。 */
   produces: string
+  /**
+   * 本阶段的结论该写回 **Research State** 的哪些维度。
+   *
+   * 这是"自进化"那条链的落点（架构 §：`Evidence is produced → Paper evolves →
+   * Research State changes → Harness decides again`）：阶段定义了"产出什么"，
+   * 这个字段定义"产出之后状态里该出现什么"。
+   *
+   * 两件事用它：
+   *   ① 注入的上下文会把它说出来（`Current stage: … → Research State dimensions: X`），
+   *      让 Agent 知道这一步的结论要落到哪个维度；
+   *   ② `research/state-sync.ts` 的**产物汇总自动同步**按它决定维度是否需要重写。
+   *
+   * 留空 = 这个阶段没有对应的状态维度（如「资源评估」的产物是计划、「论文写作」的产物是论文）。
+   */
+  state?: readonly StateDimension[]
 }
 
 /**
@@ -64,13 +80,13 @@ export interface ResearchStage {
  */
 /** 默认过程（兜底）：与 `research-process` 能力里的默认块保持一致。 */
 export const DEFAULT_STAGES: readonly ResearchStage[] = [
-  { id: 'topics', label: '提出话题', category: 'research-understanding', signal: 'topic-proposed', produces: '研究话题（`research/topics.md`）' },
-  { id: 'literature', label: '文献调研', category: 'literature', signal: 'literature-evidence', produces: '实际检索到的文献证据（`research/evidence/`）' },
-  { id: 'innovation', label: '创新假设', category: 'innovation', signal: 'claims', produces: '已确定的研究问题与主题、可检验的假设与主张（`project.md` / `research/claims/`）' },
-  { id: 'planning', label: '计划管理', category: 'research-planning', signal: 'method-plan', produces: '可执行的研究计划与方法设计（`research/plans/`）' },
+  { id: 'topics', label: '提出话题', category: 'research-understanding', signal: 'topic-proposed', produces: '研究话题（`research/topics.md`）', state: ['Problem'] },
+  { id: 'literature', label: '文献调研', category: 'literature', signal: 'literature-evidence', produces: '实际检索到的文献证据（`research/evidence/`）', state: ['Literature', 'Current Knowledge'] },
+  { id: 'innovation', label: '创新假设', category: 'innovation', signal: 'claims', produces: '已确定的研究问题与主题、可检验的假设与主张（`project.md` / `research/claims/`）', state: ['Innovation', 'Hypotheses'] },
+  { id: 'planning', label: '计划管理', category: 'research-planning', signal: 'method-plan', produces: '可执行的研究计划与方法设计（`research/plans/`）', state: ['Method'] },
   { id: 'resource', label: '资源评估', category: 'resource-estimation', signal: 'resource-estimate', produces: '资源需求、成本与可行性估计（`research/plans/`）' },
-  { id: 'decision', label: '研究决策', category: 'research-decision', signal: 'decisions', produces: '已记录理由的研究决策（`research/decisions/`）' },
-  { id: 'experiment', label: '实验验证', category: 'experiment', signal: 'experiments', produces: '实验产物与经确认的结果证据（`experiments/<name>/results/`）' },
+  { id: 'decision', label: '研究决策', category: 'research-decision', signal: 'decisions', produces: '已记录理由的研究决策（`research/decisions/`）', state: ['Decisions'] },
+  { id: 'experiment', label: '实验验证', category: 'experiment', signal: 'experiments', produces: '实验产物与经确认的结果证据（`experiments/<name>/results/`）', state: ['Experiments', 'Evidence'] },
   { id: 'writing', label: '论文写作', category: 'academic-writing', signal: 'manuscript', produces: '论文正文（`papers/<id>/paper.md`）' },
 ]
 
@@ -90,6 +106,25 @@ export const PROCESS_SKILL_ID = 'research-process'
  *
  * @returns 解析出的阶段；没有可解析的块时返回 `undefined`（调用方退回默认过程）
  */
+/**
+ * 解析阶段定义里的第 6 段 `state=A,B`（可选）。
+ *
+ * 只收**已知维度名**（`STATE_DIMENSIONS`），写错的名字直接丢掉：维度名是闭合词表，
+ * 一个笔误不该让"这个阶段该写回哪个维度"变成半对半错。
+ */
+function parseStateDimensions(field: string | undefined): StateDimension[] {
+  const raw = (field ?? '').trim()
+  if (!raw) return []
+  const body = /^state\s*[:=]\s*(.*)$/i.exec(raw)?.[1] ?? raw
+  const out: StateDimension[] = []
+  for (const piece of body.split(/[,，;；]/).map((x) => x.trim())) {
+    if (!piece) continue
+    const hit = STATE_DIMENSIONS.find((d) => d.toLowerCase() === piece.toLowerCase())
+    if (hit && !out.includes(hit)) out.push(hit)
+  }
+  return out
+}
+
 export function parseStages(content: string | undefined): ResearchStage[] | undefined {
   if (!content) return undefined
   const stages: ResearchStage[] = []
@@ -102,15 +137,18 @@ export function parseStages(content: string | undefined): ResearchStage[] | unde
       continue
     }
     const parts = m[1].split('|').map((x) => x.trim())
-    const [id, label, category, signal, produces] = parts
+    const [id, label, category, signal, produces, stateField] = parts
     if (!id || !label || !category) continue
     const known = (STAGE_SIGNALS as readonly string[]).includes(signal ?? '')
+    // 第 6 段可选：`state=Problem,Hypotheses`（旧的过程定义没有这一段 → 不改行为）
+    const state = parseStateDimensions(stateField)
     stages.push({
       id,
       label,
       category: category.split('/')[0] ?? category,
       ...(known ? { signal: signal as StageSignal } : {}),
       produces: produces || `${label} 阶段的产出`,
+      ...(state.length > 0 ? { state } : {}),
     })
   }
   return stages.length > 0 ? stages : undefined
