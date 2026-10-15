@@ -386,6 +386,57 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
   assert(/community\.login\.keyLabel/.test(firstCard), '登录表单在第一张卡片内')
   assert(/S\.accountName/.test(firstCard), '账号信息和登录表单在同一张卡片（登录后同一个位置）')
 
+  // ── 版式：用户信息卡**默认折叠**（2026-10 用户要求）────────────────────
+  //
+  // 折叠时卡片头就给出"是谁 + 还剩多少 Token"，展开才是账号 / 服务器设置。
+  // 三件事分别钉：① 默认确实是收起；② 卡片头真是开关（鼠标 + 键盘）；
+  // ③ 收起时给出的正是用户名与 Token —— 否则"折叠"就等于把功能藏起来。
+  assert(/const \[userOpen, setUserOpen\] = React\.useState\(false\)/.test(src), '用户信息卡默认折叠')
+  assert(/aria-expanded=\{userOpen\}/.test(src), '卡片头是折叠开关（aria-expanded 可访问）')
+  assert(/\{userOpen \? \(/.test(tabBody), '卡片体只在展开时渲染')
+  {
+    // 从卡片头（唯一的 role="button"）切到卡片体开头：这一段就是"折叠摘要"
+    const headFrom = tabBody.indexOf('role="button"')
+    const headTo = tabBody.indexOf('S.cardBody')
+    assert(headFrom > -1 && headTo > headFrom, '用户信息卡的结构：卡片头 → 卡片体')
+    const head = tabBody.slice(headFrom, headTo)
+    assert(/!userOpen/.test(head), '折叠摘要只在收起时渲染（展开后不重复显示）')
+    assert(/S\.accountName/.test(head), '折叠摘要给出用户名')
+    assert(/tokens\.available/.test(head), '折叠摘要给出 Token 数')
+    // 折叠时最上面那颗余额按钮必须**不触发折叠**（否则点余额会把卡片收起来）
+    assert(/stopPropagation\(\)/.test(head), '折叠摘要里的余额按钮不触发折叠开关')
+  }
+  // 失败不能藏在折页后面：账号类调用一失败就自动展开
+  assert(
+    /setFailure\([\s\S]{0,400}?setUserOpen\(true\)/.test(src),
+    '登录 / 验证失败时自动展开（错误必须看得见）',
+  )
+  dictHas('community.tip.expand', '展开账号与服务器设置', 'Show account and server settings', '折叠开关的悬浮说明')
+  dictHas('community.tip.collapse', '收起账号与服务器设置', 'Hide account and server settings', '收起时的悬浮说明')
+
+  // ── 【账号】的仪表板：少量小图（Token / 存储 / 项目，2026-10 用户要求）──
+  //
+  // 三条纪律各有断言：① 图形是**画的**（环形图），不是一堆文字；
+  // ② 数字来自**服务器**（Token 来自已验证的余额、存储/项目来自 `account/usage`）；
+  // ③ "读不到"与"确实是 0"分开显示（`—` / `…`，绝不用 0 兜底）。
+  assert(/function UsageRing\(/.test(src), '仪表板的小图是独立组件（比例由它画）')
+  assert(/function DashTile\(/.test(src) && /S\.dashTile/.test(src), '仪表板用同规格的小图块（三块对齐）')
+  assert(
+    /community\.dash\.token/.test(community) &&
+      /community\.dash\.storage/.test(community) &&
+      /community\.dash\.projects/.test(community),
+    '仪表板有三块：Token / 存储 / 项目',
+  )
+  assert(/account\/usage/.test(community), '存储与项目取自 account/usage（不写死、不猜）')
+  assert(/community\.error\.hostRestart/.test(community), '旧宿主没有 account/usage 时说清"需重启"')
+  assert(
+    /usagePhase === 'loading' \? '…' : '—'/.test(src),
+    '"还在读"（…）与"读不到"（—）分开：拿不到**不**画成 0',
+  )
+  dictHas('community.dash.token', 'Token 余额', 'Token balance', '仪表板：Token')
+  dictHas('community.dash.storage', '存储空间', 'Storage', '仪表板：存储空间')
+  dictHas('community.dash.projects', '已发布项目', 'Published projects', '仪表板：已发布项目')
+
   // ── 研究工作：四个视图（我的 / 可指导 / 可加入 / 指导中，v0.6.0）──────────
   assert(/workTab === 'mine'/.test(community) && /workTab === 'mentor'/.test(community), '研究工作卡片有多个视图')
   /*
@@ -398,6 +449,18 @@ console.log('\n[1e] 三个 Tab：本地研究方法 / ConvFusion.com / 系统设
     const tabOrder = [...community.matchAll(/<MiniTab[\s\S]{0,80}?active=\{workTab === '(\w+)'\}/g)].map((m) => m[1])
     assertEq(tabOrder, ['mine', 'mentor', 'joinable', 'mentorship'], 'Tab 顺序：我的 → 可指导 → 可加入 → 指导中')
   }
+  /*
+   * 【我的】的行：显示**研究工作自己的名字**（与【指导中】同一个取值规则），
+   * 并按 **work_id** 区分 —— 会话工作区目录名（如 `ConvFusion-dsh`）区分不了，
+   * 因为同一个会话工作区里可以有多项研究（2026-10 用户要求）。
+   */
+  assert(
+    /<div style=\{S\.listTitle\}>\{workLabelOf\(w\)\}<\/div>/.test(src),
+    '【我的】行标题 = 研究工作名（workLabelOf，与【指导中】同款）',
+  )
+  assert(/\{w\.workId \? <span>\{w\.workId\}<\/span> : null\}/.test(src), '行上显示 work_id（身份；没有则不占位）')
+  assert(/workName\?: string/.test(src) && /workId\?: string \| null/.test(src), '列表项类型带 workName / workId')
+
   /*
    * Tab 上的**条数**（【我的 (2)】）：取自同一个 state，所以与点进去的行数一致。
    * `null`（未登录 / 还没读到 / 读失败）→ **不显示数字**：`0` 是断言"确实没有"，

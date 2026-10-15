@@ -623,6 +623,18 @@ export interface ServerProject {
      * 界面退回 `title`（不编造）。
      */
     workName?: string | null;
+    /**
+     * **这项研究工作的标识** `workspace_id`（服务器给，`ws_<32 hex>`）。
+     *
+     * 它是"一项研究工作"的**全局唯一、跨项目生命周期不变**的身份（改题、改描述、
+     * 项目被删后重建、重新发布都不变）—— 所以它是本机区分"这是哪一项研究"的**唯一**判据，
+     * 不是主题（会变）也不是 `project_id`（一次发布一个）。
+     *
+     * - 有值 → 服务器认同的身份；
+     * - `null` → 服务器**明确说没有**（老项目可能确实没有）；
+     * - `undefined` → **旧服务器还没有这个字段** → 按"无法判定"处理（不阻塞，也不编造）。
+     */
+    workspaceId?: string | null;
     updatedAt: string;
 }
 /** 上传研究状态的入参（`content` 是服务器的内容 Envelope，见 API.md §9.1）。 */
@@ -644,6 +656,7 @@ export declare function createProject(base: string, apiKey: string, input: {
     title: string;
     description?: string;
     direction?: ProjectDirection;
+    workspaceId?: string;
 }, options?: ServerRequestOptions): Promise<ServerProject>;
 /**
  * 改项目（`PUT /projects/{id}`，owner-only）。

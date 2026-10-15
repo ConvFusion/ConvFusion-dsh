@@ -212,6 +212,29 @@ export interface HostAccountState {
 }
 
 /**
+ * 用量与配额（宿主 `account/usage` 的镜像，服务器 `GET /usage`）。
+ *
+ * 【账号】卡片的**仪表板**用它画"存储空间 / 已发布项目"两块小图。
+ * ⚠️ 它是**尽力而为**的一份数据：读不到时宿主给 `null`（**不是** 0）——
+ * 界面据实显示"未知"，不把"读不到"画成"还剩 0 字节"。
+ */
+interface HostUsage {
+  /** 下一个项目发布要花的 Token。 */
+  nextPublishCost: number
+  /** 已付费（曾经发布过）的项目数。 */
+  paidProjects: number
+  /** 项目层级（阶梯号）。 */
+  tier: number
+  storage: {
+    usedBytes: number
+    capacityBytes: number
+    availableBytes: number
+    /** 每 N 字节 1 Token（扩容单价的分母）。 */
+    bytesPerToken: number
+  }
+}
+
+/**
  * 一条续费申请（宿主 `account/recharge-requests` 的镜像）。
  *
  * `PENDING` = 等管理员处理；`APPROVED` = 已发放（`grantTxId` 指向账本那条 `GRANT`）；
@@ -688,6 +711,93 @@ const S = {
     fontSize: 11.5,
     fontWeight: 600,
     cursor: 'pointer',
+  } as React.CSSProperties,
+  /**
+   * 卡片头的**折叠箭头**（展开时转 90°）。
+   *
+   * 折叠与否必须**一眼可见**：只靠"内容多了一段"不够（用户会以为功能没了）。
+   * 尺寸取 15px（比卡片头的字号大一档）——它是这一行里**唯一**的交互提示，
+   * 和旁边的徽章同一视觉重量才找得到；用固定宽度让旋转前后标题不动（▸ 转 90° 后
+   * 字宽会变，不固定的话整行标题会跟着抖一下）。
+   */
+  chevron: {
+    display: 'inline-block',
+    flex: '0 0 auto',
+    width: 14,
+    textAlign: 'center',
+    fontSize: 15,
+    lineHeight: 1,
+    color: 'var(--dsw-alias-label-secondary)',
+    transition: 'transform .15s',
+  } as React.CSSProperties,
+  /**
+   * 【账号】的仪表板：几块**小图**并排（Token / 存储 / 项目）。
+   *
+   * ⚠️ `flexWrap: 'wrap'` 是必需的：会话 Tab 那一列的宽度可以被拖得很窄，
+   * 三块并排会被各压成一条；换行后每块各自保持可读。
+   */
+  dash: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 10,
+  } as React.CSSProperties,
+  /** 一块小图：左边图形，右边标题 + 数字（+ 一行注释）。 */
+  dashTile: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    flex: '1 1 190px',
+    minWidth: 170,
+    padding: '8px 12px',
+    borderRadius: 10,
+    border: '1px solid var(--dsw-alias-border-l1)',
+    background: 'var(--dsw-alias-bg-layer-2)',
+  } as React.CSSProperties,
+  dashTitle: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: 'var(--dsw-alias-label-secondary)',
+  } as React.CSSProperties,
+  dashValue: {
+    fontSize: 15,
+    fontWeight: 700,
+    lineHeight: 1.2,
+    color: 'var(--dsw-alias-label-primary)',
+    fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
+  } as React.CSSProperties,
+  dashUnit: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: 'var(--dsw-alias-label-tertiary)',
+    marginLeft: 3,
+  } as React.CSSProperties,
+  dashSub: {
+    fontSize: 10.5,
+    color: 'var(--dsw-alias-label-tertiary)',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  } as React.CSSProperties,
+  /**
+   * 没有"比例"可画的那一块（已发布项目）：一个**圆形数字块**。
+   *
+   * 与圆环同尺寸（54×54），所以三块的眼睛落点在同一条线上；不为了凑形状
+   * 给计数编一个分母（那会画出一张没有意义的饼）。
+   */
+  dashStat: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: '0 0 auto',
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    background: 'var(--dsw-alias-state-business-tertiary)',
+    color: 'var(--dsw-alias-state-business-primary)',
+    fontSize: 18,
+    fontWeight: 700,
+    fontVariantNumeric: 'tabular-nums',
   } as React.CSSProperties,
 }
 
@@ -1672,8 +1782,24 @@ interface HostWork {
 type HostProjectDirection = 'SEEK_MENTOR' | 'SEEK_STUDENT'
 
 interface HostLocalWork {
+  /** 注册表 id（内部键）。 */
   id: string
+  /** 会话工作区目录名。**只作兜底**：行上显示的是 `workName`。 */
   title: string
+  /**
+   * **这项研究工作自己的名字**（论文标题 > 已采纳主题 > 目录名兜底）。
+   *
+   * ⚠️ 行上必须显示它：`title` 是会话工作区目录名（如 `ConvFusion-dsh`），
+   * 同一个会话工作区里可以有多项研究，用目录名区分不了（2026-10 用户要求）。
+   */
+  workName?: string
+  /**
+   * **这项研究工作的身份** `workspace_id`（服务器给；新建的本机研究是 `null`）。
+   *
+   * 发布之后服务器返回它、并落盘在本机（`.convfusion/work.json`）—— 从那以后
+   * "这是哪一项研究"由它区分，而不是由工作区名区分。
+   */
+  workId?: string | null
   path: string
   researchRoot: string
   missingDir: boolean
@@ -3078,6 +3204,92 @@ function TokenDonut({
 }
 
 /**
+ * 仪表板里的**小圆环**（只有弧，没有文字）。
+ *
+ * 为什么不复用 {@link TokenDonut}：那张图把总额与图例画在 SVG **内部**，而 viewBox
+ * 是固定 160 —— 缩到 54px 时那些字只有 3–7px，等于没有。小图只承担"比例"一件事，
+ * 精确数字交给旁边**可读的 HTML 文本**（缩放不改变字号）。
+ *
+ * @param fraction 0–1；超出范围或非有限值一律夹住（服务器给什么数字都不能画坏）
+ * @param tone 品牌蓝（正常）/ 警告色（快满）/ 中性（未知）
+ */
+function UsageRing({
+  fraction,
+  size = 54,
+  tone = 'brand',
+}: {
+  fraction: number
+  size?: number
+  tone?: 'brand' | 'warn' | 'neutral'
+}): JSX.Element {
+  const r = 64
+  const c = 80
+  const circumference = 2 * Math.PI * r
+  const f = Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0))
+  const stroke =
+    tone === 'warn'
+      ? 'var(--dsw-alias-state-warn-primary)'
+      : tone === 'neutral'
+        ? 'var(--dsw-alias-label-tertiary)'
+        : 'var(--dsw-alias-state-business-primary)'
+  return (
+    <svg width={size} height={size} viewBox="0 0 160 160" aria-hidden="true" style={{ flex: '0 0 auto' }}>
+      {/* 背景轨道：即使比例是 0 也能看出"这里有个表" */}
+      <circle cx={c} cy={c} r={r} fill="none" stroke="var(--dsw-alias-bg-layer-2)" strokeWidth={14} />
+      {f > 0 ? (
+        <circle
+          cx={c}
+          cy={c}
+          r={r}
+          fill="none"
+          stroke={stroke}
+          strokeWidth={14}
+          strokeLinecap="round"
+          strokeDasharray={`${circumference * f} ${circumference}`}
+          transform={`rotate(90 ${c} ${c})`}
+        />
+      ) : null}
+    </svg>
+  )
+}
+
+/**
+ * 仪表板里的**一块小图**：左边图形、右边标题 + 数字 + 一行注释。
+ *
+ * 三块用同一个骨架，所以宽度不一致时眼睛也能横向对齐；数字一律走 `value`，
+ * 不许把数字写进图形里（图形会被缩放，数字不会）。
+ */
+function DashTile({
+  title,
+  chart,
+  value,
+  unit,
+  sub,
+}: {
+  title: string
+  chart: React.ReactNode
+  value?: string | null
+  unit?: string | null
+  sub?: string | null
+}): JSX.Element {
+  return (
+    <div style={S.dashTile}>
+      {chart}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+        <span style={S.dashTitle}>{title}</span>
+        {value ? (
+          <span style={S.dashValue}>
+            {value}
+            {unit ? <span style={S.dashUnit}>{unit}</span> : null}
+          </span>
+        ) : null}
+        {sub ? <span style={S.dashSub}>{sub}</span> : null}
+      </div>
+    </div>
+  )
+}
+
+/**
  * **Token 余额弹窗**（点账号行的余额徽章打开，2026-09 用户要求）。
  *
  * 三件事：① 余额明细（可用 / 冻结 / 合计）；② **续费说明**（目前由管理员发放，
@@ -4318,6 +4530,26 @@ export function CommunityTab({
 
   /** 用户信息区的内部 Tab：账号（登录 / 已登录）与服务器设置。 */
   const [userTab, setUserTab] = React.useState<'account' | 'server'>('account')
+  /**
+   * 用户信息卡是否**展开**。默认**折叠**（2026-10 用户要求）。
+   *
+   * 折叠时卡片头就给出了"是谁 + 还剩多少 Token"这两个最常看的信息，展开才是
+   * 账号 / 服务器设置。所以默认收起不会藏住任何**日常**要看的东西（账号行的
+   * 刷新 / 登出、【服务器设置】都在展开之后）。
+   *
+   * ⚠️ 唯一的例外是**失败**：登录失败、凭据被拒这类事情必须看得见，所以
+   * {@link call} 一失败就自动展开（见那里的说明）。
+   */
+  const [userOpen, setUserOpen] = React.useState(false)
+  /* ── 仪表板数据（用量与配额：存储空间 / 项目阶梯）────────────────────
+   *
+   * 与 `state.tokens` 不同，这一份**要联网**（`account/usage`），所以只在卡片
+   * **展开且已登录**时读（折叠着不打扰服务器）。读不到 = `null` = 界面显示"未知"。
+   */
+  const [usage, setUsage] = React.useState<HostUsage | null>(null)
+  const [usagePhase, setUsagePhase] = React.useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle')
+  /** 宿主是旧的（没有 `account/usage` → unknown-endpoint）：要把"需重启"说出来。 */
+  const [usageStaleHost, setUsageStaleHost] = React.useState(false)
   const [serverDraft, setServerDraft] = React.useState(initial?.serverUrl ?? '')
   /**
    * 两个服务器快捷按钮的**连通性探测结果**（按环境记）。
@@ -4660,6 +4892,11 @@ export function CommunityTab({
       const res = await post(endpoint, payload)
       if (!res.ok) {
         setFailure(res.error ?? { code: 'unknown', message: t('community.error.unknown') })
+        /*
+         * 失败**必须看得见**：卡片默认是折叠的，而失败行在卡片体里 ——
+         * 不自动展开的话，"登录失败"会安静地发生在一个收起来的盒子后面。
+         */
+        setUserOpen(true)
         return null
       }
       const next = res.value as HostAccountState
@@ -5847,7 +6084,49 @@ export function CommunityTab({
     setBusy(true)
     await call('account/verify', {})
     setBusy(false)
+    // 刷新身份顺带刷新仪表板（存储 / 项目阶梯也变了的话，这一下就对上）
+    if (userOpen) void loadUsage()
   }
+
+  /**
+   * 读**用量与配额**（存储空间已用 / 总额、项目阶梯、下次发布花费）。
+   *
+   * ⚠️ 失败**不清空**已有数字：网络抖一下就显示"未知"，比显示上一次读到的值更糟
+   * （2026-09 余额那次的口径）。`usagePhase` 只用来区分"还在读"与"读不到"，
+   * 数字本身保持原样 —— 而 `null`（服务器真的没给）则如实显示"未知"。
+   */
+  const loadUsage = React.useCallback(async (): Promise<void> => {
+    setUsagePhase('loading')
+    setUsageStaleHost(false)
+    const res = await post('account/usage', {})
+    if (!res.ok) {
+      setUsagePhase('unavailable')
+      // 旧宿主没有这个端点 → 说清"需重启"，而不是让这一块永远空着（协议 v27）
+      setUsageStaleHost(res.error?.code === 'unknown-endpoint')
+      return
+    }
+    const next = (res.value as { usage: HostUsage | null }).usage ?? null
+    setUsage(next)
+    setUsagePhase(next ? 'ready' : 'unavailable')
+  }, [post])
+
+  /**
+   * 换账号 / 换服务器 → **先作废**仪表板上的旧数字。
+   *
+   * 不这么做的话，切到另一台服务器之后，"存储空间"会短暂（或永久，如果读不到）
+   * 显示**上一个账号**的配额 —— 那是最难发现的一类假信息。
+   */
+  React.useEffect(() => {
+    setUsage(null)
+    setUsagePhase('idle')
+    setUsageStaleHost(false)
+  }, [account?.id, activeServer])
+
+  /** 展开且已登录才去读用量（折叠着不联网）。 */
+  React.useEffect(() => {
+    if (!userOpen || !account) return
+    void loadUsage()
+  }, [userOpen, account?.id, activeServer, loadUsage])
 
   /**
    * 单独刷新 Token 余额。
@@ -5981,12 +6260,75 @@ export function CommunityTab({
       success: p.successPaymentAmount,
     })
 
+  /* ── 仪表板要画的比例（纯计算，先算好再画）──────────────────────────
+   *
+   * 三块小图的数字都从**服务器给的量**来：Token 来自 `state.tokens`，
+   * 存储 / 项目来自 `usage`。任何一项拿不到就是 `null` → 画"未知"，
+   * **不**用 0 兜底（0 是一个断言，不是"不知道"）。
+   */
+  const tokens = state?.tokens ?? null
+  const storage = usage?.storage ?? null
+  /** 可用 / 合计：没有余额或合计为 0 时是 0（不是"满"）。 */
+  const tokenFraction = tokens && tokens.total > 0 ? tokens.available / tokens.total : 0
+  /** 已用 / 容量：容量未知（0）时画不出比例。 */
+  const storageFraction = storage && storage.capacityBytes > 0 ? storage.usedBytes / storage.capacityBytes : 0
+  /** "还在读"与"读不到"要分开：前者给 `…`（马上就有），后者给 `—`（真的没有）。 */
+  const pendingMark = usagePhase === 'loading' ? '…' : '—'
+
   return (
     <>
       {/* ══ 用户信息区（内部 Tabs：账号 / 服务器设置）══════════════════════ */}
       <div style={S.card}>
-        <div style={S.cardHead}>
-          ◈ {t('community.title')}
+        {/*
+         * 卡片头 = **折叠开关**（2026-10 用户要求：默认折叠）。
+         *
+         * 折叠时这一行就回答了最常看的两个问题"我是谁 / 还剩多少 Token"，
+         * 展开才是账号与服务器设置。整行可点，键盘也能开（Enter / Space）——
+         * 用 `div[role=button]` 而不是 `<button>`：里面还有一个余额按钮，
+         * 按钮套按钮是非法 HTML（点击余额会连带切换折叠）。
+         */}
+        <div
+          role="button"
+          tabIndex={0}
+          aria-expanded={userOpen}
+          style={{ ...S.cardHead, cursor: 'pointer' }}
+          title={userOpen ? t('community.tip.collapse') : t('community.tip.expand')}
+          onClick={() => setUserOpen((v) => !v)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              setUserOpen((v) => !v)
+            }
+          }}
+        >
+          <span style={{ ...S.chevron, transform: userOpen ? 'rotate(90deg)' : 'none' }}>▸</span>
+          {t('community.title')}
+          {/* 折叠时的摘要：用户名 + Token 数（展开后这两个信息在账号行 / 仪表板里） */}
+          {!userOpen ? (
+            <>
+              {account ? (
+                <span style={{ ...S.accountName, flex: '0 0 auto' }}>{account.displayName}</span>
+              ) : phase === 'ready' ? (
+                // 未登录：这里给的是"点开能做什么"，所以按提示样式（不是账号名）
+                <span style={{ ...S.hint, flex: '0 0 auto' }}>{t('community.tab.signIn')}</span>
+              ) : null}
+              {tokens ? (
+                <button
+                  type="button"
+                  style={{ ...S.tokenBadge, flex: '0 0 auto', opacity: busy ? 0.55 : 1 }}
+                  disabled={busy}
+                  title={t('community.tip.balance')}
+                  // 折叠状态下也能直接看明细 —— 所以它不能触发整行的折叠开关
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    openTokenDialog()
+                  }}
+                >
+                  ◎ {tokens.available} Token
+                </button>
+              ) : null}
+            </>
+          ) : null}
           <span style={{ flex: '1 1 auto' }} />
           {/* 环境徽章：开发连的是本机服务器，生产连的是线上 —— 两者不能混为一谈。
               环境还没读到（宿主是旧的 / 正在读）时不猜，先不显示。 */}
@@ -6007,307 +6349,365 @@ export function CommunityTab({
           )}
         </div>
 
-        <div style={S.cardBody}>
-          {/*
-           * 这里**不放**常驻的产品说明（Pitch Deck 的那句定位属于文档与首页，不属于设置页）。
-           * 设置页只在**业务真的发生时**给提示：失败原因、空结果、待填字段、状态异常。
-           */}
+        {userOpen ? (
+          <div style={S.cardBody}>
+            {/*
+             * 这里**不放**常驻的产品说明（Pitch Deck 的那句定位属于文档与首页，不属于设置页）。
+             * 设置页只在**业务真的发生时**给提示：失败原因、空结果、待填字段、状态异常。
+             */}
 
-          {/* 内部 Tab：两个小标签，切换"账号"与"服务器设置" */}
-          <div style={S.miniTabs}>
-            <MiniTab active={userTab === 'account'} onClick={() => setUserTab('account')}>
-              {account ? t('community.tab.account') : t('community.tab.signIn')}
-            </MiniTab>
-            <MiniTab active={userTab === 'server'} onClick={() => setUserTab('server')}>
+            {/* 内部 Tab：两个小标签，切换"账号"与"服务器设置" */}
+            <div style={S.miniTabs}>
+              <MiniTab active={userTab === 'account'} onClick={() => setUserTab('account')}>
+                {account ? t('community.tab.account') : t('community.tab.signIn')}
+              </MiniTab>
+              <MiniTab active={userTab === 'server'} onClick={() => setUserTab('server')}>
               
-              {t('community.tab.server')}</MiniTab>
-          </div>
+                {t('community.tab.server')}</MiniTab>
+            </div>
 
-          {userTab === 'account' ? (
-            account ? (
-              /* 已登录：一行账号 + 右侧操作，没有多余说明文字 */
-              /*
-               * 一行放下：账号名 + 邮箱 + 角色·状态 + 余额 + 两个按钮。
-               *
-               * ⚠️ 这行是 `flexWrap: 'wrap'` 的（窄了会换行）。所以必须指定**谁让位**：
-               * 邮箱是唯一可牺牲的元素（自己的邮箱，且悬浮能看到全的），
-               * 其余（余额徽章、按钮）一律 `flex: 0 0 auto` 不许被压。
-               * 曾经因为余额徽章里多了「（+30 冻结）」把两个按钮挤到第二行。
-               */
-              <div style={S.inlineRow}>
-                <span style={{ ...S.accountName, flex: '0 0 auto' }}>{account.displayName}</span>
-                <span
-                  style={{
-                    ...S.mono,
-                    flex: '0 1 auto',
-                    minWidth: 0,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                  title={account.email}
-                >
-                  {account.email}
-                </span>
-                <span style={{ ...S.hint, flex: '0 0 auto' }}>
-                  {roleText(t, account.roles)} · {enumText(t, STATUS_LABEL_KEYS, account.status)}
-                </span>
-                {/* Token 余额：点了打开余额弹窗（明细 + 续费说明 + 申请续费）。
-                    刷新余额挪进弹窗里 —— 徽章现在只负责"打开"，一个按钮一个动作 */}
-                {state?.tokens ? (
-                  <button
-                    type="button"
-                    style={{
-                      ...S.tokenBadge,
-                      flex: '0 0 auto',
-                      opacity: busy ? 0.55 : 1,
-                    }}
-                    disabled={busy}
-                    title={
-                      state.tokens.frozen > 0
-                        ? t('community.tip.balanceDetail', {
-                            available: state.tokens.available,
-                            frozen: state.tokens.frozen,
-                          })
-                        : t('community.tip.balance')
-                    }
-                    onClick={openTokenDialog}
-                  >
-                    ◎ {state.tokens.available} Token
-                    {/* 冻结部分只留最短标记（完整解释在悬浮提示里）——它曾经把整行挤成两行 */}
-                    {state.tokens.frozen > 0 ? (
-                      <span style={{ fontWeight: 400, opacity: 0.7 }}>
-                        {t('community.balance.frozenNote', { count: state.tokens.frozen })}
-                      </span>
-                    ) : null}
-                  </button>
-                ) : null}
-                <span style={{ flex: '1 1 auto' }} />
-                {/* 刷新：与研究工作三个 Tab 同一个组件（图标 + 悬浮说明） */}
-                <RefreshIconButton t={t} busy={busy} onClick={() => void verify()} />
-                <button
-                  type="button"
-                  style={{ ...S.iconBtn, flex: '0 0 auto', opacity: busy || fromEnv ? 0.55 : 1 }}
-                  disabled={busy || fromEnv}
-                  // 凭据来自环境变量时无法在界面里清除 —— 悬浮说明说出原因
-                  title={fromEnv ? t('community.tip.envKey') : t('community.action.signOut')}
-                  aria-label={t('community.action.signOut')}
-                  onClick={() => void logout()}
-                >
-                  ⏏
-                </button>
-              </div>
-            ) : (
-              /* 未登录：默认只展示**一条**登录路径 */
+            {userTab === 'account' ? (
+              account ? (
+                /* 已登录：一行账号 + 右侧操作，没有多余说明文字 */
+                /*
+                 * 一行放下：账号名 + 邮箱 + 角色·状态 + 余额 + 两个按钮。
+                 *
+                 * ⚠️ 这行是 `flexWrap: 'wrap'` 的（窄了会换行）。所以必须指定**谁让位**：
+                 * 邮箱是唯一可牺牲的元素（自己的邮箱，且悬浮能看到全的），
+                 * 其余（余额徽章、按钮）一律 `flex: 0 0 auto` 不许被压。
+                 * 曾经因为余额徽章里多了「（+30 冻结）」把两个按钮挤到第二行。
+                 */
               <>
                 <div style={S.inlineRow}>
-                  <span style={S.label}>{t('community.login.keyLabel')}</span>
+                  <span style={{ ...S.accountName, flex: '0 0 auto' }}>{account.displayName}</span>
+                  <span
+                    style={{
+                      ...S.mono,
+                      flex: '0 1 auto',
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                    title={account.email}
+                  >
+                    {account.email}
+                  </span>
+                  <span style={{ ...S.hint, flex: '0 0 auto' }}>
+                    {roleText(t, account.roles)} · {enumText(t, STATUS_LABEL_KEYS, account.status)}
+                  </span>
+                  {/* Token 余额：点了打开余额弹窗（明细 + 续费说明 + 申请续费）。
+                      刷新余额挪进弹窗里 —— 徽章现在只负责"打开"，一个按钮一个动作 */}
+                  {state?.tokens ? (
+                    <button
+                      type="button"
+                      style={{
+                        ...S.tokenBadge,
+                        flex: '0 0 auto',
+                        opacity: busy ? 0.55 : 1,
+                      }}
+                      disabled={busy}
+                      title={
+                        state.tokens.frozen > 0
+                          ? t('community.tip.balanceDetail', {
+                              available: state.tokens.available,
+                              frozen: state.tokens.frozen,
+                            })
+                          : t('community.tip.balance')
+                      }
+                      onClick={openTokenDialog}
+                    >
+                      ◎ {state.tokens.available} Token
+                      {/* 冻结部分只留最短标记（完整解释在悬浮提示里）——它曾经把整行挤成两行 */}
+                      {state.tokens.frozen > 0 ? (
+                        <span style={{ fontWeight: 400, opacity: 0.7 }}>
+                          {t('community.balance.frozenNote', { count: state.tokens.frozen })}
+                        </span>
+                      ) : null}
+                    </button>
+                  ) : null}
+                  <span style={{ flex: '1 1 auto' }} />
+                  {/* 刷新：与研究工作三个 Tab 同一个组件（图标 + 悬浮说明） */}
+                  <RefreshIconButton t={t} busy={busy} onClick={() => void verify()} />
+                  <button
+                    type="button"
+                    style={{ ...S.iconBtn, flex: '0 0 auto', opacity: busy || fromEnv ? 0.55 : 1 }}
+                    disabled={busy || fromEnv}
+                    // 凭据来自环境变量时无法在界面里清除 —— 悬浮说明说出原因
+                    title={fromEnv ? t('community.tip.envKey') : t('community.action.signOut')}
+                    aria-label={t('community.action.signOut')}
+                    onClick={() => void logout()}
+                  >
+                    ⏏
+                  </button>
+                </div>
+
+                {/*
+                 * 仪表板：三块小图（Token / 存储 / 项目）—— 一屏回答"我还剩多少、
+                 * 装不装得下、发布要花多少"。数据来自 `state.tokens`（已验证的余额）
+                 * 与 `account/usage`（联网一次）；读不到就画 `—`，**绝不**画 0。
+                 */}
+                <div style={S.dash}>
+                  <DashTile
+                    title={t('community.dash.token')}
+                    chart={<UsageRing fraction={tokenFraction} />}
+                    value={tokens ? String(tokens.available) : pendingMark}
+                    unit={tokens ? 'Token' : null}
+                    sub={
+                      tokens
+                        ? tokens.frozen > 0
+                          ? t('community.dash.tokenFrozen', { frozen: tokens.frozen })
+                          : t('community.dash.tokenTotal', { total: tokens.total })
+                        : t('community.dash.unknown')
+                    }
+                  />
+                  <DashTile
+                    title={t('community.dash.storage')}
+                    chart={
+                      <UsageRing
+                        fraction={storageFraction}
+                        // 用掉九成以上才变黄：不到那一档就别制造紧张感
+                        tone={storage && storageFraction >= 0.9 ? 'warn' : storage ? 'brand' : 'neutral'}
+                      />
+                    }
+                    value={storage ? `${Math.round(storageFraction * 100)}%` : pendingMark}
+                    sub={
+                      storage
+                        ? t('community.dash.storageSub', {
+                            used: formatBytes(storage.usedBytes),
+                            total: formatBytes(storage.capacityBytes),
+                          })
+                        : t('community.dash.unknown')
+                    }
+                  />
+                  <DashTile
+                    title={t('community.dash.projects')}
+                    chart={<div style={S.dashStat}>{usage ? usage.paidProjects : pendingMark}</div>}
+                    sub={
+                      usage
+                        ? t('community.dash.projectsSub', {
+                            tier: usage.tier,
+                            cost: usage.nextPublishCost,
+                          })
+                        : t('community.dash.unknown')
+                    }
+                  />
+                </div>
+                {/* 旧宿主没有 `account/usage`（协议 v27）：说清"需重启"，不让它安静地空着 */}
+                {usageStaleHost ? <div style={S.hint}>{t('community.error.hostRestart')}</div> : null}
+              </>
+              ) : (
+                /* 未登录：默认只展示**一条**登录路径 */
+                <>
+                  <div style={S.inlineRow}>
+                    <span style={S.label}>{t('community.login.keyLabel')}</span>
+                    <input
+                      style={S.compactInput}
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={apiKey}
+                      placeholder="cf_live_…"
+                      // 凭据纪律用**悬浮提示**说明：需要时能看到，平时不占版面
+                      title={t('community.tip.keyPrivacy')}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void login()
+                      }}
+                    />
+                    <button
+                      type="button"
+                      style={{ ...S.primaryBtn, opacity: apiKey.trim() && !busy ? 1 : 0.55 }}
+                      disabled={!apiKey.trim() || busy}
+                      onClick={() => void login()}
+                    >
+                      {busy ? t('community.action.signingIn') : t('community.action.signIn')}
+                    </button>
+                    <button
+                      type="button"
+                      style={S.linkBtn}
+                      onClick={() => setInviteOpen((v) => !v)}
+                      aria-expanded={inviteOpen}
+                    >
+                      {inviteOpen ? t('community.action.inviteHide') : t('community.action.inviteShow')}
+                    </button>
+                  </div>
+
+                  {/* 次要路径：邀请码注册（默认折叠，展开后仍是紧凑一行） */}
+                  {inviteOpen ? (
+                    <>
+                      <div style={S.inlineRow}>
+                        <input
+                          style={S.compactInput}
+                          type="password"
+                          autoComplete="off"
+                          spellCheck={false}
+                          value={invite.code}
+                          placeholder={t('community.placeholder.invitation')}
+                          onChange={(e) => setInvite({ ...invite, code: e.target.value })}
+                        />
+                        <input
+                          style={S.compactInput}
+                          type="text"
+                          autoComplete="off"
+                          spellCheck={false}
+                          value={invite.email}
+                          placeholder={t('community.placeholder.email')}
+                          onChange={(e) => setInvite({ ...invite, email: e.target.value })}
+                        />
+                        <input
+                          style={S.compactInput}
+                          type="text"
+                          autoComplete="off"
+                          spellCheck={false}
+                          value={invite.displayName}
+                          placeholder={t('community.placeholder.displayName')}
+                          onChange={(e) => setInvite({ ...invite, displayName: e.target.value })}
+                        />
+                        <button
+                          type="button"
+                          style={{
+                            ...S.primaryBtn,
+                            opacity:
+                              invite.code.trim() && invite.email.trim() && invite.displayName.trim() && !busy
+                                ? 1
+                                : 0.55,
+                          }}
+                          disabled={
+                            !invite.code.trim() || !invite.email.trim() || !invite.displayName.trim() || busy
+                          }
+                          onClick={() => void register()}
+                        >
+                          {busy ? t('community.action.registering') : t('community.action.register')}
+                        </button>
+                        <button
+                          type="button"
+                          style={S.ghostBtn}
+                          title={`${t('community.action.applyInviteTip')}（${serverUrl}）`}
+                          onClick={openServerHome}
+                        >
+                          {t('community.action.applyInvite')}
+                        </button>
+                      </div>
+                      <div style={S.hint}>
+
+                        {t('community.hint.inviteRule')}</div>
+                    </>
+                  ) : null}
+                </>
+              )
+            ) : (
+              /* 服务器设置：地址来自环境配置（开发 = 本机服务器，生产 = 线上） */
+              <>
+                <div style={S.inlineRow}>
+                  <span style={S.label}>{t('community.server.address')}</span>
                   <input
                     style={S.compactInput}
-                    type="password"
-                    autoComplete="off"
+                    type="text"
                     spellCheck={false}
-                    value={apiKey}
-                    placeholder="cf_live_…"
-                    // 凭据纪律用**悬浮提示**说明：需要时能看到，平时不占版面
-                    title={t('community.tip.keyPrivacy')}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void login()
-                    }}
+                    autoComplete="off"
+                    value={serverDraft}
+                    placeholder={state?.defaultServerUrl ?? ''}
+                    // 输入约定与归一规则收进悬浮提示：需要时能看到，平时不占版面
+                    title={t('community.server.title', { url: state?.defaultServerUrl ?? '' })}
+                    onChange={(e) => setServerDraft(e.target.value)}
                   />
+                  {/*
+                   * 快捷切换：本机（开发）↔ 线上（互联网）。**图标式**——地址框要占掉大半行，
+                   * 两个文字按钮会把这一行挤成两行；`title` 里带完整地址，悬停即知会填什么。
+                   * 旧宿主不返回 `serverPresets` → 整组不显示（不做假的）。
+                   */}
+                  {state?.serverPresets ? (
+                    <>
+                      <ServerPresetButton
+                        t={t}
+                        icon={<DevServerGlyph />}
+                        label={t('community.server.presetDev')}
+                        url={state.serverPresets.development}
+                        result={serverProbes.development ?? { state: 'idle', reason: null }}
+                        active={activeServerUrl === stripSlash(state.serverPresets.development)}
+                        onPick={(url) => void pickServerPreset('development', url)}
+                      />
+                      <ServerPresetButton
+                        t={t}
+                        icon={<InternetGlyph />}
+                        label={t('community.server.presetProd')}
+                        url={state.serverPresets.production}
+                        result={serverProbes.production ?? { state: 'idle', reason: null }}
+                        active={activeServerUrl === stripSlash(state.serverPresets.production)}
+                        onPick={(url) => void pickServerPreset('production', url)}
+                      />
+                    </>
+                  ) : null}
+                  {/*
+                   * 邀请码：在浏览器打开服务器首页（申请邀请码）。图标式，与两个快捷按钮
+                   * 同一规格；`title` 带上完整地址，悬停即知会打开什么。旧宿主没有
+                   * `serverPresets` 时它**照常显示** —— 打开首页不依赖那两份预设地址。
+                   */}
                   <button
                     type="button"
-                    style={{ ...S.primaryBtn, opacity: apiKey.trim() && !busy ? 1 : 0.55 }}
-                    disabled={!apiKey.trim() || busy}
-                    onClick={() => void login()}
+                    style={{ ...S.iconBtn, flex: '0 0 auto' }}
+                    title={`${t('community.server.inviteCode')} · ${t('community.action.applyInviteTip')} · ${serverUrl}`}
+                    aria-label={t('community.server.inviteCode')}
+                    onClick={openServerHome}
                   >
-                    {busy ? t('community.action.signingIn') : t('community.action.signIn')}
-                  </button>
-                  <button
-                    type="button"
-                    style={S.linkBtn}
-                    onClick={() => setInviteOpen((v) => !v)}
-                    aria-expanded={inviteOpen}
-                  >
-                    {inviteOpen ? t('community.action.inviteHide') : t('community.action.inviteShow')}
+                    <InviteCodeGlyph />
                   </button>
                 </div>
-
-                {/* 次要路径：邀请码注册（默认折叠，展开后仍是紧凑一行） */}
-                {inviteOpen ? (
-                  <>
-                    <div style={S.inlineRow}>
-                      <input
-                        style={S.compactInput}
-                        type="password"
-                        autoComplete="off"
-                        spellCheck={false}
-                        value={invite.code}
-                        placeholder={t('community.placeholder.invitation')}
-                        onChange={(e) => setInvite({ ...invite, code: e.target.value })}
-                      />
-                      <input
-                        style={S.compactInput}
-                        type="text"
-                        autoComplete="off"
-                        spellCheck={false}
-                        value={invite.email}
-                        placeholder={t('community.placeholder.email')}
-                        onChange={(e) => setInvite({ ...invite, email: e.target.value })}
-                      />
-                      <input
-                        style={S.compactInput}
-                        type="text"
-                        autoComplete="off"
-                        spellCheck={false}
-                        value={invite.displayName}
-                        placeholder={t('community.placeholder.displayName')}
-                        onChange={(e) => setInvite({ ...invite, displayName: e.target.value })}
-                      />
-                      <button
-                        type="button"
-                        style={{
-                          ...S.primaryBtn,
-                          opacity:
-                            invite.code.trim() && invite.email.trim() && invite.displayName.trim() && !busy
-                              ? 1
-                              : 0.55,
-                        }}
-                        disabled={
-                          !invite.code.trim() || !invite.email.trim() || !invite.displayName.trim() || busy
-                        }
-                        onClick={() => void register()}
-                      >
-                        {busy ? t('community.action.registering') : t('community.action.register')}
-                      </button>
-                      <button
-                        type="button"
-                        style={S.ghostBtn}
-                        title={`${t('community.action.applyInviteTip')}（${serverUrl}）`}
-                        onClick={openServerHome}
-                      >
-                        {t('community.action.applyInvite')}
-                      </button>
-                    </div>
-                    <div style={S.hint}>
-                      
-                      {t('community.hint.inviteRule')}</div>
-                  </>
+                {/* 地址**还没保存**时才出现这一行：说清后果 + 一个明确的保存动作 */}
+                {serverChanged ? (
+                  <div style={S.inlineRow}>
+                    <Badge tone="warn">{t('community.badge.addressChanged')}</Badge>
+                    <span style={{ ...S.hint, flex: '1 1 auto' }}>{t('community.hint.addressChanged')}</span>
+                    <button
+                      type="button"
+                      style={{ ...S.primaryBtn, flex: '0 0 auto', opacity: busy ? 0.55 : 1 }}
+                      disabled={busy}
+                      onClick={() => void saveServerAddress()}
+                    >
+                      {busy ? t('community.action.saving') : t('community.action.saveAddress')}
+                    </button>
+                  </div>
+                ) : null}
+                {state?.serverUrlMismatch ? (
+                  <div style={{ fontSize: 11.5, lineHeight: 1.6, color: 'var(--dsw-alias-state-warn-primary)' }}>
+                    {state.environment === 'production'
+                      ? t('community.hint.mismatchProduction')
+                      : t('community.hint.mismatchDevelopment')}
+                  </div>
                 ) : null}
               </>
-            )
-          ) : (
-            /* 服务器设置：地址来自环境配置（开发 = 本机服务器，生产 = 线上） */
-            <>
+            )}
+
+            {/* 失败原因必须具体：401 换 Key、403 找管理员、超时查服务器 —— 各是不同的动作 */}
+            {failure ? (
               <div style={S.inlineRow}>
-                <span style={S.label}>{t('community.server.address')}</span>
-                <input
-                  style={S.compactInput}
-                  type="text"
-                  spellCheck={false}
-                  autoComplete="off"
-                  value={serverDraft}
-                  placeholder={state?.defaultServerUrl ?? ''}
-                  // 输入约定与归一规则收进悬浮提示：需要时能看到，平时不占版面
-                  title={t('community.server.title', { url: state?.defaultServerUrl ?? '' })}
-                  onChange={(e) => setServerDraft(e.target.value)}
-                />
-                {/*
-                 * 快捷切换：本机（开发）↔ 线上（互联网）。**图标式**——地址框要占掉大半行，
-                 * 两个文字按钮会把这一行挤成两行；`title` 里带完整地址，悬停即知会填什么。
-                 * 旧宿主不返回 `serverPresets` → 整组不显示（不做假的）。
-                 */}
-                {state?.serverPresets ? (
-                  <>
-                    <ServerPresetButton
-                      t={t}
-                      icon={<DevServerGlyph />}
-                      label={t('community.server.presetDev')}
-                      url={state.serverPresets.development}
-                      result={serverProbes.development ?? { state: 'idle', reason: null }}
-                      active={activeServerUrl === stripSlash(state.serverPresets.development)}
-                      onPick={(url) => void pickServerPreset('development', url)}
-                    />
-                    <ServerPresetButton
-                      t={t}
-                      icon={<InternetGlyph />}
-                      label={t('community.server.presetProd')}
-                      url={state.serverPresets.production}
-                      result={serverProbes.production ?? { state: 'idle', reason: null }}
-                      active={activeServerUrl === stripSlash(state.serverPresets.production)}
-                      onPick={(url) => void pickServerPreset('production', url)}
-                    />
-                  </>
-                ) : null}
-                {/*
-                 * 邀请码：在浏览器打开服务器首页（申请邀请码）。图标式，与两个快捷按钮
-                 * 同一规格；`title` 带上完整地址，悬停即知会打开什么。旧宿主没有
-                 * `serverPresets` 时它**照常显示** —— 打开首页不依赖那两份预设地址。
-                 */}
-                <button
-                  type="button"
-                  style={{ ...S.iconBtn, flex: '0 0 auto' }}
-                  title={`${t('community.server.inviteCode')} · ${t('community.action.applyInviteTip')} · ${serverUrl}`}
-                  aria-label={t('community.server.inviteCode')}
-                  onClick={openServerHome}
+                <Badge tone="error">{failure.code}</Badge>
+                <span
+                  style={{
+                    color: 'var(--dsw-alias-state-error-primary)',
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    flex: '1 1 320px',
+                    minWidth: 0,
+                  }}
                 >
-                  <InviteCodeGlyph />
-                </button>
-              </div>
-              {/* 地址**还没保存**时才出现这一行：说清后果 + 一个明确的保存动作 */}
-              {serverChanged ? (
-                <div style={S.inlineRow}>
-                  <Badge tone="warn">{t('community.badge.addressChanged')}</Badge>
-                  <span style={{ ...S.hint, flex: '1 1 auto' }}>{t('community.hint.addressChanged')}</span>
+                  {failure.message}
+                </span>
+                {configured ? (
                   <button
                     type="button"
-                    style={{ ...S.primaryBtn, flex: '0 0 auto', opacity: busy ? 0.55 : 1 }}
+                    style={{ ...S.ghostBtn, opacity: busy ? 0.55 : 1 }}
                     disabled={busy}
-                    onClick={() => void saveServerAddress()}
+                    onClick={() => void verify()}
                   >
-                    {busy ? t('community.action.saving') : t('community.action.saveAddress')}
-                  </button>
-                </div>
-              ) : null}
-              {state?.serverUrlMismatch ? (
-                <div style={{ fontSize: 11.5, lineHeight: 1.6, color: 'var(--dsw-alias-state-warn-primary)' }}>
-                  {state.environment === 'production'
-                    ? t('community.hint.mismatchProduction')
-                    : t('community.hint.mismatchDevelopment')}
-                </div>
-              ) : null}
-            </>
-          )}
-
-          {/* 失败原因必须具体：401 换 Key、403 找管理员、超时查服务器 —— 各是不同的动作 */}
-          {failure ? (
-            <div style={S.inlineRow}>
-              <Badge tone="error">{failure.code}</Badge>
-              <span
-                style={{
-                  color: 'var(--dsw-alias-state-error-primary)',
-                  fontSize: 12,
-                  lineHeight: 1.6,
-                  flex: '1 1 320px',
-                  minWidth: 0,
-                }}
-              >
-                {failure.message}
-              </span>
-              {configured ? (
-                <button
-                  type="button"
-                  style={{ ...S.ghostBtn, opacity: busy ? 0.55 : 1 }}
-                  disabled={busy}
-                  onClick={() => void verify()}
-                >
                   
-                  {t('community.action.retryVerify')}</button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+                    {t('community.action.retryVerify')}</button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {/* ══ 发布确认对话框（点「寻找指导」/「更新」时出现）═════════════════ */}
@@ -7036,7 +7436,8 @@ export function CommunityTab({
                   >
                     <div style={{ ...S.listRow, alignItems: 'flex-start' }}>
                       <div style={{ minWidth: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <div style={S.listTitle}>{w.title}</div>
+                        {/* 研究工作**自己的名字**（与【指导中】同一个取值规则，见 workLabelOf） */}
+                        <div style={S.listTitle}>{workLabelOf(w)}</div>
                         <div style={{ ...S.hint, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                           {w.stage ? (
                             <span>{translateOr(t, `progress.stage.${w.stage.id}`, w.stage.label)}</span>
@@ -7064,9 +7465,22 @@ export function CommunityTab({
                               ))}
                           </div>
                         ) : null}
-                        {/* 本机路径：工程师要看得到"这是哪个项目"，用 title 承载完整路径 */}
-                        <div style={{ ...S.mono, color: 'var(--dsw-alias-label-tertiary)' }} title={w.researchRoot}>
-                          {w.path}
+                        {/*
+                          身份 + 路径：**id 在前**（这是"哪一项研究"的判据），路径在后（技术细节）。
+                          新建的本机研究还没有 id → 这一行只显示路径（名字就是判据）。
+                        */}
+                        <div
+                          style={{
+                            ...S.mono,
+                            color: 'var(--dsw-alias-label-tertiary)',
+                            display: 'flex',
+                            gap: 8,
+                            flexWrap: 'wrap',
+                          }}
+                          title={w.researchRoot}
+                        >
+                          {w.workId ? <span>{w.workId}</span> : null}
+                          <span>{w.path}</span>
                         </div>
                       </div>
                       {/*

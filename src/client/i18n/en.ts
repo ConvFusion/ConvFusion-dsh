@@ -145,6 +145,20 @@ export const en = {
   'community.tab.account': 'Account',
   'community.tab.signIn': 'Sign in',
   'community.tab.server': 'Server',
+  // The account card is collapsed by default: it keeps only "who + how many Tokens left".
+  // The chevron is the only hint, so the tooltip says what expanding gives you.
+  'community.tip.expand': 'Show account and server settings',
+  'community.tip.collapse': 'Hide account and server settings',
+  // Dashboard tiles on the Account tab (Token / storage / projects)
+  'community.dash.token': 'Token balance',
+  'community.dash.tokenFrozen': '{frozen} frozen',
+  'community.dash.tokenTotal': '{total} in total',
+  'community.dash.storage': 'Storage',
+  'community.dash.storageSub': 'Used {used} / {total}',
+  'community.dash.projects': 'Published projects',
+  'community.dash.projectsSub': 'Tier {tier} · next publish {cost} Token',
+  // Unavailable is stated as "unknown": 0 asserts "indeed none", which is not the same thing
+  'community.dash.unknown': 'Unknown',
   'community.work.title': 'Research work',
   'community.work.byAuthor': 'by {name}',
   'community.tab.mine': 'Mine',

@@ -147,6 +147,20 @@ export const zh = {
   'community.tab.account': '账号',
   'community.tab.signIn': '登录',
   'community.tab.server': '服务器设置',
+  // 用户信息卡**默认折叠**：折叠时只留"是谁 + 还剩多少 Token"（2026-10 用户要求），
+  // 展开才是账号 / 服务器设置。箭头是唯一提示，所以悬浮说明要写清"点开有什么"。
+  'community.tip.expand': '展开账号与服务器设置',
+  'community.tip.collapse': '收起账号与服务器设置',
+  // 【账号】的仪表板小图（Token / 存储 / 项目）—— 三块同规格，标题都取短词
+  'community.dash.token': 'Token 余额',
+  'community.dash.tokenFrozen': '冻结 {frozen}',
+  'community.dash.tokenTotal': '合计 {total}',
+  'community.dash.storage': '存储空间',
+  'community.dash.storageSub': '已用 {used} / {total}',
+  'community.dash.projects': '已发布项目',
+  'community.dash.projectsSub': '等级 {tier} · 下次发布 {cost} Token',
+  // 读不到就照实说"未知"：0 是断言"确实没有"，与"还没读到 / 服务器没答"不是一回事
+  'community.dash.unknown': '未知',
   'community.work.title': '研究工作',
   // 【可指导】列表行上的作者（服务器 owner 投影；旧服务器无此字段则不显示）
   'community.work.byAuthor': '作者 {name}',

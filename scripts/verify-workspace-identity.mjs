@@ -410,7 +410,7 @@ const registryOf = (dirs) => async () => ({
   assertEq(s1.value.protocol, PROTO.HOST_PROTOCOL, '响应带宿主协议号（界面据此决定显不显示状态）')
   // ⚠️ 这里**故意**钉死当前协议号：它是"v23 那批字段存在"的直接证据。
   // 升协议号时必须同步改这一行（v0.6.0 出题模式 → 24），否则会以假红提醒你回来确认。
-  assertEq(s1.value.protocol, 26, '协议已升到 26（v0.6.0 研究工作名）')
+  assertEq(s1.value.protocol, 27, '协议已升到 27（account/usage：账号仪表板的存储与配额）')
 
   // ② 同一项研究 → same，且**下载成功后**才写身份
   const same = makeWorkspace('v-same', { research: true, marker: WS_A })
@@ -628,7 +628,7 @@ section('[6] 静态边界：插件不拦、只填不发送、标记不进上传'
   }
 
   // ⑥ 协议号与历史
-  assertEq(PROTO.HOST_PROTOCOL, 26, 'HOST_PROTOCOL = 26（v0.6.0 研究工作名）')
+  assertEq(PROTO.HOST_PROTOCOL, 27, 'HOST_PROTOCOL = 27（account/usage：账号仪表板）')
   assert(readFileSync(join(PKG, 'src', 'protocol.ts'), 'utf8').includes('**【下载】先校验目标工作区**'), 'protocol.ts 写了 23 的理由')
 }
 

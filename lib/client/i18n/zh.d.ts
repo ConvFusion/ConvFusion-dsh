@@ -135,6 +135,16 @@ export declare const zh: {
     'community.tab.account': string;
     'community.tab.signIn': string;
     'community.tab.server': string;
+    'community.tip.expand': string;
+    'community.tip.collapse': string;
+    'community.dash.token': string;
+    'community.dash.tokenFrozen': string;
+    'community.dash.tokenTotal': string;
+    'community.dash.storage': string;
+    'community.dash.storageSub': string;
+    'community.dash.projects': string;
+    'community.dash.projectsSub': string;
+    'community.dash.unknown': string;
     'community.work.title': string;
     'community.work.byAuthor': string;
     'community.tab.mine': string;

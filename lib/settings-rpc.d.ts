@@ -240,10 +240,25 @@ export declare function toWireTarget(built: BuiltDownloadTarget): DownloadTarget
  * **本机工作区**里的研究项目 —— 数据全部来自磁盘，不需要登录、不发网络请求。
  */
 export interface LocalWorkItem {
-    /** 工作区注册表 id（稳定；路径可能被重命名）。 */
+    /** 工作区注册表 id（稳定；路径可能被重命名）。**仅作内部键**，不是"这是哪项研究"的判据。 */
     id: string;
-    /** 显示名（注册表标题，缺省用研究根目录名）。 */
+    /** 注册表标题（会话工作区目录名）。**只作兜底**：界面显示的是 {@link workName}。 */
     title: string;
+    /**
+     * **这项研究工作自己的名字**（论文标题 > 已采纳主题 > 注册表标题兜底）。
+     *
+     * ⚠️ 界面**必须**显示它而不是 `title`：`title` 是会话工作区目录名（如 `ConvFusion-dsh`），
+     * 同一个会话工作区里可以有多项研究，用目录名区分不了（2026-10 用户要求）。
+     */
+    workName: string;
+    /**
+     * **这项研究工作的身份** `workspace_id`（`ws_<32 hex>`）。`null` = 本机还不知道。
+     *
+     * 新建的本机研究有名字但**没有** id；发布之后由服务器返回并落盘
+     * （`<研究根>/.convfusion/work.json` + 插件侧注册表），此后它就是
+     * "这是哪一项研究"的唯一判据 —— 用 id 区分，而不是用工作区名。
+     */
+    workId: string | null;
     /** 会话工作区路径（用户的工作区）。 */
     path: string;
     /** 研究根目录（`<会话工作区>/workspace`，旧布局下可能是会话工作区本身）。 */
@@ -588,6 +603,7 @@ export declare function compareVersions(a: string, b: string): number;
  * | `account/verify` | `{}` | 用已保存的凭据重新验证身份（联网） |
  * | `account/logout` | `{}` | 清除凭据（账号信息随之消失） |
  * | `account/tokens` | `{}` | 重新读 Token 余额（登录后显示 / 花完 Token 后刷新） |
+ * | `account/usage` | `{}` | 用量与配额（存储空间已用 / 总额 + 项目阶梯 + 下次发布花费）；读不到 = `usage:null` |
  * | `account/recharge-request` | `{ amount, reason? }` | 提交**续费申请**（只记录意向，不改余额；管理员事后批准） |
  * | `account/recharge-requests` | `{}` | 查看**本人**的续费申请记录（判断有没有待处理的） |
  * | `work/mine` | `{}` | **本机**研究工作（有效研究项目的工作区；不联网、不需登录） |

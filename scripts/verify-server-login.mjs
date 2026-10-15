@@ -1261,6 +1261,69 @@ section('[6c] Token 余额')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+ * 6c3. 用量与配额（account/usage —— 【账号】仪表板的"存储空间 / 项目"两块）
+ *
+ * 与发布预检（`work/uploadPlan`）共用同一个服务器调用（`GET /usage`）。两条纪律：
+ *   ① snake_case → camelCase 的映射要对（字节数错了，仪表板画的比例就错了）；
+ *   ② **读不到 = null**，不是 0 —— "还剩 0 字节"与"读不到"是两件事，
+ *      把后者画成前者会让用户以为配额用光了（协议 v7 余额那次定的口径）。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[6c3] 用量与配额（account/usage）')
+{
+  const GB = 1024 * 1024 * 1024
+  const USAGE = {
+    projects: { next_publish_cost: 2, paid_alive: 3, tier: 2 },
+    storage: {
+      used_bytes: 1024 * 1024,
+      capacity_bytes: 5 * GB,
+      available_bytes: 5 * GB - 1024 * 1024,
+      bytes_per_token: 1024,
+    },
+  }
+  const h = makeHost({
+    config: { convfusionApiKey: KEY },
+    handler: async (call) =>
+      call.url.endsWith('/api/v1/usage')
+        ? { status: 200, body: USAGE }
+        : { status: 404, body: err('RESOURCE_NOT_FOUND', 'nope') },
+  })
+  const res = await h.handler('account/usage', {})
+  assert(res.ok, 'account/usage 可用')
+  assertEq(res.value.usage.storage.usedBytes, 1024 * 1024, '带出存储已用字节')
+  assertEq(res.value.usage.storage.capacityBytes, 5 * GB, '带出存储总额（画比例的分母）')
+  assertEq(res.value.usage.storage.availableBytes, 5 * GB - 1024 * 1024, '带出存储可用字节')
+  assertEq(res.value.usage.paidProjects, 3, '带出已发布项目数')
+  assertEq(res.value.usage.tier, 2, '带出项目阶梯')
+  assertEq(res.value.usage.nextPublishCost, 2, '带出下次发布花费')
+  assertEq(h.calls.length, 1, '只问一次 /usage')
+  assertEq(h.calls[0].headers.authorization, `Bearer ${KEY}`, '用量接口同样带凭据')
+  keyLeak(res.value, 'account/usage')
+
+  // ── 读不到 = null（**不是** 0）──
+  const down = makeHost({
+    config: { convfusionApiKey: KEY },
+    handler: async () => {
+      throw new Error('ECONNRESET')
+    },
+  })
+  const downRes = await down.handler('account/usage', {})
+  assertEq(downRes.ok, true, '用量读不到不算 RPC 失败（不能因此挡住账号页）')
+  assertEq(downRes.value.usage, null, '拿不到用量 → null（**不是** 0）')
+
+  // ── 响应形状不对：同样按"未知"处理，不假装拿到了 ──
+  const malformed = makeHost({
+    config: { convfusionApiKey: KEY },
+    handler: async () => ({ status: 200, body: { nope: true } }),
+  })
+  assertEq((await malformed.handler('account/usage', {})).value.usage, null, '缺字段 → null（不猜 0）')
+
+  // ── 未登录：本地拒绝，不发请求 ──
+  const anon = makeHost()
+  assertEq((await anon.handler('account/usage', {})).error.code, 'not-configured', '未登录问用量 → not-configured')
+  assertEq(anon.calls.length, 0, '未登录不发请求')
+}
+
+/* ════════════════════════════════════════════════════════════════════════
  * 6c2. 续费申请（account/recharge-request + account/recharge-requests）
  *
  * 服务器 `POST /tokens/recharge-requests` **只记意向、不改余额**（管理员事后批准才发
@@ -1662,6 +1725,8 @@ section('[6e] 发布本机研究（work/publish）')
     conflictOnce = false,
     failPublish = false,
     serverVersion = null,
+    /* 建项目时服务器返回的 `workspace_id`；`null` = 模拟**老服务器**（没有这个字段）。 */
+    returnWorkspaceId = 'ws_11111111111111111111111111111111',
     /* 附件请求**进行中**的钩子：测试据此在那一刻读进度端点（模拟界面按秒轮询）。 */
     onFilesPost = null,
   } = {}) => {
@@ -1679,7 +1744,15 @@ section('[6e] 发布本机研究（work/publish）')
       if (url.endsWith('/api/v1/auth/me')) return json(200, { id: 'acc-1', email: 'me@example.com', display_name: 'Me', status: 'ACTIVE', roles: ['RESEARCHER'] })
       if (url.endsWith('/api/v1/tokens')) return json(200, { available_balance: 5, frozen_balance: 0, total_balance: 5 })
       if (url.endsWith('/api/v1/projects') && method === 'POST') {
-        return json(201, { id: 'srv-project-1', title: 'x', visibility: 'PRIVATE', status: 'ACTIVE', updated_at: '' })
+        return json(201, {
+          id: 'srv-project-1',
+          title: 'x',
+          visibility: 'PRIVATE',
+          status: 'ACTIVE',
+          // 服务器给这项工作一个**跨项目生命周期不变**的身份（v3 规格：POST /projects 回 workspace_id）
+          ...(returnWorkspaceId === null ? {} : { workspace_id: returnWorkspaceId }),
+          updated_at: '',
+        })
       }
       if (url.endsWith('/projects/srv-project-1/state') && method === 'GET') {
         return stateVersion === null ? json(404, err('RESOURCE_NOT_FOUND', 'no state')) : json(200, { version: stateVersion })
@@ -1703,6 +1776,16 @@ section('[6e] 发布本机研究（work/publish）')
         return failPublish ? json(500, err('INTERNAL_ERROR', 'boom')) : json(200, { project_id: 'srv-project-1', visibility: 'PUBLISHED', charged_tokens: 1 })
       }
       // 改名（v0.6.0 起"更新"时会按需 PUT 项目标题）—— 真实服务器一直有这个端点
+      if (url.endsWith('/projects/srv-project-1') && method === 'GET') {
+        return json(200, {
+          id: 'srv-project-1',
+          title: 'x',
+          visibility: 'PUBLISHED',
+          status: 'ACTIVE',
+          ...(returnWorkspaceId === null ? {} : { workspace_id: returnWorkspaceId }),
+          updated_at: '',
+        })
+      }
       if (url.endsWith('/projects/srv-project-1') && method === 'PUT') {
         return json(200, { id: 'srv-project-1', title: JSON.parse(init.body).title, visibility: 'PRIVATE', status: 'ACTIVE', updated_at: '' })
       }
@@ -1711,7 +1794,12 @@ section('[6e] 发布本机研究（work/publish）')
     return { fetchImpl, calls, state: () => stateVersion }
   }
 
-  const makePubHost = (server, store = PUB.createMemoryPublishedStore(), config = {}) =>
+  const makePubHost = (
+    server,
+    store = PUB.createMemoryPublishedStore(),
+    config = {},
+    workIdentity = undefined,
+  ) =>
     RPC.createSettingsRpcHandler({
       getConfig: () =>
         CFG.resolveConfig({
@@ -1725,6 +1813,7 @@ section('[6e] 发布本机研究（work/publish）')
       listLocalWorkspaces: lister,
       publishedStore: store,
       fetchImpl: server.fetchImpl,
+      ...(workIdentity ? { workIdentity } : {}),
     })
 
   // ── 未登录：本地就拒 ──
@@ -1797,6 +1886,130 @@ section('[6e] 发布本机研究（work/publish）')
       // 别的项目问同一个端点：回 0/未在跑，不能把这次上传的数字当成它的
       const other = await host('mentor/uploadProgress', { projectId: 'ws-other' })
       assertEq(other.value.totalFiles, 0, '别的项目读到的是空进度（不串台）')
+    }
+
+    /*
+     * ── 研究工作的**身份**：发布后由服务器给 `workspace_id`，本机落盘 ──────────
+     *
+     * 2026-10 用户要求：界面不能按**会话工作区目录名**（如 `ConvFusion-dsh`）区分研究工作
+     * —— 同一个会话工作区里可以有多项研究。区分"这是哪一项研究"的唯一判据是服务器给的
+     * `workspace_id`（改题、重建项目、重新发布都不变，见 dev-notes/v3-Workspace-Identity-API.md）。
+     * 新建的本机研究**没有** id（但有名字）；发布之后服务器返回它并落盘在本机。
+     */
+    {
+      const WI = await import(lib('research/work-identity.js'))
+      /*
+       * ⚠️ 一律用**真身路径**：宿主对注册表路径做 realpath，而 macOS 的 `/var` 是指向
+       * `/private/var` 的软链 —— 用非真身的字符串去查发布记录/身份注册表会查不到
+       * （第一版就这么错了：断言全挂在"没写进去"，其实写在了真身路径上）。
+       */
+      const K_ROOT = fs.realpathSync(root)
+      const markerPath = path.join(K_ROOT, '.convfusion', 'work.json')
+      const forgetIdentity = () => fs.rmSync(path.join(K_ROOT, '.convfusion'), { recursive: true, force: true })
+      const WSID = 'ws_22222222222222222222222222222222'
+
+      // ⓪ 新建的本机研究：**有名字、没有 id**（id 只能由服务器给）
+      forgetIdentity()
+      {
+        const mine0 = await makePubHost(makePublisher(), PUB.createMemoryPublishedStore())('work/mine', {})
+        const item0 = (mine0.value?.items ?? []).find((x) => x.id === 'ws-pub')
+        assertEq(item0?.workId ?? null, null, '还没发布 → 没有 work_id（这正是"新建的本机研究"）')
+        assertEq(
+          item0?.workName,
+          '低算力视觉语言方向的可证伪问题',
+          '但**有研究工作名**：列表项显示它，而不是会话工作区目录名',
+        )
+      }
+
+      // ① 首传：服务器返回 id → 写进本机标记 + 插件侧注册表
+      forgetIdentity()
+      const store1 = PUB.createMemoryPublishedStore()
+      const identity1 = WI.createMemoryWorkIdentityStore()
+      const host1 = makePubHost(makePublisher({ returnWorkspaceId: WSID }), store1, {}, identity1)
+      assert((await host1('work/publish', { id: 'ws-pub' })).ok, '首传成功')
+      assert(fs.existsSync(markerPath), '本机标记写下了（<研究根>/.convfusion/work.json）')
+      // `readWorkMarker` 回的是**解析后的对象**（驼峰字段；文件里是 snake_case）
+      assertEq(WI.readWorkMarker(K_ROOT)?.workspaceId, WSID, '标记里是**服务器返回的**身份')
+      assertEq(identity1.get(K_ROOT)?.workspaceId, WSID, '插件侧注册表也记一份（解压前就能判）')
+
+      // ② 再传（换了本地发布记录、但标记还在）→ 建项目时**沿用**同一个身份
+      const store2 = PUB.createMemoryPublishedStore()
+      const server2 = makePublisher({ returnWorkspaceId: WSID })
+      const host2 = makePubHost(server2, store2, {}, WI.createMemoryWorkIdentityStore())
+      assert((await host2('work/publish', { id: 'ws-pub' })).ok, '标记还在时再传成功')
+      const createBody = JSON.parse(
+        server2.calls.find((c) => c.method === 'POST' && c.url.endsWith('/api/v1/projects')).body,
+      )
+      assertEq(createBody.workspace_id, WSID, '建项目时带上已有身份（否则服务器会当成"另一项研究"）')
+
+      // ③ 复用旧项目但本机**没有**身份（老版本插件发的 / 标记被删）→ 回查对齐
+      forgetIdentity()
+      const store3 = PUB.createMemoryPublishedStore()
+      const projectIdOld = '74477e8a-d94c-45a0-81fa-161267ddd23f'
+      store3.set(K_ROOT, {
+        direction: 'SEEK_MENTOR',
+        projectId: projectIdOld,
+        serverUrl: 'http://localhost:8000',
+        accountId: 'acc-1',
+        version: 1,
+        contentHash: 'sha256:x',
+        files: {},
+        selection: [],
+      })
+      const server3 = makePublisher({ returnWorkspaceId: WSID, serverVersion: 1 })
+      const host3 = makePubHost(server3, store3, {}, WI.createMemoryWorkIdentityStore())
+      assert((await host3('work/publish', { id: 'ws-pub' })).ok, '复用旧项目发布成功')
+      assert(
+        server3.calls.some((c) => c.method === 'GET' && c.url.endsWith(`/projects/${projectIdOld}`)),
+        '缺身份时回查了一次项目（GET /projects/{id}）以对齐',
+      )
+      assertEq(WI.readWorkMarker(K_ROOT)?.workspaceId, WSID, '回查到的身份也落盘了')
+
+      // ④ **老服务器**不返回 id → 什么都不写（绝不编造身份）
+      forgetIdentity()
+      const host4 = makePubHost(
+        makePublisher({ returnWorkspaceId: null }),
+        PUB.createMemoryPublishedStore(),
+        {},
+        WI.createMemoryWorkIdentityStore(),
+      )
+      assert((await host4('work/publish', { id: 'ws-pub' })).ok, '老服务器上发布照样成功')
+      assertEq(fs.existsSync(markerPath), false, '服务器没给 id → 不写标记（不编造）')
+
+      // ⑤ 老版本插件发布过的工作（有发布记录、本机没身份）→ **列表核对时**就对
+      //    齐（`work/mine` 本来就回查项目，不必等用户再点一次发布）
+      forgetIdentity()
+      {
+        const store5 = PUB.createMemoryPublishedStore()
+        store5.set(K_ROOT, {
+          direction: 'SEEK_MENTOR',
+          projectId: 'srv-project-1',
+          serverUrl: 'http://localhost:8000',
+          accountId: 'acc-1',
+          version: 1,
+          contentHash: 'sha256:x',
+          files: {},
+          selection: [],
+        })
+        const identity5 = WI.createMemoryWorkIdentityStore()
+        const host5 = makePubHost(makePublisher({ returnWorkspaceId: WSID }), store5, {}, identity5)
+        const mine5 = await host5('work/mine', {})
+        assertEq(
+          (mine5.value?.items ?? []).find((x) => x.id === 'ws-pub')?.workId,
+          WSID,
+          '列表核对时就对齐了身份（老版本发布的工作也能显示 work_id）',
+        )
+        assertEq(WI.readWorkMarker(K_ROOT)?.workspaceId, WSID, '对齐的身份同样落盘')
+      }
+
+      // ⑥ 列表项带出身份：界面据此区分"这是哪一项研究"（工作区名区分不了）
+      {
+        const mine = await host1('work/mine', {})
+        const item = (mine.value?.items ?? []).find((x) => x.id === 'ws-pub')
+        assertEq(item?.workId, WSID, '发布之后列表项带出 work_id（服务器给的身份）')
+      }
+
+      forgetIdentity()
     }
     const stateCall = server.calls.find((c) => c.method === 'POST' && c.url.endsWith('/state'))
     const payload = JSON.parse(stateCall.body)
@@ -3010,6 +3223,7 @@ section('[7] 凭据纪律：任何端点的返回值都不含明文 Key')
     ['account/login', { apiKey: KEY }],
     ['account/logout', {}],
     ['account/serverUrl', { serverUrl: 'http://localhost:8000' }],
+    ['account/usage', {}],
     ['customization/save', { skillId: 'literature-search', section: 'Purpose', text: 'x' }],
   ]
   for (const [ep, payload] of endpoints) {

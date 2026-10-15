@@ -437,10 +437,25 @@ export function toWireTarget(built: BuiltDownloadTarget): DownloadTargetItem {
  * **本机工作区**里的研究项目 —— 数据全部来自磁盘，不需要登录、不发网络请求。
  */
 export interface LocalWorkItem {
-  /** 工作区注册表 id（稳定；路径可能被重命名）。 */
+  /** 工作区注册表 id（稳定；路径可能被重命名）。**仅作内部键**，不是"这是哪项研究"的判据。 */
   id: string
-  /** 显示名（注册表标题，缺省用研究根目录名）。 */
+  /** 注册表标题（会话工作区目录名）。**只作兜底**：界面显示的是 {@link workName}。 */
   title: string
+  /**
+   * **这项研究工作自己的名字**（论文标题 > 已采纳主题 > 注册表标题兜底）。
+   *
+   * ⚠️ 界面**必须**显示它而不是 `title`：`title` 是会话工作区目录名（如 `ConvFusion-dsh`），
+   * 同一个会话工作区里可以有多项研究，用目录名区分不了（2026-10 用户要求）。
+   */
+  workName: string
+  /**
+   * **这项研究工作的身份** `workspace_id`（`ws_<32 hex>`）。`null` = 本机还不知道。
+   *
+   * 新建的本机研究有名字但**没有** id；发布之后由服务器返回并落盘
+   * （`<研究根>/.convfusion/work.json` + 插件侧注册表），此后它就是
+   * "这是哪一项研究"的唯一判据 —— 用 id 区分，而不是用工作区名。
+   */
+  workId: string | null
   /** 会话工作区路径（用户的工作区）。 */
   path: string
   /** 研究根目录（`<会话工作区>/workspace`，旧布局下可能是会话工作区本身）。 */
@@ -1010,6 +1025,7 @@ async function fetchLatestRelease(
  * | `account/verify` | `{}` | 用已保存的凭据重新验证身份（联网） |
  * | `account/logout` | `{}` | 清除凭据（账号信息随之消失） |
  * | `account/tokens` | `{}` | 重新读 Token 余额（登录后显示 / 花完 Token 后刷新） |
+ * | `account/usage` | `{}` | 用量与配额（存储空间已用 / 总额 + 项目阶梯 + 下次发布花费）；读不到 = `usage:null` |
  * | `account/recharge-request` | `{ amount, reason? }` | 提交**续费申请**（只记录意向，不改余额；管理员事后批准） |
  * | `account/recharge-requests` | `{}` | 查看**本人**的续费申请记录（判断有没有待处理的） |
  * | `work/mine` | `{}` | **本机**研究工作（有效研究项目的工作区；不联网、不需登录） |
@@ -1399,11 +1415,23 @@ export function createSettingsRpcHandler(
           : []
       })
       if (progress) sources.set(w.id, { root, title, progress })
+      /*
+       * 研究工作自己的名字与身份。
+       *
+       * - 名字：论文标题 > 已采纳主题 > 注册表标题兜底（与发布时上送的名字**同源**，
+       *   所以界面上看到的与网络里看到的是同一个名字）；
+       * - 身份：本机标记/注册表里的 `workspace_id`；新建的研究还没有 → `null`
+       *   （发布之后由服务器返回并落盘）。
+       */
+      const workName = researchWorkName(root, title).name
+      const workId = readLocalIdentity(root, deps.workIdentity).workspaceId
       items.push({
         id: w.id,
         // 缺省标题用**会话工作区**的目录名（`.../proj-b`），不是研究根
         // —— 研究根永远叫 `workspace`，拿它当标题等于每个项目同名
         title,
+        workName,
+        workId,
         // path 保留注册表里的**登记值**；researchRoot 是真身路径上的研究根
         path: w.path,
         researchRoot: root,
@@ -1467,13 +1495,14 @@ export function createSettingsRpcHandler(
       targets.map(async ({ item, record }) => {
         try {
           const project = await fetchProject(base, apiKey, record.projectId, netOptions())
-          return { item, record, visibility: project.visibility, gone: false }
+          return { item, record, visibility: project.visibility, workspaceId: project.workspaceId, gone: false }
         } catch (e) {
           // 只有"服务器明确说不存在"才算消失；网络/超时/其它错误一律不下结论
           return {
             item,
             record,
             visibility: null,
+            workspaceId: undefined,
             gone: e instanceof ServerError && e.code === 'not-found',
           }
         }
@@ -1488,10 +1517,44 @@ export function createSettingsRpcHandler(
       if (c.gone) publishedStore.remove(c.item.researchRoot, c.record.direction)
       else publishedStore.set(c.item.researchRoot, { ...record, serverVisibility: c.visibility!, checkedAt })
     }
+    /*
+     * ② 顺带**对齐身份**：这次核对本来就回查了项目（`GET /projects/{id}`），
+     * 而它是规格里"回查已发布项目时对齐身份"的那一处。
+     *
+     * 为什么必须有：界面要按 **work_id** 区分研究工作（不是按会话工作区目录名），
+     * 而"老版本插件发布的工作"本机没有 id —— 不对齐的话那份工作永远显示不出身份，
+     * 直到用户再点一次发布。**本机已经有值时不覆盖**：值不同属于冲突，
+     * 交给既有冲突判定去说（见 `readLocalIdentity` 的纪律），这里不静默改。
+     */
+    for (const c of checks) {
+      if (!c.workspaceId) continue
+      try {
+        if (readLocalIdentity(c.item.researchRoot, deps.workIdentity).workspaceId) continue
+        const identity = makeWorkIdentity({
+          workspaceId: c.workspaceId,
+          projectId: c.record.projectId,
+          serverUrl: base,
+          accountId: c.record.accountId,
+          role: 'owner',
+        })
+        deps.workIdentity?.set(c.item.researchRoot, identity)
+        writeWorkMarker(c.item.researchRoot, identity)
+      } catch {
+        /* 记账失败不该让列表失败 */
+      }
+    }
     for (const c of checks) {
       // 服务器上没有 / 已取消发布 → 这个方向不再显示"已在网络中"
       const visible = !c.gone && (c.visibility === null || c.visibility === 'PUBLISHED')
       if (!visible) c.item.published = c.item.published.filter((r) => r !== c.record)
+    }
+    /*
+     * 身份是**上一步刚写下去的**（本次调用里 `items` 是在此之前构造的），
+     * 所以这里补一次：否则界面要等下一次刷新才看得到 work_id。
+     */
+    for (const it of scoped) {
+      if (it.workId) continue
+      it.workId = readLocalIdentity(it.researchRoot, deps.workIdentity).workspaceId
     }
     return scoped
   }
@@ -1796,6 +1859,24 @@ export function createSettingsRpcHandler(
           }
         }
 
+        /*
+         * 用量与配额（`GET /usage`）：存储空间已用 / 总额、项目阶梯、下次发布花费。
+         * 【账号】卡片的仪表板用它画"存储空间 / 项目"那两块。
+         *
+         * ⚠️ 与发布预检（`work/uploadPlan`）里那一份是**同一个调用**（`fetchUsage`），
+         * 而它是**尽力而为**的：失败返回 null（服务器没答 / 字段不对）。
+         * 这里也照此返回 `{ usage: null }` —— 界面显示"未知"，**绝不**画成 0
+         * （把"读不到"画成"还剩 0 字节"是同一类假信息，见协议 v7 的余额口径）。
+         */
+        case 'account/usage': {
+          const config = deps.getConfig()
+          const apiKey = resolveConvFusionApiKey(config, env())
+          if (!apiKey) return fail('not-configured', '尚未登录 ConvFusion.com。')
+          const base = resolveServerUrl(config, env()).url
+          const usage = await fetchUsage(base, apiKey, netOptions())
+          return { ok: true, value: { usage } }
+        }
+
         case 'account/logout': {
           /*
            * 只清凭据，保留服务器地址（下次登录还要用）。
@@ -2062,6 +2143,37 @@ export function createSettingsRpcHandler(
             let created = false
             /** 改名失败的原因（`null` = 改名成功或不需要改名）—— 回执要如实说。 */
             let renameFailed: string | null = null
+            /*
+             * 这项研究**在本机的身份**（`<研究根>/.convfusion/work.json` → 插件侧注册表）。
+             *
+             * 用途有三个，缺一不可：
+             *   ① 建项目时**沿用**已有身份（否则同一项研究重新发布会被服务器当成"另一项研究"）；
+             *   ② 新建项目后把服务器**返回**的身份写回本机（下次就有了）；
+             *   ③ 界面上用它区分"这是哪一项研究"（工作区名区分不了 —— 同一个会话工作区里
+             *      可以有多项研究，见 2026-10 用户要求）。
+             */
+            const localIdentity = readLocalIdentity(source.root, deps.workIdentity)
+
+            /** 把服务器给的身份落到本机（标记 + 注册表）；没有值就**什么都不写**。 */
+            const rememberIdentity = (workspaceId: string | null | undefined): void => {
+              const id = normalizeWorkspaceId(workspaceId)
+              if (!id) return
+              const identity = makeWorkIdentity({
+                workspaceId: id,
+                projectId,
+                serverUrl: base,
+                accountId: me.id,
+                // 发布方 = 这项研究的 owner（学生自己的工作是 owner；导师出题也是 owner）
+                role: 'owner',
+              })
+              try {
+                deps.workIdentity?.set(source.root, identity)
+              } catch {
+                /* 记账失败不该让发布失败：状态与附件都已经发出去了 */
+              }
+              writeWorkMarker(source.root, identity)
+            }
+
             const create = async (): Promise<string> => {
               const project = await createProject(
                 base,
@@ -2073,13 +2185,30 @@ export function createSettingsRpcHandler(
                   description: content.summary ? content.summary : undefined,
                   // 只在非默认方向时显式发：默认方向归服务器所有（见 createProject 注释）
                   ...(direction === 'SEEK_STUDENT' ? { direction } : {}),
+                  // 已有身份 → 沿用（服务器保证同一 id 跨项目生命周期不变）
+                  ...(localIdentity.workspaceId ? { workspaceId: localIdentity.workspaceId } : {}),
                 },
                 netOptions(),
               )
               created = true
+              // 服务器给的才是权威：本机没有就记下，本机有但不同则**以服务器为准**（同一次发布）
+              rememberIdentity(project.workspaceId)
               return project.id
             }
             if (!projectId) projectId = await create()
+            /*
+             * 复用旧项目、但本机**没有**身份（老版本插件发的，或标记文件被删）→ 回查一次对齐。
+             *
+             * 只在确实缺身份时才发这一次请求：已经有身份时它对发布没有任何影响，
+             * 而"缺身份"会让界面无法区分这项研究、也会让下一次发布被服务器当成新研究。
+             */
+            if (!created && !localIdentity.workspaceId) {
+              try {
+                rememberIdentity((await fetchProject(base, apiKey, projectId, netOptions())).workspaceId)
+              } catch {
+                /* 回查失败不影响发布：下一次发布还会再试 */
+              }
+            }
             // 一次保存意图一个幂等键；因 409 重基后 payload 变了 → 换新键
             const saveState = async (baseVersion: number | null) =>
               uploadResearchState(

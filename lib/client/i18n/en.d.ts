@@ -135,6 +135,16 @@ export declare const en: {
     readonly 'community.tab.account': "Account";
     readonly 'community.tab.signIn': "Sign in";
     readonly 'community.tab.server': "Server";
+    readonly 'community.tip.expand': "Show account and server settings";
+    readonly 'community.tip.collapse': "Hide account and server settings";
+    readonly 'community.dash.token': "Token balance";
+    readonly 'community.dash.tokenFrozen': "{frozen} frozen";
+    readonly 'community.dash.tokenTotal': "{total} in total";
+    readonly 'community.dash.storage': "Storage";
+    readonly 'community.dash.storageSub': "Used {used} / {total}";
+    readonly 'community.dash.projects': "Published projects";
+    readonly 'community.dash.projectsSub': "Tier {tier} · next publish {cost} Token";
+    readonly 'community.dash.unknown': "Unknown";
     readonly 'community.work.title': "Research work";
     readonly 'community.work.byAuthor': "by {name}";
     readonly 'community.tab.mine': "Mine";

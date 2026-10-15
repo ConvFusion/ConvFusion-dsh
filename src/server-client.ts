@@ -1556,6 +1556,18 @@ export interface ServerProject {
    * 界面退回 `title`（不编造）。
    */
   workName?: string | null
+  /**
+   * **这项研究工作的标识** `workspace_id`（服务器给，`ws_<32 hex>`）。
+   *
+   * 它是"一项研究工作"的**全局唯一、跨项目生命周期不变**的身份（改题、改描述、
+   * 项目被删后重建、重新发布都不变）—— 所以它是本机区分"这是哪一项研究"的**唯一**判据，
+   * 不是主题（会变）也不是 `project_id`（一次发布一个）。
+   *
+   * - 有值 → 服务器认同的身份；
+   * - `null` → 服务器**明确说没有**（老项目可能确实没有）；
+   * - `undefined` → **旧服务器还没有这个字段** → 按"无法判定"处理（不阻塞，也不编造）。
+   */
+  workspaceId?: string | null
   updatedAt: string
 }
 
@@ -1580,6 +1592,9 @@ function parseProject(raw: unknown): ServerProject {
     visibility: asString(b.visibility) || 'PRIVATE',
     direction: parseDirection(b.direction),
     workName: parseTriText(b.work_name),
+    ...(b.workspace_id === undefined
+      ? {}
+      : { workspaceId: normalizeWorkspaceId(b.workspace_id) }),
     updatedAt: asString(b.updated_at),
   }
 }
@@ -1594,7 +1609,7 @@ function parseProject(raw: unknown): ServerProject {
 export async function createProject(
   base: string,
   apiKey: string,
-  input: { title: string; description?: string; direction?: ProjectDirection },
+  input: { title: string; description?: string; direction?: ProjectDirection; workspaceId?: string },
   options: ServerRequestOptions = {},
 ): Promise<ServerProject> {
   const key = requireKey(apiKey)
@@ -1612,6 +1627,12 @@ export async function createProject(
         // ⚠️ 只在明确给了方向时才发这个字段：默认方向由服务器拥有，
         // 客户端抄一份默认值只会在平台改默认时悄悄漂移。
         ...(input.direction ? { direction: input.direction } : {}),
+        /*
+         * 本机已经知道这项研究的身份（之前发布过 / 下载时记下过）→ 沿用，
+         * 否则同一项研究重新发布会被服务器当成**另一项研究**（新 id），
+         * 而"另一项研究"在下一次下载判定里意味着"禁止写进这个工作区"。
+         */
+        ...(input.workspaceId ? { workspace_id: input.workspaceId } : {}),
       },
     },
     options,
