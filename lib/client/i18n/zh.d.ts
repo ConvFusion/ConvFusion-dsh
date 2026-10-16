@@ -63,6 +63,7 @@ export declare const zh: {
     'settings.editor.confirmSkill': string;
     'community.title': string;
     'community.entry.label': string;
+    'community.button.title': string;
     'community.notice.published': string;
     'community.notice.tokens': string;
     'community.notice.files': string;
@@ -140,6 +141,8 @@ export declare const zh: {
     'community.dash.token': string;
     'community.dash.tokenFrozen': string;
     'community.dash.tokenTotal': string;
+    'community.dash.tokenPools': string;
+    'community.dash.tokenPoolsFrozen': string;
     'community.dash.storage': string;
     'community.dash.storageSub': string;
     'community.dash.projects': string;
@@ -205,6 +208,14 @@ export declare const zh: {
     'community.mentor.feeTotal': string;
     'community.mentor.feeNote': string;
     'community.mentor.feeInvalid': string;
+    'community.mentor.conditionLabel': string;
+    'community.mentor.levelLabel': string;
+    'community.mentor.levelNone': string;
+    'community.mentor.levelSystem.JCR': string;
+    'community.mentor.levelSystem.CCF': string;
+    'community.mentor.level.JCR': string;
+    'community.mentor.level.CCF': string;
+    'community.mentor.levelRequired': string;
     'community.tip.propose': string;
     'community.tip.proposed': string;
     'community.mentor.profileTitle': string;
@@ -257,6 +268,9 @@ export declare const zh: {
     'community.mentor.acceptFreezeNote': string;
     'community.mentor.acceptFreezeNoteOther': string;
     'community.mentor.acceptBalance': string;
+    'community.mentor.acceptPools': string;
+    'community.mentor.acceptFundedOnly': string;
+    'community.mentor.acceptNoFunded': string;
     'community.exchange.downloadTitle': string;
     'community.exchange.sizeBadge': string;
     'community.exchange.zipOnly': string;
@@ -336,6 +350,10 @@ export declare const zh: {
     'community.token.available': string;
     'community.token.frozen': string;
     'community.token.total': string;
+    'community.token.funded': string;
+    'community.token.grant': string;
+    'community.token.fundedHint': string;
+    'community.token.grantHint': string;
     'community.token.renewHint': string;
     'community.token.pendingLine': string;
     'community.token.amountLabel': string;
@@ -348,6 +366,7 @@ export declare const zh: {
     'community.token.amountInvalid': string;
     'community.token.receipt': string;
     'community.tip.balanceDetail': string;
+    'community.tip.balancePools': string;
     'community.tip.keyPrivacy': string;
     'community.tip.envKey': string;
     'community.balance.frozenNote': string;

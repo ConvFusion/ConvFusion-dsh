@@ -70,8 +70,8 @@ assert(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'), 'packag
 assert(/export const inject = \[[^\]]*'locale'[^\]]*\]/.test(index), '浏览器插件硬依赖 locale 服务')
 assert(/ctx\.locale\.register\(CONVFUSION_LOCALE_NS, dictionaries\)/.test(index), '字典注册到独立 namespace')
 assert(
-  (slotSources.match(/locale: CONVFUSION_LOCALE_NS/g) ?? []).length === 2,
-  '设置页与（两个）会话 Tab 的注册项都声明 Slot locale',
+  (slotSources.match(/locale: CONVFUSION_LOCALE_NS/g) ?? []).length === 3,
+  '设置页、顶部品牌入口与（两个）会话 Tab 的注册项都声明 Slot locale',
 )
 assert(!/navigator\.language|localStorage/.test(index), '没有自建浏览器语言状态')
 
@@ -120,8 +120,8 @@ client.apply(ctx)
 assert(registeredNamespace === 'convfusion', 'apply() 实际注册 convfusion namespace')
 assert(registeredDictionaries?.zh && registeredDictionaries?.en, 'apply() 实际注册中英字典')
 assert(
-  registrations.length === 1,
-  'apply() 直接注册的只有设置页（两个会话 Tab 是条件注册：桩 ctx 没有会话服务 → 不注册，见 verify-progress [9c]）',
+  registrations.length === 2,
+  'apply() 直接注册的是设置页 + 顶部品牌入口（两个会话 Tab 是条件注册：桩 ctx 没有会话服务 → 不注册，见 verify-progress [9c]）',
 )
 assert(registrations.every((entry) => entry.locale === 'convfusion'), '直接注册的 Slot 绑定 convfusion locale')
 
@@ -131,6 +131,8 @@ for (const rel of [
   'src/client/settings.tsx',
   'src/client/progress-panel.tsx',
   'src/client/community-view.tsx',
+  // 顶部品牌入口的浮层（2026-10 恢复）：与其它界面文件同一条纪律
+  'src/client/community-panel.tsx',
   'src/client/convfusion-tab.ts',
 ]) {
   const source = readFileSync(join(ROOT, rel), 'utf8')

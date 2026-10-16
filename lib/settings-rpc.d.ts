@@ -612,8 +612,8 @@ export declare function compareVersions(a: string, b: string): number;
  * | `work/list` | `{}` | 研究网络里已公开的研究工作（需登录；条数由服务器定） |
  * | `work/summary` | `{ projectId }` | 一项研究工作的摘要（免费） |
  * | `work/brief` | `{ projectId, intentKey }` | 一项研究工作的简报（非 owner 花 1 Token） |
- * | `mentor/fee-suggestion` | `{}` | 默认指导费用建议（100 / 20 / 80，导师可改） |
- * | `mentor/propose` | `{ projectId, guidanceScope, totalFee, depositAmount, successPaymentAmount, successCondition }` | 发起指导提案（免费；同一项目同一导师只能有一个生效提案） |
+ * | `mentor/fee-suggestion` | `{ jcrLevel?, ccfLevel? }` | 指导费用建议：给论文等级（JCR 1–4 / CCF A–C）→ **该等级的价格**；不给 → 兜底价（100 / 20 / 80，非论文类条件用） |
+ * | `mentor/propose` | `{ projectId, guidanceScope, totalFee, depositAmount, successPaymentAmount, successCondition }` | 发起指导提案（免费；同一项目同一导师只能有一个生效提案）。**论文类条件必须带等级**（`successCondition.jcrLevel` / `ccfLevel`），服务器缺等级直接 400 |
  * | `mentor/list` | `{}` | 我涉及的指导提案（我发起的 + 我收到的）；ACCEPTED 的带 `reviewFiles`（导师已上传几份，服务器 `review_files`）与 **`sync`**（"学生更新了工作区吗"：与本地水位比对的结果，`null` = 无从判断） |
  * | `mentor/accept` | `{ proposalId, intentKey }` | 接受指导（研究者）→ **冻结押金**、建合同与关系 |
  * | `mentor/reject` | `{ proposalId }` | 拒绝指导（研究者） |

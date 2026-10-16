@@ -176,12 +176,35 @@ export interface HostAccountState {
      * Token 余额（联网验证过才有）。
      *
      * 宿主是**尽力而为**地取它：拿不到就是 null（界面不显示数字，而不是显示 0）。
+     *
+     * ⚠️ `grant` / `funded` 是**两池**（协议 28）：`grant`（赠送额度）只能买平台自营服务，
+     * `funded`（资金池）是**唯一**能付给导师、能提现的部分 —— 接受指导冻结押金走它。
+     * 两者为 `null` = 旧宿主不分开说（**不是 0**）：那时按 `available` 处理（旧语义下
+     * 全部余额都能付导师），不许把账号误判成付不起。
      */
     tokens?: {
         available: number;
         frozen: number;
         total: number;
+        grant: number | null;
+        funded: number | null;
     } | null;
+}
+/**
+ * 一条续费申请（宿主 `account/recharge-requests` 的镜像）。
+ *
+ * `PENDING` = 等管理员处理；`APPROVED` = 已发放（`grantTxId` 指向账本那条 `GRANT`）；
+ * `REJECTED` = 被拒。弹窗据此告诉用户"我申请到哪一步了"。
+ */
+interface HostRechargeRequest {
+    id: string;
+    amount: number;
+    reason: string | null;
+    status: 'PENDING' | 'APPROVED' | 'REJECTED';
+    note: string | null;
+    reviewedAt: string | null;
+    grantTxId: string | null;
+    createdAt: string;
 }
 /** 一个本地外部依赖的检测结果（与 host 的 LocalDependencyStatus 对应）。 */
 interface HostDependency {
@@ -308,9 +331,15 @@ interface HostProposal {
     totalFee: number;
     depositAmount: number;
     successPaymentAmount: number;
+    /**
+     * 成功条件。`jcrLevel` / `ccfLevel` 只在**论文类**条件上出现（价格 = 等级）——
+     * 列表行与接受确认框靠它们说清"这份提案按什么等级定价"。
+     */
     successCondition: {
         type: string;
         description: string | null;
+        jcrLevel?: number | null;
+        ccfLevel?: string | null;
     };
     status: HostProposalStatus;
     /**
@@ -382,6 +411,89 @@ type HostSyncCheck = {
  * 无论哪条路失败都**只返回 false、不抛** —— 复制失败不该让界面崩，也不该打断下载。
  */
 export declare function copyText(text: string): Promise<boolean>;
+/**
+ * 接受指导的**确认对话框**。
+ *
+ * ⚠️ 为什么必须有它：接受会把押金从可用的钱转到 `frozen` —— 这是真正动 Token 的
+ * 操作。用户规则是"所有扣费操作都要先提醒，不能点击即生效"。所以点【接受】只是
+ * 打开这个框；点了「确认接受」才发请求。
+ *
+ * 框里必须说清三件事：跟谁合作（对方 + 机构）、冻多少钱（押金）、**冻的是谁的钱**。
+ *
+ * ⚠️ `iPayer`（v0.6.0）：两个方向都是**学生**出钱，但接受的人不同 ——
+ * 方向 A 由学生接受（冻的是我自己的，要显示我的余额），方向 B 由导师接受
+ * （冻的是**学生**的，显示导师自己的余额是误导，所以不显示）。
+ *
+ * ⚠️ **资金池（v0.6.3）**：押金只能从 `funded`（资金池）冻结，赠送额度**不能**付给导师。
+ * 所以"我就是学生"时，这里用 `funded` 而不是两池之和来判断 —— 余额够但全在赠送池里时，
+ * 点【确认接受】只会拿到 402。既然客户端已经知道这件事，就该在**点之前**拦住，
+ * 并把可行动作写出来（自助付费尚未开通 → 找管理员发放 Token）。
+ * 旧宿主不分开报两池（`funded === null`）→ 退回按 `available` 判断（旧语义下没错）。
+ *
+ * ⚠️ **导出是给离线自检用的**（`verify-settings-page.mjs` 把组件当普通函数调、遍历产出的树）：
+ * 它**没有 hook**（状态都在上层 `CommunityTab` 里）才可能这样跑；加了 hook 就走不通了
+ * （那时改回断言源码）。
+ */
+export declare function AcceptConfirmDialog({ t, proposal, party, partyIsMentor, iPayer, balance, funded, grant, onCancel, onConfirm, }: {
+    t: Translate;
+    proposal: HostProposal;
+    /** 对方（方向 A 是导师、方向 B 是学生）。 */
+    party: HostProposalParty;
+    partyIsMentor: boolean;
+    /** 押金是不是从我自己的账户冻结（= 我就是学生）。 */
+    iPayer: boolean;
+    /** 可用余额（两池之和）；旧宿主只有这一个数。 */
+    balance: number | null;
+    /** 资金池（能付给导师的那一池）；旧宿主 → `null`（按 `balance` 判断）。 */
+    funded: number | null;
+    /** 赠送额度（只能买自营服务）；旧宿主 → `null`。 */
+    grant: number | null;
+    onCancel: () => void;
+    onConfirm: () => void;
+}): JSX.Element;
+/**
+ * **Token 余额弹窗**（点账号行的余额徽章打开，2026-09 用户要求）。
+ *
+ * 三件事：① 余额明细（**两池**：资金池 / 赠送，+ 可用 / 冻结 / 合计）；
+ * ② **续费说明**（目前由管理员发放，暂未开通自助付费）；③ **申请续费** ——
+ * 往服务器写一条申请记录，管理员事后在服务器上处理（本插件不接真实付费）。
+ *
+ * ⚠️ **两池为什么必须分开显示**（v0.6.3）：只有**资金池**能付给导师、能提现，
+ * 赠送额度只能买平台自营服务。混成一个"可用余额"会让用户在点【接受指导】时
+ * 撞上 402 而完全不明白为什么 —— 数字明明够。
+ *
+ * ⚠️ **防重复申请**：服务器 `POST /tokens/recharge-requests` **不幂等**（每次调用新增一条
+ * `PENDING`），所以这里在打开时读一次自己的申请记录，有 `PENDING` 就**不再给表单**
+ * （显示"已申请 N Token，等待管理员处理"）。不靠按钮禁用来兜 —— 用户重开弹窗也必须挡住。
+ *
+ * 数量是**必填**的：服务器 `RechargeRequestCreate.amount` 是 `gt=0` 的必填字段，
+ * 申请得说清要多少（这正是管理员批准时的依据）。
+ *
+ * ⚠️ **导出是给离线自检用的**（同 `AcceptConfirmDialog`）：它没有 hook，所以能被直接调用、
+ * 遍历产出的树，"两池是否真的分列"才验得动。
+ */
+export declare function TokenDialog({ t, tokens, requests, loading, amount, reason, submitting, error, receipt, onAmount, onReason, onApply, onRefresh, onClose, }: {
+    t: Translate;
+    tokens: {
+        available: number;
+        frozen: number;
+        total: number;
+        grant: number | null;
+        funded: number | null;
+    } | null;
+    requests: HostRechargeRequest[] | null;
+    loading: boolean;
+    amount: string;
+    reason: string;
+    submitting: boolean;
+    error: string | null;
+    receipt: string | null;
+    onAmount: (v: string) => void;
+    onReason: (v: string) => void;
+    onApply: () => void;
+    onRefresh: () => void;
+    onClose: () => void;
+}): JSX.Element;
 /**
  * 【下载】：下载到**用户选的 DSH 工作区**（2026-09 用户要求）。
  *

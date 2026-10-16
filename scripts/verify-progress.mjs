@@ -1017,7 +1017,16 @@ console.log('\n[9] 客户端：研究进展 tab 只认自己会话的工作区�
   )
   assert(!/activeSessionId|researchSessions/.test(bundle), 'bundle 里没有任何跨会话缓存（旧故障根因已消失）')
   assert(bundle.includes('conversation.view'), 'bundle 注册在**会话 tab 的 roster 槽位**（conversation.view）')
-  assert(!bundle.includes('conversation.session.header.utilities'), '顶部不再挂任何 ConvFusion 入口（只留 tab）')
+  /*
+   * ⚠️ 顶部槽位**只许有品牌入口**（科V社区，order -1，见 [9b]）。研究进展**不许**回到顶部：
+   * 它按会话的工作区判定，而顶部是 session 作用域、拿不到工作区 —— 当年只能靠进程级全局
+   * 状态猜，于是命中所有会话（v0.5.2 的故障根因）。
+   */
+  {
+    const at = bundle.indexOf('conversation.session.header.utilities')
+    const near = at === -1 ? '' : bundle.slice(at, at + 400)
+    assert(!/convfusion-progress/.test(near), '顶部槽位里没有「研究进展」条目（只许品牌入口）')
+  }
   assert(!bundle.includes('conversation.chat.turnTail'), 'bundle 不再占用对话流尾部的链式槽位（不再抢 deliverables）')
   assert(!bundle.includes('conversation.input.dock'), 'bundle 不再用预热组件（判定不再依赖"先挂载过"）')
   assert(bundle.includes('progress/workspace'), 'bundle 调的是新端点 progress/workspace')
@@ -1109,24 +1118,46 @@ console.log('\n[9] 客户端：研究进展 tab 只认自己会话的工作区�
 rmSync(join(tmpdir(), 'nonexistent-cf-progress-'), { recursive: true, force: true })
 
 /* ════════════════════════════════════════════════════════════════════════
- * 9b. 客户端：**只留 tab** —— 顶部不再有 ConvFusion 入口，两个 tab 的声明正确
+ * 9b. 客户端：**顶部只留品牌入口** + 两个 tab 的声明正确
  *
- * 用户 2026-10 拍板：顶部那两个按钮（研究进展 / 科V社区）全部移除，改成会话 Tab。
- * 这里守住三件事：
- *   ① 顶部工具槽位里**没有任何** ConvFusion 条目（残留会变成"两处入口"）；
+ * 用户 2026-10：两个页面搬进会话 Tab（研究进展 / 科V社区），**顶部只保留一个品牌入口**
+ * ——「图标 + 科V社区」，且要显示在右上角「…」（更多操作）**之前**（2026-10 追加要求）。
+ * 这里守住四件事：
+ *   ① 顶部工具槽位里**有且只有**一条 ConvFusion 条目（品牌入口，order -1），
+ *      且它**不是**研究进展（那个按会话判定，挂顶部就得引入跨会话全局状态）；
  *   ② 两个 tab 的声明：id / order / 文案，且**研究进展排在科V社区之前**（19 < 20）；
- *   ③ 复用与边界：内容与设置页是同一份实现；不在浏览器里缓存凭据、不写死服务器地址。
+ *   ③ 复用与边界：顶部浮层与 tab 都用设置页那一份 CommunityTab；不缓存凭据、不写死地址；
+ *   ④ 顺序契约：入口名与设置页标题是两个 key（改一个不会连带改另一个）。
  * ════════════════════════════════════════════════════════════════════════ */
-console.log('\n[9b] 客户端：只留 tab（顶部无入口；两个 tab 的声明与顺序）')
+console.log('\n[9b] 客户端：顶部品牌入口（order -1，在「…」之前）+ 两个 tab 的声明与顺序')
 {
   const settingsSrc = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
   const indexSrc = readFileSync(join(PKG, 'src', 'client', 'index.tsx'), 'utf8')
   const gateSrc = readFileSync(join(PKG, 'src', 'client', 'convfusion-tab.ts'), 'utf8')
+  const panelSrc = readFileSync(join(PKG, 'src', 'client', 'community-panel.tsx'), 'utf8')
   const bundle = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
 
-  // ① 顶部不再挂任何 ConvFusion 入口，浮层实现文件也不在（残留 = 两处入口）
-  assert(!bundle.includes('conversation.session.header.utilities'), '顶部工具槽位里没有 ConvFusion 条目')
-  assert(!existsSync(join(PKG, 'src', 'client', 'community-panel.tsx')), '浮层实现文件已删除')
+  // ① 顶部：一条品牌入口，order -1（「…」是 session-log-export，没写 order ⇒ 默认 0）
+  assert(existsSync(join(PKG, 'src', 'client', 'community-panel.tsx')), '顶部入口的实现文件在位（community-panel.tsx）')
+  assert(bundle.includes('conversation.session.header.utilities'), '顶部工具槽位里挂着品牌入口')
+  assert(/export const COMMUNITY_BUTTON_ORDER = -1/.test(panelSrc), '品牌入口 order = -1（紧贴「…」左侧）')
+  assert(
+    /name: 'conversation\.session\.header\.utilities'[\s\S]{0,160}?id: 'convfusion-community'/.test(indexSrc),
+    '注册的是 convfusion-community（品牌入口），不是研究进展',
+  )
+  assert(
+    /order: COMMUNITY_BUTTON_ORDER/.test(indexSrc),
+    '注册项用的是那个常量（不写死数字，改一处即可）',
+  )
+  assert(
+    panelSrc.includes('ConvFusionMark') && /community\.entry\.label/.test(panelSrc),
+    '入口是「图标 + 文字」两件都要（图标承担品牌识别）',
+  )
+  assert(
+    /session-log-export/.test(panelSrc) && panelSrc.includes('\u2026'),
+    '文件头写清了「…」是谁（改 order 前必须知道自己在跟谁排序）',
+  )
+  assert(/CommunityTab send=\{fetchSettingsSend\}/.test(panelSrc), '浮层渲染设置页那一份 CommunityTab（不另写一份）')
 
   // ② 两个 tab 的声明与顺序（顺序即用户要求的「研究进展在科V社区之前」）
   assert(bundle.includes('convfusion-progress'), '注册了研究进展 tab（id = convfusion-progress）')
@@ -1151,7 +1182,7 @@ console.log('\n[9b] 客户端：只留 tab（顶部无入口；两个 tab 的声
     /import \{ CommunityTab[^}]*\} from '\.\/settings\.js'/.test(viewSrc),
     '科V社区 tab 正文 import 的是设置页那一个 CommunityTab（不是另写一份）',
   )
-  assert(!/https?:\/\//.test(viewSrc + gateSrc), 'tab 与闸门都不写死服务器地址（全部经宿主 account/*）')
+  assert(!/https?:\/\//.test(viewSrc + gateSrc + panelSrc), 'tab / 闸门 / 顶部入口都不写死服务器地址（全部经宿主 account/*）')
   assert(!/localStorage|sessionStorage/.test(viewSrc + gateSrc + indexSrc), '不在浏览器里缓存凭据')
 
   // 入口名与设置页标题**必须是两个 key**（用户 2026-09 拍板，仍然有效）

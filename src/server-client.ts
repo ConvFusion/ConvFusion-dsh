@@ -93,12 +93,27 @@ export interface ServerAccount {
  * 无从判断自己是没充值、还是被重复扣费了。
  */
 export interface TokenBalance {
-  /** 可用余额（能花的）。 */
+  /** 可用余额（= 两池之和，能花的）。 */
   available: number
   /** 冻结余额（如已接受提案的押金 —— 仍是用户的钱，只是锁住）。 */
   frozen: number
   /** 总额（可用 + 冻结）。 */
   total: number
+  /**
+   * **赠送额度**（服务器 `grant_balance`）—— 平台发的，只能买**自营服务**
+   * （看简报 / 发布 / 买存储）。**不能付给导师、不能提现**。
+   *
+   * `null` = 服务器这一版不返回该字段（协议 28 之前）——**不是 0**。旧服务器把赠送与
+   * 充值混在一个余额里，"这个账号没有赠送额度"与"服务器不会分开说"必须区分开。
+   */
+  grant: number | null
+  /**
+   * **资金池**（服务器 `funded_balance`）—— 充值 + 导师所得。**唯一**能付给导师、
+   * 也是**唯一**可提现的部分；接受指导时冻结的押金走的就是它。
+   *
+   * `null` 的含义同 `grant`（旧服务器不分开说）。
+   */
+  funded: number | null
 }
 
 /**
@@ -298,6 +313,15 @@ export class ServerError extends Error {
   readonly requiredTokens?: number
   /** 402 的 `details.available`（当前可用多少 Token）。 */
   readonly availableTokens?: number
+  /**
+   * 402（**资金池专属**路径）的 `details.funded`：资金池当前有多少。
+   *
+   * 它出现就说明这次失败是"赠送额度不能付给导师"，而不是"一分钱都没有"——
+   * 界面据此说清话（并提示找管理员发放），而不是笼统说余额不足。
+   */
+  readonly fundedTokens?: number
+  /** 402（资金池专属路径）的 `details.grant`：同一次失败里赠送额度有多少。 */
+  readonly grantTokens?: number
   /** 409 STATE_VERSION_CONFLICT 的 `details.current_version`（重基时用它）。 */
   readonly currentVersion?: number
 
@@ -310,6 +334,8 @@ export class ServerError extends Error {
       retryAfterSeconds?: number
       requiredTokens?: number
       availableTokens?: number
+      fundedTokens?: number
+      grantTokens?: number
       currentVersion?: number
     } = {},
   ) {
@@ -321,6 +347,8 @@ export class ServerError extends Error {
     this.retryAfterSeconds = extra.retryAfterSeconds
     this.requiredTokens = extra.requiredTokens
     this.availableTokens = extra.availableTokens
+    this.fundedTokens = extra.fundedTokens
+    this.grantTokens = extra.grantTokens
     this.currentVersion = extra.currentVersion
   }
 }
@@ -517,18 +545,32 @@ function mapHttpError(status: number, body: unknown): ServerError {
     const details = errorBodyDetails(body)
     const required = typeof details.required === 'number' ? details.required : undefined
     const available = typeof details.available === 'number' ? details.available : undefined
+    // 服务器只在**资金池专属**的扣费路径（付给导师 / 提现）给出 funded + grant，
+    // 由此可以分辨两种 402："钱不够"与"有赠送额度但那一池不能付给导师"。
+    const funded = typeof details.funded === 'number' ? details.funded : undefined
+    const grant = typeof details.grant === 'number' ? details.grant : undefined
     const balance =
       required === undefined || available === undefined
         ? 'Token 余额不足。'
-        : `Token 余额不足：本次需要 ${required} 个，当前可用 ${available} 个。`
+        : funded === undefined
+          ? `Token 余额不足：本次需要 ${required} 个，当前可用 ${available} 个。`
+          : // 赠送额度**只在服务器真给了这个数**时才提（拿不到就不编一个 0 出来）
+            `资金池不足：本次需要 ${required} 个，资金池可用 ${funded} 个（` +
+            (grant === undefined ? '' : `另有赠送额度 ${grant} 个，`) +
+            '赠送额度不能付给导师、也不能提现）。'
     return new ServerError(
       'insufficient-tokens',
-      // ⚠️ 不要在这条**用户可见**的文案里写 markdown（`**` 会原样显示成星号）
-      `${balance}拿到 Token 后，用同一次查看重试即可，不会重复扣费。`,
+      // ⚠️ 不要在这条**用户可见**的文案里写 markdown（`**` 会原样显示成星号）。
+      // 自助付费尚未开通（见 community.token.renewHint）→ 唯一动作是找管理员发放，
+      // 这句话必须出现在**错误本身**里，界面直接展示 message 时也不会漏掉动作。
+      `${balance}测试阶段请联系管理员发放 Token；` +
+        '拿到后重试即可，不会重复扣费。',
       {
         ...withCode,
         ...(required === undefined ? {} : { requiredTokens: required }),
         ...(available === undefined ? {} : { availableTokens: available }),
+        ...(funded === undefined ? {} : { fundedTokens: funded }),
+        ...(grant === undefined ? {} : { grantTokens: grant }),
       },
     )
   }
@@ -829,6 +871,10 @@ export async function fetchTokenBalance(
     frozen,
     // 服务器会给 total；真缺了就自己加，但服务器给的值优先
     total: b.total_balance === undefined ? available + frozen : asNumber(b.total_balance),
+    // ⚠️ 两池是**三态**：缺字段读作 null（旧服务器不分开说），不能读成 0 ——
+    // 读成 0 会让界面把"能付导师"说成 0，把一个好好的账号拦在【接受】外面。
+    grant: optionalNumber(b.grant_balance),
+    funded: optionalNumber(b.funded_balance),
   }
 }
 
@@ -1821,6 +1867,15 @@ function asNumber(v: unknown, fallback = 0): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback
 }
 
+/**
+ * **三态**数字：字段不是有限数就回 `null`（= 服务器没给），**不是 0**。
+ *
+ * 只用在"缺字段与 0 是两个结论"的地方（Token 两池：读成 0 会把账号误判成付不起）。
+ */
+function optionalNumber(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
 function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
 }
@@ -2069,7 +2124,7 @@ export interface MentorshipProposal {
   totalFee: number
   depositAmount: number
   successPaymentAmount: number
-  successCondition: { type: string; description: string | null }
+  successCondition: MentorshipSuccessCondition
   status: ProposalStatus
   /**
    * 指导进展（服务器 `review_files`）：**非 owner 那一侧**去重后的文件数
@@ -2150,7 +2205,92 @@ export interface FeeSuggestion {
   suggestedSuccessPayment: number
 }
 
-/** 成功条件类型（服务器枚举，界面据此给中文标签；第一版重点用 MUTUAL_COMPLETION）。 */
+/* ────────────────────────────────────────────────────────────────────────
+ * 论文等级定价（v0.6.3 §3.2.4；服务器 PaperPriceCalculator）
+ *
+ * 平台的定价基础是**发表等级**：`PAPER_ACCEPTED` / `PAPER_PUBLISHED` 这两类成功
+ * 条件的**价格就是等级**，所以它们**必须**写出等级（不写 → 服务器 400
+ * `INVALID_PROPOSAL`）。其余条件（`MUTUAL_COMPLETION` 等）按约定总额定价，没有等级。
+ *
+ * 服务器接受两种写法且价格等价（服务器 `config.py`）：
+ *
+ * ```text
+ * JCR 1区 = CCF-A = 1000    JCR 2区 = 800
+ * JCR 3区 = CCF-B =  600    JCR 4区 = CCF-C = 500
+ * ```
+ *
+ * ⚠️ **价格不在客户端**：等级 → 金额由服务器 `fee-suggestion?jcr_level=|ccf_level=`
+ * 算，客户端只传等级。抄一份价目表到这里，平台调价时界面就会显示旧价钱。
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/** 论文类成功条件：价格 = 等级，因此**必须**给出等级。 */
+export const PAPER_CONDITION_TYPES = ['PAPER_ACCEPTED', 'PAPER_PUBLISHED'] as const
+
+/** 这个成功条件是不是按论文等级定价的（服务器 `PAPER_CONDITION_TYPES`）。 */
+export function isPaperCondition(type: string | null | undefined): boolean {
+  return (PAPER_CONDITION_TYPES as readonly string[]).includes(type ?? '')
+}
+
+/** 计价体系：`JCR` 分区 1–4 与 `CCF` 类别 A/B/C。 */
+export type PaperLevelSystem = 'JCR' | 'CCF'
+
+/** 一个等级（体系 + 取值）—— 提案里落成 `jcr_level` 或 `ccf_level`。 */
+export interface PaperLevel {
+  system: PaperLevelSystem
+  /** JCR：`1`–`4`；CCF：`'A'`/`'B'`/`'C'`。 */
+  level: number | string
+}
+
+/** JCR 分区（1 = 最高）。 */
+export const JCR_LEVELS: readonly number[] = [1, 2, 3, 4]
+
+/** CCF 类别（A = 最高）。 */
+export const CCF_LEVELS: readonly string[] = ['A', 'B', 'C']
+
+/** 归一 JCR 分区（1–4 的整数；别的一律 `null`）。 */
+export function asJcrLevel(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : Number.NaN
+  return Number.isInteger(n) && n >= 1 && n <= 4 ? n : null
+}
+
+/** 归一 CCF 类别（大小写不敏感 → 大写 `A`/`B`/`C`；别的一律 `null`）。 */
+export function asCcfLevel(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const s = v.trim().toUpperCase()
+  return (CCF_LEVELS as readonly string[]).includes(s) ? s : null
+}
+
+/**
+ * 从成功条件里读出**它声明的等级**（没有 → `null`）。
+ *
+ * 与服务器的读取顺序一致（`PaperPriceCalculator.level_of`）：先看 `jcr_level`，
+ * 再看 `ccf_level`。两种都给时以 JCR 为准 —— 服务器也是这么定价的，界面不能另说一套。
+ */
+export function successConditionLevel(condition: {
+  jcrLevel?: number | null
+  ccfLevel?: string | null
+} | null | undefined): PaperLevel | null {
+  const jcr = asJcrLevel(condition?.jcrLevel)
+  if (jcr !== null) return { system: 'JCR', level: jcr }
+  const ccf = asCcfLevel(condition?.ccfLevel)
+  if (ccf !== null) return { system: 'CCF', level: ccf }
+  return null
+}
+
+/**
+ * 成功条件的完整形态（提案 / 合同共用）。
+ *
+ * `jcrLevel` / `ccfLevel` 是**论文类条件的价格依据**；非论文类条件两者都是 `null`
+ * （那是正常的，不是缺数据）。
+ */
+export interface MentorshipSuccessCondition {
+  type: string
+  description: string | null
+  jcrLevel: number | null
+  ccfLevel: string | null
+}
+
+/** 成功条件类型（服务器枚举，界面据此给中文标签）。 */
 export const SUCCESS_CONDITION_TYPES = [
   'PAPER_ACCEPTED',
   'PAPER_PUBLISHED',
@@ -2172,7 +2312,7 @@ export interface MentorshipContract {
   depositAmount: number
   successPaymentAmount: number
   guidanceScope: string
-  successCondition: { type: string; description: string | null }
+  successCondition: MentorshipSuccessCondition
   status: string
   createdAt: string
   acceptedAt: string | null
@@ -2232,9 +2372,20 @@ function parseParty(raw: unknown, fallbackId?: unknown): ProposalParty | null {
   }
 }
 
-function parseSuccessCondition(raw: unknown): { type: string; description: string | null } {
+/**
+ * 成功条件（含**论文等级**）：`jcr_level` / `ccf_level` 是价格依据，必须原样带出来。
+ *
+ * 丢掉它们会让界面无法回答"这份提案按什么等级定价"—— 而等级正是费用能不能被信任的
+ * 依据（等级改了价钱就该跟着变）。非论文类条件两者都是 `null`，不是缺数据。
+ */
+function parseSuccessCondition(raw: unknown): MentorshipSuccessCondition {
   const b = asRecord(raw)
-  return { type: asString(b?.type) || 'MUTUAL_COMPLETION', description: asString(b?.description) || null }
+  return {
+    type: asString(b?.type) || 'MUTUAL_COMPLETION',
+    description: asString(b?.description) || null,
+    jcrLevel: asJcrLevel(b?.jcr_level),
+    ccfLevel: asCcfLevel(b?.ccf_level),
+  }
 }
 
 /**
@@ -2349,16 +2500,34 @@ function parseRelationship(raw: unknown): ResearchRelationship {
   }
 }
 
-/** 费用建议（默认 100 / 20 / 80，导师可改）。 */
+/**
+ * 费用建议（`GET /mentorship-proposals/fee-suggestion`）。
+ *
+ * `level` 决定按**哪个发表等级**定价：`{ system: 'JCR', level: 2 }` →
+ * `?jcr_level=2`，`{ system: 'CCF', level: 'B' }` → `?ccf_level=B`。
+ * 不给等级时服务器回**兜底价**（`DEFAULT_MENTORSHIP_FEE`，100 / 20 / 80）——
+ * 那是非论文类条件（`MUTUAL_COMPLETION` 等）的价钱，**不是**论文类条件的默认价。
+ *
+ * 金额一律由服务器算：客户端只传等级，不抄价目表（平台调价时界面不会撒谎）。
+ *
+ * @throws {ServerError} `bad-request`（等级不合法）/ `invalid-key` / `unreachable` / …
+ */
 export async function fetchFeeSuggestion(
   base: string,
   apiKey: string,
   options: ServerRequestOptions = {},
+  level?: PaperLevel | null,
 ): Promise<FeeSuggestion> {
   const key = requireKey(apiKey)
+  const jcr = asJcrLevel(level?.system === 'JCR' ? level.level : null)
+  const ccf = asCcfLevel(level?.system === 'CCF' ? level.level : null)
+  if (level && jcr === null && ccf === null) {
+    throw new ServerError('bad-request', '论文等级不合法：JCR 只能填 1–4，CCF 只能填 A/B/C。')
+  }
+  const query = jcr !== null ? `?jcr_level=${jcr}` : ccf !== null ? `?ccf_level=${ccf}` : ''
   const body = await requestJson(
     base,
-    '/mentorship-proposals/fee-suggestion',
+    `/mentorship-proposals/fee-suggestion${query}`,
     { method: 'GET', apiKey: key },
     options,
     '指导费用建议',
@@ -2385,13 +2554,25 @@ export async function fetchFeeSuggestion(
  * 所以客户端**不传方向**（传了也是冗余信息，可能与项目本身矛盾）；角色校验在服务端。
  * 方向 B 下服务端会在这一步预检学生余额（不足 → 402），因为接受方是导师，
  * 押金不足要让**出价的人**当场知道。
+ *
+ * ⚠️ **论文类条件（`PAPER_ACCEPTED` / `PAPER_PUBLISHED`）必须带等级**：服务器把它读成
+ * `success_condition.jcr_level` / `ccf_level`，缺失直接 400 `INVALID_PROPOSAL`
+ * （"等级就是价格"，没有等级这份提案的价钱无法被重新推导出来）。界面负责先拦一次，
+ * 这里不做第二套校验 —— 规则只有服务器一个来源。
  */
 export interface ProposeInput {
   guidanceScope: string
   totalFee: number
   depositAmount: number
   successPaymentAmount: number
-  successCondition: { type: string; description: string | null }
+  successCondition: {
+    type: string
+    description: string | null
+    /** 论文等级（JCR 分区）；非论文类条件留空。 */
+    jcrLevel?: number | null
+    /** 论文等级（CCF 类别）；给了 jcrLevel 就不必给这个（服务器以 JCR 为准）。 */
+    ccfLevel?: string | null
+  }
 }
 
 export async function fetchPropose(
@@ -2406,6 +2587,9 @@ export async function fetchPropose(
   if (!id) throw new ServerError('bad-request', '缺少研究工作 id。')
   const scope = (input.guidanceScope ?? '').trim()
   if (!scope) throw new ServerError('bad-request', '指导范围不能为空。')
+  // 等级只发**一个**：服务器以 JCR 优先，客户端不把"另一个也顺手发过去"变成隐患。
+  const jcr = asJcrLevel(input.successCondition.jcrLevel)
+  const ccf = asCcfLevel(input.successCondition.ccfLevel)
   const body = await requestJson(
     base,
     `/projects/${encodeURIComponent(id)}/mentorship-proposals`,
@@ -2420,6 +2604,7 @@ export async function fetchPropose(
         success_condition: {
           type: input.successCondition.type,
           description: input.successCondition.description ?? null,
+          ...(jcr !== null ? { jcr_level: jcr } : ccf !== null ? { ccf_level: ccf } : {}),
         },
       },
     },

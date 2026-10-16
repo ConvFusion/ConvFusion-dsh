@@ -53,6 +53,17 @@ import {
 import { syncCommandLine } from './sync-command.js'
 import { publishActionPlan, type PublishActionItem } from './publish-actions.js'
 import { acceptedProgressKey } from './mentorship-labels.js'
+import { mentorshipView, type MentorshipView } from './mentorship-view.js'
+import {
+  decodeLevel,
+  isPaperCondition,
+  levelOptions,
+  levelQuery,
+  paperLevelOf,
+  paperLevelText,
+  type PaperLevel,
+  type PaperLevelSystem,
+} from './paper-level.js'
 
 /* ════════════════════════════════════════════════════════════════════════
  * 跨插件服务的结构化契约（镜像，不 import）
@@ -208,8 +219,19 @@ export interface HostAccountState {
    * Token 余额（联网验证过才有）。
    *
    * 宿主是**尽力而为**地取它：拿不到就是 null（界面不显示数字，而不是显示 0）。
+   *
+   * ⚠️ `grant` / `funded` 是**两池**（协议 28）：`grant`（赠送额度）只能买平台自营服务，
+   * `funded`（资金池）是**唯一**能付给导师、能提现的部分 —— 接受指导冻结押金走它。
+   * 两者为 `null` = 旧宿主不分开说（**不是 0**）：那时按 `available` 处理（旧语义下
+   * 全部余额都能付导师），不许把账号误判成付不起。
    */
-  tokens?: { available: number; frozen: number; total: number } | null
+  tokens?: {
+    available: number
+    frozen: number
+    total: number
+    grant: number | null
+    funded: number | null
+  } | null
 }
 
 /**
@@ -1565,19 +1587,11 @@ function proposalTone(status: HostProposalStatus): 'brand' | 'success' | 'warn' 
  * | `iProposed` | 导师 | 学生 |
  * | `iAmAcceptor`（该我接受/拒绝） | 学生 | 导师 |
  */
-interface HostProposalView {
-  /** 我在这条关系里是导师还是研究者。 */
-  myRole: 'mentor' | 'researcher'
-  /** 项目 owner 侧是不是我（服务器按"谁写的"分两侧，owner 侧 = 项目所有者写的）。 */
-  iAmOwner: boolean
+interface HostProposalView extends MentorshipView {
   /** 我上传时要与自己比对的那一侧（服务器 `?source=`）。 */
   mySide: HostFileSide
   /** 对方的侧（下载读它）。 */
   otherSide: HostFileSide
-  /** 这次提案是我发起的吗。 */
-  iProposed: boolean
-  /** 该我接受 / 拒绝吗（`PROPOSED` 且不是我发起的）。 */
-  iAmAcceptor: boolean
   /** 要判断的那个人（对方）。 */
   counterparty: HostProposalParty | null
   /** 对方是导师吗（决定资料框的标题与措辞）。 */
@@ -1585,30 +1599,25 @@ interface HostProposalView {
 }
 
 /**
- * 从提案算出 {@link HostProposalView}。
- *
- * "谁发起了"优先用服务器的 `proposed_by_id`；旧服务器不返回时**按方向推断**
- * （A 由导师发起、B 由学生发起）—— 这是那个方向的定义，不是猜测。
- * `myAccountId` 缺失（未登录 / 旧宿主）时按"我是研究者"兜底：那种情况下这些行
- * 本来也不渲染（【指导中】要求登录），兜底只为不崩。
+ * 从提案算出 {@link HostProposalView}（方向派生量在纯函数 {@link mentorshipView} 里，
+ * 自检按**方向 × 我的角色**四格逐一钉住；这里只补"对方是谁"这一类需要完整对象的量）。
  */
 function proposalView(p: HostProposal, myAccountId: string | null): HostProposalView {
-  const myRole: 'mentor' | 'researcher' =
-    myAccountId && p.mentor?.id === myAccountId ? 'mentor' : 'researcher'
-  const iAmOwner = p.direction === 'SEEK_MENTOR' ? myRole === 'researcher' : myRole === 'mentor'
-  const proposerRole: 'mentor' | 'researcher' = p.direction === 'SEEK_MENTOR' ? 'mentor' : 'researcher'
-  const iProposed =
-    p.proposedById != null ? p.proposedById === myAccountId : myRole === proposerRole
-  const counterparty = myRole === 'mentor' ? p.researcher : p.mentor
+  const base = mentorshipView(
+    {
+      direction: p.direction,
+      mentorId: p.mentor?.id ?? null,
+      researcherId: p.researcher?.id ?? null,
+      proposedById: p.proposedById,
+    },
+    myAccountId,
+  )
   return {
-    myRole,
-    iAmOwner,
-    mySide: iAmOwner ? 'owner' : 'mentor',
-    otherSide: iAmOwner ? 'mentor' : 'owner',
-    iProposed,
-    iAmAcceptor: !iProposed,
-    counterparty,
-    counterpartyIsMentor: myRole === 'researcher',
+    ...base,
+    mySide: base.mySide,
+    otherSide: base.otherSide,
+    counterparty: base.myRole === 'mentor' ? p.researcher : p.mentor,
+    counterpartyIsMentor: base.myRole === 'researcher',
   }
 }
 
@@ -1687,18 +1696,25 @@ function sideSyncHint(t: Translate, p: HostProposal, view: HostProposalView): st
 const DEFAULT_DEPOSIT_RATIO = 0.2
 
 /**
- * 提案里**导师侧已不再采集**、但服务器当前仍要求非空的两个字段的过渡值。
+ * 提案里**导师侧已不再采集**、但服务器当前仍要求非空的一个字段的过渡值。
  *
- * 1. `guidance_scope`：服务器 `min_length=1` 必填，而导师侧已删掉这个输入
- *    → 送占位符；学生侧展示时遇到占位符**整行不显示**（不显示"指导范围：-"）。
- * 2. `success_condition`：新语义是**由学生在接受时确认**，导师不指定
- *    → 送平台默认的「双方确认完成」。
+ * `guidance_scope`：服务器 `min_length=1` 必填，而导师侧已删掉这个输入
+ * → 送占位符；学生侧展示时遇到占位符**整行不显示**（不显示"指导范围：-"）。
  *
- * ⚠️ 都是**过渡值**：后端把这两个字段改成可选（见
+ * ⚠️ 是**过渡值**：后端把这个字段改成可选（见
  * `dev-notes/v3-Mentorship-backend-spec.md` 的"追加需求"）之后，
- * 这里应改成"干脆不发这两个字段"。
+ * 这里应改成"干脆不发这个字段"。
  */
 const PROPOSE_SCOPE_PLACEHOLDER = '-'
+
+/**
+ * 提案对话框里**成功条件**的默认值（打开就是它）。
+ *
+ * v0.6.3 起成功条件由用户在对话框里选（论文类条件还要选等级，见 `paper-level.ts`）——
+ * 它不再是"导师不指定、随便送一个默认值"的过渡值：**条件决定价格**（等级定价），
+ * 所以它必须是一个用户能看见、能改的输入。默认停在「双方确认完成」= 最保守的约定，
+ * 它不带等级，价格是双方约定的总额。
+ */
 const PROPOSE_DEFAULT_CONDITION = 'MUTUAL_COMPLETION'
 
 function roleText(t: Translate, roles: string[]): string {
@@ -2248,7 +2264,16 @@ interface HostProposal {
   totalFee: number
   depositAmount: number
   successPaymentAmount: number
-  successCondition: { type: string; description: string | null }
+  /**
+   * 成功条件。`jcrLevel` / `ccfLevel` 只在**论文类**条件上出现（价格 = 等级）——
+   * 列表行与接受确认框靠它们说清"这份提案按什么等级定价"。
+   */
+  successCondition: {
+    type: string
+    description: string | null
+    jcrLevel?: number | null
+    ccfLevel?: string | null
+  }
   status: HostProposalStatus
   /**
    * 关系建立（ACCEPTED）后，**非 owner 那一侧**交付的文件数（服务器 `review_files`）。
@@ -2972,7 +2997,7 @@ function BriefConfirmDialog({
 /**
  * 接受指导的**确认对话框**。
  *
- * ⚠️ 为什么必须有它：接受会把押金从 `available` 转到 `frozen` —— 这是真正动 Token 的
+ * ⚠️ 为什么必须有它：接受会把押金从可用的钱转到 `frozen` —— 这是真正动 Token 的
  * 操作。用户规则是"所有扣费操作都要先提醒，不能点击即生效"。所以点【接受】只是
  * 打开这个框；点了「确认接受」才发请求。
  *
@@ -2981,14 +3006,26 @@ function BriefConfirmDialog({
  * ⚠️ `iPayer`（v0.6.0）：两个方向都是**学生**出钱，但接受的人不同 ——
  * 方向 A 由学生接受（冻的是我自己的，要显示我的余额），方向 B 由导师接受
  * （冻的是**学生**的，显示导师自己的余额是误导，所以不显示）。
+ *
+ * ⚠️ **资金池（v0.6.3）**：押金只能从 `funded`（资金池）冻结，赠送额度**不能**付给导师。
+ * 所以"我就是学生"时，这里用 `funded` 而不是两池之和来判断 —— 余额够但全在赠送池里时，
+ * 点【确认接受】只会拿到 402。既然客户端已经知道这件事，就该在**点之前**拦住，
+ * 并把可行动作写出来（自助付费尚未开通 → 找管理员发放 Token）。
+ * 旧宿主不分开报两池（`funded === null`）→ 退回按 `available` 判断（旧语义下没错）。
+ *
+ * ⚠️ **导出是给离线自检用的**（`verify-settings-page.mjs` 把组件当普通函数调、遍历产出的树）：
+ * 它**没有 hook**（状态都在上层 `CommunityTab` 里）才可能这样跑；加了 hook 就走不通了
+ * （那时改回断言源码）。
  */
-function AcceptConfirmDialog({
+export function AcceptConfirmDialog({
   t,
   proposal,
   party,
   partyIsMentor,
   iPayer,
   balance,
+  funded,
+  grant,
   onCancel,
   onConfirm,
 }: {
@@ -2999,13 +3036,29 @@ function AcceptConfirmDialog({
   partyIsMentor: boolean
   /** 押金是不是从我自己的账户冻结（= 我就是学生）。 */
   iPayer: boolean
+  /** 可用余额（两池之和）；旧宿主只有这一个数。 */
   balance: number | null
+  /** 资金池（能付给导师的那一池）；旧宿主 → `null`（按 `balance` 判断）。 */
+  funded: number | null
+  /** 赠送额度（只能买自营服务）；旧宿主 → `null`。 */
+  grant: number | null
   onCancel: () => void
   onConfirm: () => void
 }): JSX.Element {
   const affiliation = [party.profile?.institution, party.profile?.department]
     .filter(Boolean)
     .join(' · ')
+  /**
+   * 押金付不付得起：只认**资金池**。
+   *
+   * `funded === null`（旧宿主）→ `null` = 判不出来，不拦（旧服务器上两池本来就是一体的，
+   * 拦了反而会挡住本来能接受的人）。
+   */
+  const payable = funded === null ? null : funded >= proposal.depositAmount
+  const short = iPayer && payable === false
+  /** 论文类条件带出的等级（"论文被接收"到底按几区定价）—— 没有就是普通的约定条件。 */
+  const level = paperLevelOf(proposal.successCondition)
+  const levelText = paperLevelText(level)
   return (
     <div
       style={S.overlay}
@@ -3016,6 +3069,8 @@ function AcceptConfirmDialog({
         <div style={S.cardHead}>
           {t(iPayer ? 'community.mentor.acceptConfirmTitle' : 'community.mentor.acceptConfirmTitleOther')}
           <span style={{ flex: '1 1 auto' }} />
+          {/* 论文类条件把等级摆出来：接受的是"按这个等级定价"的约定，不该只看到总数 */}
+          {levelText ? <Badge tone="neutral">{t(levelText.key, levelText.params)}</Badge> : null}
           <Badge tone="brand">
             {t(
               iPayer ? 'community.mentor.acceptConfirmBadge' : 'community.mentor.acceptConfirmBadgeOther',
@@ -3045,12 +3100,30 @@ function AcceptConfirmDialog({
               { deposit: proposal.depositAmount },
             )}
           </div>
-          {/* 余额只在"冻的是我的钱"时显示 —— 冻别人的钱时我的余额与本操作无关 */}
+          {/* 余额只在"冻的是我的钱"时显示 —— 冻别人的钱时我的余额与本操作无关。
+              有资金池就**只报资金池**：赠送额度再多也付不了押金，报个总数只会误导。 */}
           {iPayer ? (
             <div style={S.hint}>
-              {typeof balance === 'number'
-                ? t('community.mentor.acceptBalance', { balance })
-                : t('community.briefConfirm.balanceUnknown')}
+              {typeof funded === 'number'
+                ? typeof grant === 'number'
+                  ? t('community.mentor.acceptPools', { funded, grant })
+                  : t('community.mentor.acceptFundedOnly', { funded })
+                : typeof balance === 'number'
+                  ? t('community.mentor.acceptBalance', { balance })
+                  : t('community.briefConfirm.balanceUnknown')}
+            </div>
+          ) : null}
+          {/*
+            资金池不够 → **点之前**就拦住，并把可行动作说出来：自助付费尚未开通，
+            唯一的办法是找管理员发放 Token（服务器 402 的原话也是这句）。
+          */}
+          {short ? (
+            <div style={{ ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' }}>
+              {t('community.mentor.acceptNoFunded', {
+                funded: funded ?? 0,
+                grant: grant ?? 0,
+                deposit: proposal.depositAmount,
+              })}
             </div>
           ) : null}
           <div style={S.footer}>
@@ -3058,7 +3131,12 @@ function AcceptConfirmDialog({
             <button type="button" style={S.ghostBtn} onClick={onCancel}>
               {t('community.action.cancel')}
             </button>
-            <button type="button" style={S.primaryBtn} onClick={onConfirm}>
+            <button
+              type="button"
+              style={{ ...S.primaryBtn, opacity: short ? 0.55 : 1 }}
+              disabled={short}
+              onClick={onConfirm}
+            >
               {t('community.mentor.acceptConfirm')}
             </button>
           </div>
@@ -3069,27 +3147,34 @@ function AcceptConfirmDialog({
 }
 
 /**
- * **Token 余额环形图**（SVG，无外部库）。
+ * **Token 余额环形图**（SVG，无外部库）——只画**弧**，不画字。
  *
- * 大弧 = 可用（品牌蓝），小弧 = 冻结（灰色）。比例一眼能看懂——
- * 比三行数字传达信息更快。没有冻结时整圈都是蓝。
+ * 三段弧：**资金池**（品牌蓝，能付给导师、能提现）、**赠送**（浅品牌色，只能买平台自营
+ * 服务）、**冻结**（灰色，押金，仍是自己的钱）。比例一眼能看懂，比几行数字快。
+ *
+ * ⚠️ **字一律不放进 SVG**（2026-10 用户反馈的可读性）：viewBox 固定 160、显示尺寸只有
+ * 90–100px，SVG 里的 9–22px 字被等比缩到 5–13px，等于不可读。精确数字交给旁边的
+ * **HTML 图例**（缩放不改变字号），这里只承担"比例"这一件事。
  *
  * ⚠️ 用 `stroke-dasharray` 控制弧长，这是 SVG 环形图的标准做法（不用 path，简单且
- * 能在纯 React 里写死）。`transform` 旋转使两段衔接无缝。
+ * 能在纯 React 里写死）。`transform` 旋转使各段衔接无缝。
  *
  * ⚠️ SVG 内部固定 viewBox=160x160（计算简单可靠），用 CSS width/height 控制显示尺寸。
  * 不要动态改变 viewBox——这会导致渲染异常（弧形断开）。
  */
 function TokenDonut({
-  t,
-  available,
+  funded,
+  grant,
   frozen,
   total,
   size = 100,
 }: {
-  t: Translate
-  available: number
+  /** 资金池；旧宿主 → `null`（那一版没有两池，整圈按"可用"画）。 */
+  funded: number | null
+  /** 赠送额度；旧宿主 → `null`。 */
+  grant: number | null
   frozen: number
+  /** 可用 + 冻结（分母）。 */
   total: number
   size?: number
 }): JSX.Element {
@@ -3097,100 +3182,82 @@ function TokenDonut({
   const cx = 80
   const cy = 80
   const circumference = 2 * Math.PI * r
-  const availableFrac = total > 0 ? available / total : 1
-  const frozenFrac = total > 0 ? frozen / total : 0
-  const availableDash = circumference * availableFrac
-  const frozenDash = circumference * frozenFrac
-  // ⚠️ 绘制顺序很关键：先画**可用**（大弧，品牌蓝），再画**冻结**（小弧，灰色），
-  // 否则大弧会盖住小弧的末端（两者在 SVG 里共享同一个起点）。
-  const hasFrozen = frozen > 0
+  const denom = total > 0 ? total : 1
+  /**
+   * 弧段表（顺序 = 绘制顺序 = 起点相接的顺序）。
+   *
+   * 旧宿主（两池未知）→ 只有一段"可用"（品牌蓝）：与 v0.6.2 的观感一致，
+   * 不凭空画出一段"赠送"来冒充新语义。
+   */
+  const segments: Array<{ value: number; stroke: string }> =
+    funded === null || grant === null
+      ? [{ value: Math.max(0, total - frozen), stroke: 'var(--dsw-alias-state-business-primary)' }]
+      : [
+          { value: funded, stroke: 'var(--dsw-alias-state-business-primary)' },
+          { value: grant, stroke: 'var(--dsw-alias-state-business-tertiary)' },
+        ]
+  if (frozen > 0) segments.push({ value: frozen, stroke: 'var(--dsw-alias-label-secondary)' })
 
-  return (
-    <svg width={size} height={size} viewBox="0 0 160 160" aria-hidden="true">
-      {/* 背景轨道（完整圆圈，淡色） */}
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--dsw-alias-bg-layer-2)" strokeWidth={14} />
-      {/* 可用弧段（**品牌蓝** = 主色调，表示"这是你的钱"） */}
-      <circle
-        cx={cx}
-        cy={cy}
-        r={r}
-        fill="none"
-        stroke="var(--dsw-alias-state-business-primary)"
-        strokeWidth={14}
-        strokeLinecap="round"
-        strokeDasharray={`${availableDash} ${circumference}`}
-        strokeDashoffset={0}
-        transform={`rotate(90 ${cx} ${cy})`}
-      />
-      {/* 冻结弧段（灰色 = 次要信息；画在可用之上，保证小弧可见） */}
-      {hasFrozen ? (
+  let offset = 0
+  const arcs = segments
+    .filter((s) => s.value > 0)
+    .map((s, i) => {
+      const dash = circumference * (s.value / denom)
+      const arc = (
         <circle
+          key={i}
           cx={cx}
           cy={cy}
           r={r}
           fill="none"
-          stroke="var(--dsw-alias-label-secondary)"
+          stroke={s.stroke}
           strokeWidth={14}
-          strokeLinecap="round"
-          strokeDasharray={`${frozenDash} ${circumference}`}
-          strokeDashoffset={-availableDash}
+          strokeLinecap="butt"
+          strokeDasharray={`${dash} ${circumference}`}
+          strokeDashoffset={-offset}
           transform={`rotate(90 ${cx} ${cy})`}
         />
-      ) : null}
-      {/* 中间：总额 + 图例 */}
-      <text
-        x={cx}
-        y={cy - 18}
-        textAnchor="middle"
-        dominantBaseline="central"
-        fill="var(--dsw-alias-label-primary)"
-        fontSize="22"
-        fontWeight="700"
-        fontFamily="inherit"
-      >
-        {total}
-      </text>
-      <text
-        x={cx}
-        y={cy - 2}
-        textAnchor="middle"
-        fill="var(--dsw-alias-label-secondary)"
-        fontSize="10"
-        fontFamily="inherit"
-      >
-        Token
-      </text>
-      {/* 图例：可用（品牌蓝） */}
-      <circle cx={cx - 30} cy={cy + 14} r={4} fill="var(--dsw-alias-state-business-primary)" />
-      <text
-        x={cx - 22}
-        y={cy + 14}
-        textAnchor="start"
-        dominantBaseline="central"
-        fill="var(--dsw-alias-label-secondary)"
-        fontSize="9"
-        fontFamily="inherit"
-      >
-        {t('community.token.available')}
-      </text>
-      {/* 图例：冻结（灰色，仅当有冻结金额时显示） */}
-      {hasFrozen ? (
-        <>
-          <circle cx={cx + 10} cy={cy + 14} r={4} fill="var(--dsw-alias-label-secondary)" />
-          <text
-            x={cx + 18}
-            y={cy + 14}
-            textAnchor="start"
-            dominantBaseline="central"
-            fill="var(--dsw-alias-label-secondary)"
-            fontSize="9"
-            fontFamily="inherit"
-          >
-            {t('community.token.frozen')}
-          </text>
-        </>
-      ) : null}
+      )
+      offset += dash
+      return arc
+    })
+
+  return (
+    <svg width={size} height={size} viewBox="0 0 160 160" aria-hidden="true">
+      {/* 背景轨道（完整圆圈，淡色）：总余额为 0 时也能看出"这是个环" */}
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--dsw-alias-bg-layer-2)" strokeWidth={14} />
+      {arcs}
     </svg>
+  )
+}
+
+/** 环形图旁边的一行图例：色点 + 名称 + 精确数字（HTML 文本，不随图形缩放）。 */
+function TokenLegendRow({
+  color,
+  label,
+  value,
+  hint,
+}: {
+  color: string
+  label: string
+  value: string
+  hint?: string
+}): JSX.Element {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+      <span
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: 4,
+          background: color,
+          flex: '0 0 auto',
+        }}
+      />
+      <span style={{ ...S.hint, flex: '0 0 auto' }}>{label}</span>
+      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }}>{value}</span>
+      {hint ? <span style={S.hint}>{hint}</span> : null}
+    </div>
   )
 }
 
@@ -3283,9 +3350,13 @@ function DashTile({
 /**
  * **Token 余额弹窗**（点账号行的余额徽章打开，2026-09 用户要求）。
  *
- * 三件事：① 余额明细（可用 / 冻结 / 合计）；② **续费说明**（目前由管理员发放，
- * 暂未开通自助付费）；③ **申请续费** —— 往服务器写一条申请记录，管理员事后在服务器上
- * 处理（本插件不接真实付费）。
+ * 三件事：① 余额明细（**两池**：资金池 / 赠送，+ 可用 / 冻结 / 合计）；
+ * ② **续费说明**（目前由管理员发放，暂未开通自助付费）；③ **申请续费** ——
+ * 往服务器写一条申请记录，管理员事后在服务器上处理（本插件不接真实付费）。
+ *
+ * ⚠️ **两池为什么必须分开显示**（v0.6.3）：只有**资金池**能付给导师、能提现，
+ * 赠送额度只能买平台自营服务。混成一个"可用余额"会让用户在点【接受指导】时
+ * 撞上 402 而完全不明白为什么 —— 数字明明够。
  *
  * ⚠️ **防重复申请**：服务器 `POST /tokens/recharge-requests` **不幂等**（每次调用新增一条
  * `PENDING`），所以这里在打开时读一次自己的申请记录，有 `PENDING` 就**不再给表单**
@@ -3293,8 +3364,11 @@ function DashTile({
  *
  * 数量是**必填**的：服务器 `RechargeRequestCreate.amount` 是 `gt=0` 的必填字段，
  * 申请得说清要多少（这正是管理员批准时的依据）。
+ *
+ * ⚠️ **导出是给离线自检用的**（同 `AcceptConfirmDialog`）：它没有 hook，所以能被直接调用、
+ * 遍历产出的树，"两池是否真的分列"才验得动。
  */
-function TokenDialog({
+export function TokenDialog({
   t,
   tokens,
   requests,
@@ -3311,7 +3385,13 @@ function TokenDialog({
   onClose,
 }: {
   t: Translate
-  tokens: { available: number; frozen: number; total: number } | null
+  tokens: {
+    available: number
+    frozen: number
+    total: number
+    grant: number | null
+    funded: number | null
+  } | null
   requests: HostRechargeRequest[] | null
   loading: boolean
   amount: string
@@ -3330,6 +3410,8 @@ function TokenDialog({
   const parsed = Number(amount)
   const amountValid = Number.isInteger(parsed) && parsed > 0
   const canApply = !pending && amountValid && !submitting && !loading
+  /** 两池已知吗（旧宿主只有"可用"，分不出哪一份能付给导师）。 */
+  const pools = tokens !== null && tokens.funded !== null && tokens.grant !== null
 
   return (
     <div style={S.overlay} role="dialog" aria-modal="true">
@@ -3340,18 +3422,56 @@ function TokenDialog({
           <RefreshIconButton t={t} busy={loading} onClick={onRefresh} />
         </div>
         <div style={{ ...S.cardBody, gap: 9 }}>
-          {/* ① 左侧：环形图 + 图例（下方）；右侧：续费说明 + 申请表单 */}
+          {/* ① 左侧：环形图 + **HTML** 图例（数字不放进 SVG，缩放后仍可读）；
+              右侧：续费说明 + 申请表单 */}
           {tokens ? (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-              {/* 左侧：环形图 + 下方图例 */}
-              <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {/* 左侧：环形图 + 图例 */}
+              <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 10 }}>
                 <TokenDonut
-                  t={t}
-                  available={tokens.available}
+                  funded={tokens.funded}
+                  grant={tokens.grant}
                   frozen={tokens.frozen}
                   total={tokens.total}
-                  size={100}
+                  size={92}
                 />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {/* 两池已知就按池列（资金池 = 能付导师的那一份），否则退回旧的"可用 / 冻结" */}
+                  {pools ? (
+                    <>
+                      <TokenLegendRow
+                        color="var(--dsw-alias-state-business-primary)"
+                        label={t('community.token.funded')}
+                        value={String(tokens.funded)}
+                        hint={t('community.token.fundedHint')}
+                      />
+                      <TokenLegendRow
+                        color="var(--dsw-alias-state-business-tertiary)"
+                        label={t('community.token.grant')}
+                        value={String(tokens.grant)}
+                        hint={t('community.token.grantHint')}
+                      />
+                    </>
+                  ) : (
+                    <TokenLegendRow
+                      color="var(--dsw-alias-state-business-primary)"
+                      label={t('community.token.available')}
+                      value={String(tokens.available)}
+                    />
+                  )}
+                  {tokens.frozen > 0 ? (
+                    <TokenLegendRow
+                      color="var(--dsw-alias-label-secondary)"
+                      label={t('community.token.frozen')}
+                      value={String(tokens.frozen)}
+                    />
+                  ) : null}
+                  <TokenLegendRow
+                    color="var(--dsw-alias-border-l2)"
+                    label={t('community.token.total')}
+                    value={String(tokens.total)}
+                  />
+                </div>
               </div>
               {/* 右侧：续费说明 + 申请表单 */}
               <div style={{ flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -3445,20 +3565,31 @@ function TokenDialog({
  * 费用三项里**成功付款是推导出来的**（`总额 − 押金`），不是独立输入框：
  * 服务器强校验 `押金 + 成功付款 == 总额`，与其让用户填出一个必然被拒的组合，
  * 不如让非法状态在界面上**无法表达**。
+ *
+ * ⚠️ **论文等级（v0.6.3）**：`PAPER_ACCEPTED` / `PAPER_PUBLISHED` 这两类条件的
+ * **价格就是等级**，所以它们必须选等级 —— 未选等级时提交按钮禁用（服务器的规则是
+ * 缺等级直接 400，界面不能把它做成一次莫名失败）。等级一变就重新问服务器要价钱
+ * （`fee-suggestion?jcr_level=`）：价目表只有服务器有，客户端一个数字都不抄。
+ * 两种情况的分工见 `onTermsChange`：非论文类条件要**兜底价**，论文类条件在选等级前
+ * **没有价钱**（不显示兜底价冒充等级价）。
  */
 function ProposeDialog({
   t,
   title,
   fee,
+  feeLoading,
   busy,
   error,
   onCancel,
   onSubmit,
+  onTermsChange,
   variant = 'mentor',
 }: {
   t: Translate
   title: string
   fee: HostFeeSuggestion | null
+  /** 正在问服务器该等级的价格（期间总费用先不动，也不显示"没价钱"）。 */
+  feeLoading: boolean
   busy: boolean
   error: string | null
   onCancel: () => void
@@ -3466,11 +3597,26 @@ function ProposeDialog({
     totalFee: number
     depositAmount: number
     successPaymentAmount: number
+    successCondition: { type: string; jcrLevel?: number; ccfLevel?: string }
   }) => void
+  /** 条件 / 等级变了：让**上层**去问服务器（上层才拿得到网络与登录态）。 */
+  onTermsChange: (terms: { condition: string; level: PaperLevel | null }) => void
   /** `mentor` = 导师出价（学生发布的研究）；`researcher` = 学生出价（导师发布的选题）。 */
   variant?: 'mentor' | 'researcher'
 }): JSX.Element {
   const [total, setTotal] = React.useState(String(fee?.suggestedFee ?? 100))
+  /**
+   * 成功条件：默认「双方确认完成」（平台默认，也是本字段的过渡值）。
+   *
+   * 只有论文类两种条件价格跟等级走，所以**先有条件、才有等级** —— 顺序反过来会出现
+   * "选了个等级但条件是双方确认完成"这种说不通的中间态。
+   */
+  const [condition, setCondition] = React.useState<string>(PROPOSE_DEFAULT_CONDITION)
+  /** 等级下拉的取值（`'JCR:2'` / `'CCF:A'`；空串 = 还没选）。 */
+  const [levelKey, setLevelKey] = React.useState<string>('')
+  const level = decodeLevel(levelKey)
+  const paper = isPaperCondition(condition)
+  const levelText = paperLevelText(level)
 
   /**
    * 押金比例取**平台自己的建议**（`suggested_deposit / suggested_fee`），不写死 20%。
@@ -3488,7 +3634,8 @@ function ProposeDialog({
   }, [fee])
 
   const totalNum = Number.parseInt(total, 10)
-  const valid = Number.isInteger(totalNum) && totalNum > 0
+  // 论文类条件**必须**先选等级：等级没定，这份提案的价钱就无从谈起
+  const valid = Number.isInteger(totalNum) && totalNum > 0 && (!paper || level !== null)
   // 押金由比例**推导**（用户只填总额）：界面显示的三个数就是发出去的那三个数
   const deposit = valid ? Math.max(1, Math.round(totalNum * ratio)) : 0
   const success = valid ? totalNum - deposit : 0
@@ -3506,10 +3653,67 @@ function ProposeDialog({
         <div style={S.cardHead}>
           {t(variant === 'researcher' ? 'community.mentor.bidTitle' : 'community.mentor.proposeTitle')}
           <span style={{ flex: '1 1 auto' }} />
+          {/* 选了等级就把等级摆在标题行：这一份提案按什么定价，一眼可见 */}
+          {levelText ? <Badge tone="neutral">{t(levelText.key, levelText.params)}</Badge> : null}
           <Badge tone="neutral">{t('community.mentor.proposeFree')}</Badge>
         </div>
         <div style={{ ...S.cardBody, gap: 9 }}>
           <div style={S.listTitle}>{title}</div>
+
+          <div style={S.inlineRow}>
+            <span style={S.label}>{t('community.mentor.conditionLabel')}</span>
+            <select
+              style={input}
+              value={condition}
+              onChange={(e) => {
+                setCondition(e.target.value)
+                setLevelKey('')
+                onTermsChange({ condition: e.target.value, level: null })
+              }}
+            >
+              {Object.keys(SUCCESS_CONDITION_KEYS).map((type) => (
+                <option key={type} value={type}>
+                  {enumText(t, SUCCESS_CONDITION_KEYS, type)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 等级只在**论文类**条件上出现：其余条件没有等级，价格是双方约定的总额 */}
+          {paper ? (
+            <div style={S.inlineRow}>
+              <span style={S.label}>{t('community.mentor.levelLabel')}</span>
+              <select
+                style={input}
+                value={levelKey}
+                onChange={(e) => {
+                  setLevelKey(e.target.value)
+                  onTermsChange({ condition, level: decodeLevel(e.target.value) })
+                }}
+              >
+                <option value="">{t('community.mentor.levelNone')}</option>
+                {/*
+                 * 两个体系（JCR 分区 / CCF 类别）分组列在**一个**下拉里：一个字符串就是
+                 * 一份完整状态，不会留下"选了 CCF 却还残留 JCR 等级"的半选状态。
+                 * 两者的等价关系（1区=CCF-A、3区=CCF-B、4区=CCF-C）不在这里解释 ——
+                 * 价格由服务器按等级算，用户按自己论文的实际情况选即可。
+                 */}
+                {(['JCR', 'CCF'] as PaperLevelSystem[]).map((system) => (
+                  <optgroup key={system} label={t(`community.mentor.levelSystem.${system}`)}>
+                    {levelOptions(system).map((lv) => {
+                      const key = `${system}:${String(lv)}`
+                      const text = paperLevelText({ system, level: lv })
+                      return (
+                        <option key={key} value={key}>
+                          {text ? t(text.key, text.params) : key}
+                        </option>
+                      )
+                    })}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+          ) : null}
 
           <div style={S.inlineRow}>
             <span style={S.label}>{t('community.mentor.feeTotal')}</span>
@@ -3527,12 +3731,14 @@ function ProposeDialog({
           {/* 押金比例由平台定，只填总额：把分账说清楚，不让人去猜。
               两个方向的措辞不同 —— 学生侧必须写清"冻结的是**你**的押金"。 */}
           <div style={S.hint}>
-            {valid
-              ? t(
-                  variant === 'researcher' ? 'community.mentor.bidNote' : 'community.mentor.feeNote',
-                  { percent: Math.round(ratio * 100), deposit, success },
-                )
-              : t('community.mentor.feeInvalid')}
+            {paper && !level
+              ? t('community.mentor.levelRequired')
+              : valid
+                ? t(
+                    variant === 'researcher' ? 'community.mentor.bidNote' : 'community.mentor.feeNote',
+                    { percent: Math.round(ratio * 100), deposit, success },
+                  )
+                : t('community.mentor.feeInvalid')}
           </div>
 
           {error ? (
@@ -3546,17 +3752,21 @@ function ProposeDialog({
             </button>
             <button
               type="button"
-              style={{ ...S.primaryBtn, opacity: valid && !busy ? 1 : 0.55 }}
-              disabled={!valid || busy}
+              style={{ ...S.primaryBtn, opacity: valid && !busy && !feeLoading ? 1 : 0.55 }}
+              disabled={!valid || busy || feeLoading}
               onClick={() =>
                 onSubmit({
                   totalFee: totalNum,
                   depositAmount: deposit,
                   successPaymentAmount: success,
+                  successCondition: {
+                    type: condition,
+                    ...levelQuery(level),
+                  },
                 })
               }
             >
-              {busy
+              {busy || feeLoading
                 ? t('community.action.loading')
                 : t(variant === 'researcher' ? 'community.action.bid' : 'community.action.propose')}
             </button>
@@ -4827,8 +5037,12 @@ export function CommunityTab({
   } | null>(null)
   /** 正在对它发起指导的那项研究工作（非空 = 提案对话框开着）。 */
   const [proposeTarget, setProposeTarget] = React.useState<HostWork | null>(null)
-  /** 提案对话框里的费用预填（默认 100 / 20 / 80）。 */
+  /** 提案对话框里的费用预填（默认条件的兜底价 100 / 20 / 80；论文类条件是**该等级的价格**）。 */
   const [proposeFee, setProposeFee] = React.useState<HostFeeSuggestion | null>(null)
+  /** 正在问服务器该等级的价格（期间禁用提交：价钱没定就不该发出去）。 */
+  const [proposeFeeLoading, setProposeFeeLoading] = React.useState(false)
+  /** 取价请求的序号：只认最后一次（等级连点时的回包顺序不保证，见 requestProposeFee）。 */
+  const feeSeq = React.useRef(0)
   const [proposeBusy, setProposeBusy] = React.useState(false)
   const [proposeError, setProposeError] = React.useState<string | null>(null)
 
@@ -5049,11 +5263,15 @@ export function CommunityTab({
    * ⚠️ 押金**永远从学生（`researcher`）账上冻**：方向 A 接受的人就是学生
    * （= 冻我自己的，402 说"我的余额不足"）；方向 B 接受的人是导师
    * （= 冻学生的，402 也要如实说成"**学生**余额不足"，不能写成"你余额不足"）。
+   *
+   * ⚠️ 判据是 `view.iAmPayer`（= **我是不是学生**），**不是** `!iAmOwner` ——
+   * 两个方向的接受人都是 owner，`!iAmOwner` 恒为 false，会把方向 A 的学生说成
+   * "冻学生的钱"（理由与四格表见 `mentorship-view.ts` 文件头）。
    */
   const confirmAccept = async (): Promise<void> => {
     const target = acceptConfirm
     if (!target) return
-    const iPayer = !viewOf(target).iAmOwner
+    const iPayer = viewOf(target).iAmPayer
     // 幂等键：同一次"接受意图"复用（402 后充值再试不重复冻结押金）
     const intentKey = acceptIntents[target.id] ?? crypto.randomUUID()
     setAcceptIntents((prev) => ({ ...prev, [target.id]: intentKey }))
@@ -5106,6 +5324,39 @@ export function CommunityTab({
   }
 
   /**
+   * 按**条件 + 等级**取费用建议（`mentor/fee-suggestion`）。
+   *
+   * 两条规矩：
+   * 1. **论文类条件在选等级之前没有价钱** —— 不拿兜底价（100/20/80）冒充等级价，
+   *    否则用户会以为"论文被接收"就值 100，而服务器的规则是缺等级直接 400。
+   *    此时把 `proposeFee` 清成 null，对话框显示"请选择等级"。
+   * 2. 其余条件（`MUTUAL_COMPLETION` 等）取**兜底价**（不带等级参数）。
+   *
+   * 金额一律由服务器算（价目表只有它一份，见 `fetchFeeSuggestion`）；这里只转发等级。
+   */
+  const requestProposeFee = async (terms: {
+    condition: string
+    level: PaperLevel | null
+  }): Promise<void> => {
+    setProposeFee(null)
+    if (isPaperCondition(terms.condition) && !terms.level) {
+      setProposeFeeLoading(false)
+      return
+    }
+    /*
+     * 连点等级时会并发出几个请求，回包顺序**不保证**与发出顺序一致 —— 用序号只认
+     * 最后一次：否则界面可能拿"上一等级的价钱"填这一次的总费用（用户改过总费用时
+     * 看不出问题，但默认路径下就是一份按错价发出去的提案）。
+     */
+    const seq = ++feeSeq.current
+    setProposeFeeLoading(true)
+    const res = await post('mentor/fee-suggestion', levelQuery(terms.level))
+    if (seq !== feeSeq.current) return
+    setProposeFeeLoading(false)
+    if (res.ok) setProposeFee((res.value as { suggestion: HostFeeSuggestion }).suggestion ?? null)
+  }
+
+  /**
    * 点【发起指导】/【出价】= 打开提案对话框（免费操作，对话框即确认）。
    *
    * 两个方向**共用这一个动作**（同一个端点、同一套费用结构）：区别只在对话框文案，
@@ -5118,8 +5369,8 @@ export function CommunityTab({
     setProposeError(null)
     setProposeFee(null)
     setProposeTarget(w)
-    const res = await post('mentor/fee-suggestion', {})
-    if (res.ok) setProposeFee((res.value as { suggestion: HostFeeSuggestion }).suggestion ?? null)
+    // 开框时是默认条件（双方确认完成）→ 取**兜底价**
+    await requestProposeFee({ condition: PROPOSE_DEFAULT_CONDITION, level: null })
   }
 
   /**
@@ -5127,22 +5378,29 @@ export function CommunityTab({
    *
    * ⚠️ **不传方向**：方向由**项目自己**决定，服务端按它决定谁写在哪一边
    * （见 `server-client.ts` 的 `fetchPropose`）。客户端再传一份只可能矛盾。
+   *
+   * ⚠️ 成功条件由**对话框**给出（v0.6.3 起界面可选条件与论文等级）：论文类条件的等级
+   * 是价格依据，**必须**随提案一起发出去 —— 服务器缺等级会直接 400，而已经成立的提案
+   * 事后也**无法**再补出"当初按什么等级定的价"。
    */
   const submitPropose = async (input: {
     totalFee: number
     depositAmount: number
     successPaymentAmount: number
+    successCondition: { type: string; jcrLevel?: number; ccfLevel?: string }
   }): Promise<void> => {
     const target = proposeTarget
     if (!target) return
     setProposeBusy(true)
     setProposeError(null)
-    // 只定总费用；指导范围与成功条件见 PROPOSE_SCOPE_PLACEHOLDER 的说明（过渡值）
+    // 指导范围送占位符（服务器仍必填，见 PROPOSE_SCOPE_PLACEHOLDER 的说明）
     const res = await post('mentor/propose', {
       projectId: target.projectId,
       guidanceScope: PROPOSE_SCOPE_PLACEHOLDER,
-      successCondition: { type: PROPOSE_DEFAULT_CONDITION, description: null },
-      ...input,
+      successCondition: { description: null, ...input.successCondition },
+      totalFee: input.totalFee,
+      depositAmount: input.depositAmount,
+      successPaymentAmount: input.successPaymentAmount,
     })
     setProposeBusy(false)
     if (!res.ok) {
@@ -6243,13 +6501,22 @@ export function CommunityTab({
   /** 我在【可加入】里作为**学生**出价的提案（按项目）。 */
   const myResearcherProposalByProject = proposalsByProject('researcher')
 
-  /** 费用数字（只给数，不做解释性描述）。 */
-  const feeText = (p: HostProposal): string =>
-    t('community.mentor.feeText', {
+  /**
+   * 费用数字（只给数，不做解释性描述）。
+   *
+   * 论文类条件把**等级**带上（`· JCR 2区`）：同样的 800 Token，按几区定价是两回事，
+   * 只报数字会让接受方看不清自己答应的是什么。非论文类条件没有等级，不加后缀。
+   */
+  const feeText = (p: HostProposal): string => {
+    const base = t('community.mentor.feeText', {
       total: p.totalFee,
       deposit: p.depositAmount,
       success: p.successPaymentAmount,
     })
+    const level = paperLevelOf(p.successCondition)
+    const text = paperLevelText(level)
+    return text ? `${base} · ${t(text.key, text.params)}` : base
+  }
 
   /* ── 仪表板要画的比例（纯计算，先算好再画）──────────────────────────
    *
@@ -6399,12 +6666,17 @@ export function CommunityTab({
                       }}
                       disabled={busy}
                       title={
-                        state.tokens.frozen > 0
-                          ? t('community.tip.balanceDetail', {
-                              available: state.tokens.available,
-                              frozen: state.tokens.frozen,
+                        state.tokens.funded !== null && state.tokens.grant !== null
+                          ? t('community.tip.balancePools', {
+                              funded: state.tokens.funded,
+                              grant: state.tokens.grant,
                             })
-                          : t('community.tip.balance')
+                          : state.tokens.frozen > 0
+                            ? t('community.tip.balanceDetail', {
+                                available: state.tokens.available,
+                                frozen: state.tokens.frozen,
+                              })
+                            : t('community.tip.balance')
                       }
                       onClick={openTokenDialog}
                     >
@@ -6446,9 +6718,20 @@ export function CommunityTab({
                     unit={tokens ? 'Token' : null}
                     sub={
                       tokens
-                        ? tokens.frozen > 0
-                          ? t('community.dash.tokenFrozen', { frozen: tokens.frozen })
-                          : t('community.dash.tokenTotal', { total: tokens.total })
+                        ? tokens.funded !== null && tokens.grant !== null
+                          ? tokens.frozen > 0
+                            ? t('community.dash.tokenPoolsFrozen', {
+                                funded: tokens.funded,
+                                grant: tokens.grant,
+                                frozen: tokens.frozen,
+                              })
+                            : t('community.dash.tokenPools', {
+                                funded: tokens.funded,
+                                grant: tokens.grant,
+                              })
+                          : tokens.frozen > 0
+                            ? t('community.dash.tokenFrozen', { frozen: tokens.frozen })
+                            : t('community.dash.tokenTotal', { total: tokens.total })
                         : t('community.dash.unknown')
                     }
                   />
@@ -6775,6 +7058,7 @@ export function CommunityTab({
           t={t}
           title={proposeTarget.title}
           fee={proposeFee}
+          feeLoading={proposeFeeLoading}
           busy={proposeBusy}
           error={proposeError}
           variant={proposeTarget.direction === 'SEEK_STUDENT' ? 'researcher' : 'mentor'}
@@ -6782,6 +7066,7 @@ export function CommunityTab({
             setProposeTarget(null)
             setProposeError(null)
           }}
+          onTermsChange={(terms) => void requestProposeFee(terms)}
           onSubmit={(input) => void submitPropose(input)}
         />
       ) : null}
@@ -6953,8 +7238,10 @@ export function CommunityTab({
           proposal={acceptConfirm}
           party={viewOf(acceptConfirm).counterparty ?? { id: '', displayName: '' }}
           partyIsMentor={viewOf(acceptConfirm).counterpartyIsMentor}
-          iPayer={!viewOf(acceptConfirm).iAmOwner}
+          iPayer={viewOf(acceptConfirm).iAmPayer}
           balance={state?.tokens?.available ?? null}
+          funded={state?.tokens?.funded ?? null}
+          grant={state?.tokens?.grant ?? null}
           onCancel={() => setAcceptConfirm(null)}
           onConfirm={() => void confirmAccept()}
         />

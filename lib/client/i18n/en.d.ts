@@ -63,6 +63,7 @@ export declare const en: {
     readonly 'settings.editor.confirmSkill': "Restore all sections of “{skill}”? This capability’s customizations will be deleted.";
     readonly 'community.title': "ConvFusion.com";
     readonly 'community.entry.label': "ConvFusion.com";
+    readonly 'community.button.title': "Open ConvFusion.com (account · research network)";
     readonly 'community.notice.published': "{title} · state v{version}";
     readonly 'community.notice.tokens': "{tokens} Token";
     readonly 'community.notice.files': "{count} attachment(s)";
@@ -140,6 +141,8 @@ export declare const en: {
     readonly 'community.dash.token': "Token balance";
     readonly 'community.dash.tokenFrozen': "{frozen} frozen";
     readonly 'community.dash.tokenTotal': "{total} in total";
+    readonly 'community.dash.tokenPools': "Funded {funded} · grant {grant}";
+    readonly 'community.dash.tokenPoolsFrozen': "Funded {funded} · grant {grant} · {frozen} frozen";
     readonly 'community.dash.storage': "Storage";
     readonly 'community.dash.storageSub': "Used {used} / {total}";
     readonly 'community.dash.projects': "Published projects";
@@ -205,6 +208,14 @@ export declare const en: {
     readonly 'community.mentor.feeTotal': "Total fee";
     readonly 'community.mentor.feeNote': "A {percent}% deposit ({deposit} Token) is frozen on acceptance, the other side confirms the success condition, and the remaining {success} Token is paid once the outcome is verified.";
     readonly 'community.mentor.feeInvalid': "Enter a positive integer for the total fee.";
+    readonly 'community.mentor.conditionLabel': "Success condition";
+    readonly 'community.mentor.levelLabel': "Paper level";
+    readonly 'community.mentor.levelNone': "Select level";
+    readonly 'community.mentor.levelSystem.JCR': "JCR quartile";
+    readonly 'community.mentor.levelSystem.CCF': "CCF class";
+    readonly 'community.mentor.level.JCR': "JCR Q{level}";
+    readonly 'community.mentor.level.CCF': "CCF-{level}";
+    readonly 'community.mentor.levelRequired': "A publication condition must name a level: the level is the price.";
     readonly 'community.tip.propose': "Offer to mentor this work (free; the deposit is only frozen if they accept)";
     readonly 'community.tip.proposed': "Already offered: this request is awaiting their response";
     readonly 'community.mentor.profileTitle': "Mentor profile";
@@ -246,8 +257,8 @@ export declare const en: {
     readonly 'community.mentor.badgeFailed': "Failed";
     readonly 'community.mentor.acceptDone': "Mentorship accepted; {deposit} Token deposit frozen.";
     readonly 'community.mentor.acceptDoneOther': "Accepted; the student’s {deposit} Token deposit is frozen.";
-    readonly 'community.mentor.acceptNoTokens': "Need {deposit} more available Tokens; get Tokens and retry.";
-    readonly 'community.mentor.acceptNoTokensOther': "The student has fewer than {deposit} available Tokens — cannot accept; ask them to top up.";
+    readonly 'community.mentor.acceptNoTokens': "Fewer than {deposit} Tokens in the funded pool (grant Tokens cannot pay a mentor). Please contact an administrator to issue Tokens during the trial phase.";
+    readonly 'community.mentor.acceptNoTokensOther': "The student has fewer than {deposit} Tokens in the funded pool — cannot accept; ask them to contact an administrator.";
     readonly 'community.mentor.rejectDone': "Request declined.";
     readonly 'community.mentor.acceptConfirmTitle': "Accepting freezes a deposit";
     readonly 'community.mentor.acceptConfirmTitleOther': "Accepting freezes the student’s deposit";
@@ -255,8 +266,11 @@ export declare const en: {
     readonly 'community.mentor.acceptConfirmBadgeOther': "Freeze {deposit} Token from the student";
     readonly 'community.mentor.acceptConfirm': "Confirm accept";
     readonly 'community.mentor.acceptFreezeNote': "Accepting freezes a {deposit} Token deposit (still yours, just unavailable).";
-    readonly 'community.mentor.acceptFreezeNoteOther': "Accepting freezes a {deposit} Token deposit from the **student**’s account; it fails if the student lacks the balance.";
+    readonly 'community.mentor.acceptFreezeNoteOther': "Accepting freezes a {deposit} Token deposit from the **student**’s account; it fails if the student’s funded pool is short.";
     readonly 'community.mentor.acceptBalance': "Available balance: {balance} Token";
+    readonly 'community.mentor.acceptPools': "Funded {funded} Token · grant {grant} Token (grant cannot pay a mentor)";
+    readonly 'community.mentor.acceptFundedOnly': "Funded {funded} Token";
+    readonly 'community.mentor.acceptNoFunded': "The funded pool holds only {funded} Token, short of the {deposit} Token deposit (the {grant} grant Token cannot pay a mentor). Please contact an administrator to issue Tokens during the trial phase.";
     readonly 'community.exchange.downloadTitle': "Download into a workspace";
     readonly 'community.exchange.sizeBadge': "{files} files · {size}";
     readonly 'community.exchange.zipOnly': "Only the ZIP is saved into the chosen workspace; no extraction — the rest is up to you.";
@@ -336,6 +350,10 @@ export declare const en: {
     readonly 'community.token.available': "Available";
     readonly 'community.token.frozen': "Frozen";
     readonly 'community.token.total': "Total";
+    readonly 'community.token.funded': "Funded";
+    readonly 'community.token.grant': "Grant";
+    readonly 'community.token.fundedHint': "pays mentors";
+    readonly 'community.token.grantHint': "platform only";
     readonly 'community.token.renewHint': "Tokens are currently granted by an administrator. Once you apply, an administrator will handle it on the server; self-service payment is not available yet.";
     readonly 'community.token.pendingLine': "Applied for {amount} Token; waiting for the administrator.";
     readonly 'community.token.amountLabel': "Amount";
@@ -348,6 +366,7 @@ export declare const en: {
     readonly 'community.token.amountInvalid': "The amount must be a positive integer.";
     readonly 'community.token.receipt': "Recharge request submitted ({amount} Token); waiting for the administrator.";
     readonly 'community.tip.balanceDetail': "Available {available} · frozen {frozen} (frozen funds are still yours, merely locked); click to view the balance and renewal";
+    readonly 'community.tip.balancePools': "Funded {funded} · grant {grant} (grant Tokens only buy platform-hosted services and cannot pay a mentor); click to view the balance and renewal";
     readonly 'community.tip.keyPrivacy': "The credential is stored only on this machine (DSH settings); it is never sent back to the browser or written into the conversation.";
     readonly 'community.tip.envKey': "The credential comes from an environment variable; change it and restart DSH";
     readonly 'community.balance.frozenNote': "({count} frozen)";

@@ -1,15 +1,16 @@
 /**
- * ConvFusion 2.0 — browser half（设置页 + 两个会话 Tab）
+ * ConvFusion 2.0 — browser half（设置页 + 顶部品牌入口 + 两个会话 Tab）
  *
  * 这个文件只做装配：
  *
  * ```text
- * settings.section      ← 【设置】-【ConvFusion】（本体在 ./settings.js）
- * conversation.view     ← 会话 Tab「研究进展」（order 19，本体在 ./progress-panel.js）
- *                       ← 会话 Tab「科V社区」（order 20，本体在 ./community-view.js）
+ * settings.section                       ← 【设置】-【ConvFusion】（本体在 ./settings.js）
+ * conversation.session.header.utilities  ← 顶部「图标 + 科V社区」（order -1，本体在 ./community-panel.js）
+ * conversation.view                      ← 会话 Tab「研究进展」（order 19，本体在 ./progress-panel.js）
+ *                                        ← 会话 Tab「科V社区」（order 20，本体在 ./community-view.js）
  *
  * 会话 Tab 是**条件注册**的（只在研究工作区出现），闸门在 ./convfusion-tab.js。
- * 顶部的两个按钮（研究进展 / 科V社区）已按用户 2026-10 要求移除 —— 只留 tab。
+ * 顶部入口是**品牌入口**（任何会话都有，2026-10 用户要求恢复，位置在「…」之前）。
  * ```
  *
  * ## 两个容易踩的坑（重建时必看，来自 v0.1.5 的实测记录）
@@ -24,6 +25,7 @@ import logoUrl from '../../assets/favicon.svg';
 import { type Translate } from './i18n/index.js';
 import { loadSettingsState } from './settings.js';
 import { applyNavIcon, installNavIcon } from './nav-icon.js';
+import { COMMUNITY_BUTTON_ORDER, ConvFusionComButton } from './community-panel.js';
 import { CommunityView } from './community-view.js';
 import { COMMUNITY_VIEW_ID, COMMUNITY_VIEW_ORDER, CONVFUSION_VIEW_SLOT, PROGRESS_VIEW_ID, PROGRESS_VIEW_ORDER, convfusionTabSpecs, currentMainSessionId, installConvFusionTabs, percentText } from './convfusion-tab.js';
 import { ResearchProgressPanel, ResearchProgressView, readProgressValue, shortenPath } from './progress-panel.js';
@@ -32,7 +34,14 @@ export { loadSettingsState, applyNavIcon, installNavIcon, logoUrl };
 export { preferredCategory, preferredSection, preferredSkill } from './settings.js';
 /** 【ConvFusion.com】这一页的正文：设置页与会话 Tab 两处共用同一份（离线验证也要能拿到）。 */
 export { CommunityTab, DownloadDialog } from './settings.js';
+/**
+ * 两个**没有 hook** 的对话框（状态都在 `CommunityTab` 里）——导出给离线自检**真的渲染**
+ * 一遍：资金池不够时按钮是否禁用、余额弹窗是否真的分列两池，这些只有遍历产出的树才算数。
+ */
+export { AcceptConfirmDialog, TokenDialog } from './settings.js';
 export { readProgressValue, shortenPath };
+/** 顶部品牌入口（本体单独导出：离线验证直接渲染它，不必穿透整页容器）。 */
+export { COMMUNITY_BUTTON_ORDER, ConvFusionComButton };
 /** 两个会话 Tab 的正文（面板本体单独导出：离线验证直接渲染它，不必穿透整页容器）。 */
 export { ResearchProgressPanel };
 export { ResearchProgressView };

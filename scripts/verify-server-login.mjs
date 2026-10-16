@@ -1201,7 +1201,14 @@ section('[6b] 研究工作：列表 / 摘要 / 简报')
  * ════════════════════════════════════════════════════════════════════════ */
 section('[6c] Token 余额')
 {
-  const BALANCE = { available_balance: 7, frozen_balance: 3, total_balance: 10 }
+  // 服务器 v0.6.3 起把余额分成**两池**：赠送（只能买自营服务）/ 资金（能付导师、能提现）
+  const BALANCE = {
+    available_balance: 7,
+    frozen_balance: 3,
+    total_balance: 10,
+    grant_balance: 5,
+    funded_balance: 2,
+  }
   const meAndBalance = async (call) => {
     if (call.url.endsWith('/api/v1/auth/me')) return { status: 200, body: ME }
     if (call.url.endsWith('/api/v1/tokens')) return { status: 200, body: BALANCE }
@@ -1215,9 +1222,29 @@ section('[6c] Token 余额')
   assertEq(res.value.tokens.available, 7, '登录后带回可用余额')
   assertEq(res.value.tokens.frozen, 3, '冻结余额也带回（押金仍是用户的钱）')
   assertEq(res.value.tokens.total, 10, '总额用服务器给的值')
+  assertEq(res.value.tokens.grant, 5, '赠送额度带回（grant_balance）')
+  assertEq(res.value.tokens.funded, 2, '资金池带回（funded_balance）')
   assertEq(h.calls.length, 2, '两次请求：/auth/me + /tokens')
   assertEq(h.calls[1].headers.authorization, `Bearer ${KEY}`, '余额接口同样带凭据')
   keyLeak(res.value, 'account/login（含余额）')
+
+  // ── 旧服务器（不返回两池）：读作 null，**不是** 0 ──
+  // 读成 0 会让界面把"能付导师"说成 0，把一个本来能接受指导的账号挡住。
+  {
+    const legacy = makeHost({
+      config: { convfusionApiKey: KEY },
+      handler: async (call) => {
+        if (call.url.endsWith('/api/v1/auth/me')) return { status: 200, body: ME }
+        return { status: 200, body: { available_balance: 7, frozen_balance: 3, total_balance: 10 } }
+      },
+    })
+    const legacyRes = await legacy.handler('account/tokens', {})
+    assertEq(legacyRes.value.tokens.grant, null, '旧服务器：赠送额度 = null（不是 0）')
+    assertEq(legacyRes.value.tokens.funded, null, '旧服务器：资金池 = null（不是 0）')
+    // "要不要拦"的判据在**客户端**（它才看得见余额又要做决定），由
+    // `verify-settings-page.mjs` 的 [9] 段真的渲染一遍 AcceptConfirmDialog 来钉：
+    // 有 funded → 只认它；funded 为 null（旧宿主）→ 不拦（旧语义下两池本来就是一体的）。
+  }
 
   // ── verify 也带余额（「重新验证」顺带把数字刷新）──
   const v = makeHost({ config: { convfusionApiKey: KEY }, handler: meAndBalance })
@@ -3530,6 +3557,54 @@ section('[9] 指导关系（mentor/*）')
   assertEq(feeRes.value.suggestion.suggestedFee, 100, 'suggested_fee → suggestedFee')
   assertEq(feeRes.value.suggestion.suggestedDeposit, 20, 'suggested_deposit → suggestedDeposit')
   assertEq(feeRes.value.suggestion.suggestedSuccessPayment, 80, 'suggested_success_payment → suggestedSuccessPayment')
+  assert(
+    !fee.calls[0].url.includes('?'),
+    '不给等级 = 兜底价（非论文类条件的价钱），URL 上不带 jcr_level / ccf_level',
+  )
+
+  /*
+   * ── 论文等级定价（v0.6.3 §3.2.4）：等级 → 价格 ──────────────────────────
+   *
+   * 服务器按 `?jcr_level=2` / `?ccf_level=B` 定价。客户端**只传等级、不抄价目表**，
+   * 所以宿主这一层的责任就一条：把等级原样、且**只发一个字段**递过去。
+   * 两个等级都给时以 JCR 为准（与服务器 PaperPriceCalculator 的优先级一致）。
+   */
+  {
+    const byJcr = makeHost({
+      config: LOGGED_IN,
+      handler: async (call) => {
+        assert(call.url.endsWith('?jcr_level=2'), 'JCR 等级走 ?jcr_level=2')
+        return { status: 200, body: { suggested_fee: 800, suggested_deposit: 160, suggested_success_payment: 640 } }
+      },
+    })
+    const jcrRes = await byJcr.handler('mentor/fee-suggestion', { jcrLevel: 2 })
+    assertEq(jcrRes.value.suggestion.suggestedFee, 800, 'JCR 2 区 → 该等级的价格（金额由服务器算）')
+
+    const byCcf = makeHost({
+      config: LOGGED_IN,
+      handler: async (call) => {
+        assert(call.url.endsWith('?ccf_level=B'), 'CCF 等级走 ?ccf_level=B')
+        return { status: 200, body: { suggested_fee: 600, suggested_deposit: 120, suggested_success_payment: 480 } }
+      },
+    })
+    const ccfRes = await byCcf.handler('mentor/fee-suggestion', { ccfLevel: 'b' })
+    assertEq(ccfRes.value.suggestion.suggestedFee, 600, 'CCF 小写 b 归一成大写 B 再发（服务器只认 A/B/C）')
+
+    const both = makeHost({
+      config: LOGGED_IN,
+      handler: async (call) => {
+        assert(call.url.endsWith('?jcr_level=1') && !call.url.includes('ccf_level'), '两个都给 → 只发 JCR')
+        return { status: 200, body: { suggested_fee: 1000, suggested_deposit: 200, suggested_success_payment: 800 } }
+      },
+    })
+    await both.handler('mentor/fee-suggestion', { jcrLevel: 1, ccfLevel: 'C' })
+
+    // 非法等级：本地就拦下，不白跑一趟网络（服务器会 422）
+    const bad = makeHost({ config: LOGGED_IN, handler: async () => ({ status: 200, body: {} }) })
+    assertEq((await bad.handler('mentor/fee-suggestion', { jcrLevel: 9 })).error.code, 'bad-request', 'JCR 9 → 本地拒绝')
+    assertEq((await bad.handler('mentor/fee-suggestion', { ccfLevel: 'D' })).error.code, 'bad-request', 'CCF D → 本地拒绝')
+    assertEq(bad.calls.length, 0, '非法等级不发请求')
+  }
 
   // ── 发起提案：POST /projects/{id}/mentorship-proposals（免费，不扣 Token）──
   const propose = makeHost({
@@ -3559,7 +3634,65 @@ section('[9] 指导关系（mentor/*）')
     assertEq(sent.deposit_amount, 20, 'body：deposit_amount')
     assertEq(sent.success_payment_amount, 80, 'body：success_payment_amount')
     assertEq(sent.success_condition.type, 'MUTUAL_COMPLETION', 'body：success_condition.type')
+    assertEq(
+      sent.success_condition.jcr_level,
+      undefined,
+      '非论文类条件**不带**等级（带了服务器也只是忽略，但界面的语义就不清了）',
+    )
     assertEq(propose.calls[0].headers.authorization, `Bearer ${KEY}`, '发起提案带 Bearer 凭据')
+  }
+
+  /*
+   * ── 论文类提案：等级必须随 `success_condition` 发出去（v0.6.3）───────────
+   *
+   * 服务器把"等级就是价格"这条规则放在服务层：`PAPER_ACCEPTED` / `PAPER_PUBLISHED`
+   * 缺 `jcr_level` / `ccf_level` 直接 400 `INVALID_PROPOSAL`。等级是**价格依据**，
+   * 漏发 = 这份提案的价钱事后无法被重新推导出来。
+   */
+  {
+    const paper = makeHost({
+      config: LOGGED_IN,
+      handler: async () => ({ status: 201, body: ENRICHED }),
+    })
+    const paperRes = await paper.handler('mentor/propose', {
+      projectId: PROJECT_ID,
+      guidanceScope: '指导实验设计与论文写作',
+      totalFee: 800,
+      depositAmount: 160,
+      successPaymentAmount: 640,
+      successCondition: { type: 'PAPER_ACCEPTED', description: null, jcrLevel: 2 },
+    })
+    assert(paperRes.ok, '论文类提案可以发起')
+    const sentPaper = JSON.parse(paper.calls[0].body)
+    assertEq(sentPaper.success_condition.type, 'PAPER_ACCEPTED', 'body：条件类型 = 论文被接收')
+    assertEq(sentPaper.success_condition.jcr_level, 2, 'body：等级写在 success_condition.jcr_level（snake_case）')
+    assertEq(sentPaper.success_condition.ccf_level, undefined, '只发一个等级字段（不给 ccf_level）')
+
+    const paperCcf = makeHost({ config: LOGGED_IN, handler: async () => ({ status: 201, body: ENRICHED }) })
+    await paperCcf.handler('mentor/propose', {
+      projectId: PROJECT_ID,
+      guidanceScope: 'x',
+      totalFee: 600,
+      depositAmount: 120,
+      successPaymentAmount: 480,
+      successCondition: { type: 'PAPER_PUBLISHED', description: null, ccfLevel: 'b' },
+    })
+    const sentCcf = JSON.parse(paperCcf.calls[0].body)
+    assertEq(sentCcf.success_condition.ccf_level, 'B', 'body：CCF 小写 b → 大写 B')
+    assertEq(sentCcf.success_condition.jcr_level, undefined, 'CCF 提案不带 jcr_level')
+
+    // 非法等级：本地拦（服务器 422），且**不**把非法值转发出去
+    const badLevel = makeHost({ config: LOGGED_IN, handler: async () => ({ status: 201, body: ENRICHED }) })
+    const badRes = await badLevel.handler('mentor/propose', {
+      projectId: PROJECT_ID,
+      guidanceScope: 'x',
+      totalFee: 100,
+      depositAmount: 20,
+      successPaymentAmount: 80,
+      successCondition: { type: 'PAPER_ACCEPTED', description: null, jcrLevel: 7 },
+    })
+    assertEq(badRes.error.code, 'bad-request', '非法等级 → 本地 bad-request')
+    assertEq(badLevel.calls.length, 0, '非法等级不发请求')
   }
   assertEq(proposeRes.value.proposal.status, 'PROPOSED', '新提案状态 = PROPOSED')
   assertEq(proposeRes.value.proposal.mentor.displayName, '张老师', '内嵌导师身份 → mentor.displayName')
@@ -3664,6 +3797,64 @@ section('[9] 指导关系（mentor/*）')
   const poorRes = await poor.handler('mentor/accept', { proposalId: ENRICHED.id, intentKey: 'intent-2' })
   assertEq(poorRes.ok, false, '押金不足 → 不算成功')
   assertEq(poorRes.error.code, 'insufficient-tokens', '402 → insufficient-tokens（界面的"先获取 Token"分支）')
+
+  /*
+   * 402 的**资金池**分支（v0.6.3）：服务器只在 funded-only 的扣费路径（付给导师 /
+   * 提现）给出 `details.funded` + `details.grant`。这时"余额不足"是不够准确的 ——
+   * 用户账上**有钱**，只是那一池不能付给导师。所以文案必须说清这件事，
+   * 并给出唯一可行动作（自助付费尚未开通 → 找管理员发放）。
+   */
+  {
+    const fundedBody = err('INSUFFICIENT_TOKENS', 'not enough funded', {
+      required: 160,
+      available: 500,
+      funded: 10,
+      grant: 490,
+    })
+    const fundedPoor = makeHost({
+      config: LOGGED_IN,
+      handler: async () => ({ status: 402, body: fundedBody }),
+    })
+    const fundedRes = await fundedPoor.handler('mentor/accept', {
+      proposalId: ENRICHED.id,
+      intentKey: 'intent-3',
+    })
+    assertEq(fundedRes.error.code, 'insufficient-tokens', '资金池不足同样是 insufficient-tokens')
+    assert(fundedRes.error.message.includes('资金池'), '文案说的是**资金池**不足（不是笼统的"余额不足"）')
+    assert(fundedRes.error.message.includes('赠送额度'), '并说明赠送额度不能付给导师')
+    assert(fundedRes.error.message.includes('联系管理员发放'), '给出可行动作（测试阶段找管理员发放 Token）')
+
+    // `details.funded` / `details.grant` 也要带出来：界面以后要靠它分辨两种 402
+    let caught = null
+    try {
+      await SC.fetchAcceptProposal('http://127.0.0.1:8000', KEY, ENRICHED.id, 'intent-3b', {
+        fetchImpl: async () => ({
+          ok: false,
+          status: 402,
+          json: async () => fundedBody,
+          arrayBuffer: async () => new ArrayBuffer(0),
+        }),
+      })
+    } catch (e) {
+      caught = e
+    }
+    assert(caught !== null && caught.name === 'ServerError', '402 抛 ServerError（不是普通 Error）')
+    assertEq(caught.fundedTokens, 10, 'details.funded 带出来（fundedTokens）')
+    assertEq(caught.grantTokens, 490, 'details.grant 带出来（grantTokens）')
+    assertEq(caught.requiredTokens, 160, 'details.required 照旧带出来')
+
+    // 普通（两池未分开的）402 文案不变：不无中生有地说"资金池"
+    const legacyPoor = makeHost({
+      config: LOGGED_IN,
+      handler: async () => ({
+        status: 402,
+        body: err('INSUFFICIENT_TOKENS', 'not enough', { required: 20, available: 0 }),
+      }),
+    })
+    const legacyRes = await legacyPoor.handler('mentor/accept', { proposalId: ENRICHED.id, intentKey: 'intent-4' })
+    assert(!legacyRes.error.message.includes('资金池'), '没有 funded 细节时不说"资金池"（旧服务器不分开报两池）')
+    assert(legacyRes.error.message.includes('不会重复扣费'), '402 文案照旧说明幂等重试（不会重复扣费）')
+  }
 
   // ── 拒绝：POST /mentorship-proposals/{id}/reject ──
   const reject = makeHost({

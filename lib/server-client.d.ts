@@ -90,12 +90,27 @@ export interface ServerAccount {
  * 无从判断自己是没充值、还是被重复扣费了。
  */
 export interface TokenBalance {
-    /** 可用余额（能花的）。 */
+    /** 可用余额（= 两池之和，能花的）。 */
     available: number;
     /** 冻结余额（如已接受提案的押金 —— 仍是用户的钱，只是锁住）。 */
     frozen: number;
     /** 总额（可用 + 冻结）。 */
     total: number;
+    /**
+     * **赠送额度**（服务器 `grant_balance`）—— 平台发的，只能买**自营服务**
+     * （看简报 / 发布 / 买存储）。**不能付给导师、不能提现**。
+     *
+     * `null` = 服务器这一版不返回该字段（协议 28 之前）——**不是 0**。旧服务器把赠送与
+     * 充值混在一个余额里，"这个账号没有赠送额度"与"服务器不会分开说"必须区分开。
+     */
+    grant: number | null;
+    /**
+     * **资金池**（服务器 `funded_balance`）—— 充值 + 导师所得。**唯一**能付给导师、
+     * 也是**唯一**可提现的部分；接受指导时冻结的押金走的就是它。
+     *
+     * `null` 的含义同 `grant`（旧服务器不分开说）。
+     */
+    funded: number | null;
 }
 /**
  * 一项研究工作的**方向** —— 两个方向共用同一套项目 / 提案 / 合同结构，
@@ -270,6 +285,15 @@ export declare class ServerError extends Error {
     readonly requiredTokens?: number;
     /** 402 的 `details.available`（当前可用多少 Token）。 */
     readonly availableTokens?: number;
+    /**
+     * 402（**资金池专属**路径）的 `details.funded`：资金池当前有多少。
+     *
+     * 它出现就说明这次失败是"赠送额度不能付给导师"，而不是"一分钱都没有"——
+     * 界面据此说清话（并提示找管理员发放），而不是笼统说余额不足。
+     */
+    readonly fundedTokens?: number;
+    /** 402（资金池专属路径）的 `details.grant`：同一次失败里赠送额度有多少。 */
+    readonly grantTokens?: number;
     /** 409 STATE_VERSION_CONFLICT 的 `details.current_version`（重基时用它）。 */
     readonly currentVersion?: number;
     constructor(code: ServerErrorCode, message: string, extra?: {
@@ -278,6 +302,8 @@ export declare class ServerError extends Error {
         retryAfterSeconds?: number;
         requiredTokens?: number;
         availableTokens?: number;
+        fundedTokens?: number;
+        grantTokens?: number;
         currentVersion?: number;
     });
 }
@@ -817,10 +843,7 @@ export interface MentorshipProposal {
     totalFee: number;
     depositAmount: number;
     successPaymentAmount: number;
-    successCondition: {
-        type: string;
-        description: string | null;
-    };
+    successCondition: MentorshipSuccessCondition;
     status: ProposalStatus;
     /**
      * 指导进展（服务器 `review_files`）：**非 owner 那一侧**去重后的文件数
@@ -899,7 +922,49 @@ export interface FeeSuggestion {
     suggestedDeposit: number;
     suggestedSuccessPayment: number;
 }
-/** 成功条件类型（服务器枚举，界面据此给中文标签；第一版重点用 MUTUAL_COMPLETION）。 */
+/** 论文类成功条件：价格 = 等级，因此**必须**给出等级。 */
+export declare const PAPER_CONDITION_TYPES: readonly ["PAPER_ACCEPTED", "PAPER_PUBLISHED"];
+/** 这个成功条件是不是按论文等级定价的（服务器 `PAPER_CONDITION_TYPES`）。 */
+export declare function isPaperCondition(type: string | null | undefined): boolean;
+/** 计价体系：`JCR` 分区 1–4 与 `CCF` 类别 A/B/C。 */
+export type PaperLevelSystem = 'JCR' | 'CCF';
+/** 一个等级（体系 + 取值）—— 提案里落成 `jcr_level` 或 `ccf_level`。 */
+export interface PaperLevel {
+    system: PaperLevelSystem;
+    /** JCR：`1`–`4`；CCF：`'A'`/`'B'`/`'C'`。 */
+    level: number | string;
+}
+/** JCR 分区（1 = 最高）。 */
+export declare const JCR_LEVELS: readonly number[];
+/** CCF 类别（A = 最高）。 */
+export declare const CCF_LEVELS: readonly string[];
+/** 归一 JCR 分区（1–4 的整数；别的一律 `null`）。 */
+export declare function asJcrLevel(v: unknown): number | null;
+/** 归一 CCF 类别（大小写不敏感 → 大写 `A`/`B`/`C`；别的一律 `null`）。 */
+export declare function asCcfLevel(v: unknown): string | null;
+/**
+ * 从成功条件里读出**它声明的等级**（没有 → `null`）。
+ *
+ * 与服务器的读取顺序一致（`PaperPriceCalculator.level_of`）：先看 `jcr_level`，
+ * 再看 `ccf_level`。两种都给时以 JCR 为准 —— 服务器也是这么定价的，界面不能另说一套。
+ */
+export declare function successConditionLevel(condition: {
+    jcrLevel?: number | null;
+    ccfLevel?: string | null;
+} | null | undefined): PaperLevel | null;
+/**
+ * 成功条件的完整形态（提案 / 合同共用）。
+ *
+ * `jcrLevel` / `ccfLevel` 是**论文类条件的价格依据**；非论文类条件两者都是 `null`
+ * （那是正常的，不是缺数据）。
+ */
+export interface MentorshipSuccessCondition {
+    type: string;
+    description: string | null;
+    jcrLevel: number | null;
+    ccfLevel: string | null;
+}
+/** 成功条件类型（服务器枚举，界面据此给中文标签）。 */
 export declare const SUCCESS_CONDITION_TYPES: readonly ["PAPER_ACCEPTED", "PAPER_PUBLISHED", "RESEARCH_COMPLETED", "PATENT_GRANTED", "TECHNICAL_OUTCOME", "MUTUAL_COMPLETION"];
 /** 接受提案返回的**合同**（`mentorship_contracts`）。 */
 export interface MentorshipContract {
@@ -913,10 +978,7 @@ export interface MentorshipContract {
     depositAmount: number;
     successPaymentAmount: number;
     guidanceScope: string;
-    successCondition: {
-        type: string;
-        description: string | null;
-    };
+    successCondition: MentorshipSuccessCondition;
     status: string;
     createdAt: string;
     acceptedAt: string | null;
@@ -936,8 +998,19 @@ export interface ResearchRelationship {
     startedAt: string | null;
     endedAt: string | null;
 }
-/** 费用建议（默认 100 / 20 / 80，导师可改）。 */
-export declare function fetchFeeSuggestion(base: string, apiKey: string, options?: ServerRequestOptions): Promise<FeeSuggestion>;
+/**
+ * 费用建议（`GET /mentorship-proposals/fee-suggestion`）。
+ *
+ * `level` 决定按**哪个发表等级**定价：`{ system: 'JCR', level: 2 }` →
+ * `?jcr_level=2`，`{ system: 'CCF', level: 'B' }` → `?ccf_level=B`。
+ * 不给等级时服务器回**兜底价**（`DEFAULT_MENTORSHIP_FEE`，100 / 20 / 80）——
+ * 那是非论文类条件（`MUTUAL_COMPLETION` 等）的价钱，**不是**论文类条件的默认价。
+ *
+ * 金额一律由服务器算：客户端只传等级，不抄价目表（平台调价时界面不会撒谎）。
+ *
+ * @throws {ServerError} `bad-request`（等级不合法）/ `invalid-key` / `unreachable` / …
+ */
+export declare function fetchFeeSuggestion(base: string, apiKey: string, options?: ServerRequestOptions, level?: PaperLevel | null): Promise<FeeSuggestion>;
 /**
  * 发起指导提案（免费，不扣 Token）。
  *
@@ -951,6 +1024,11 @@ export declare function fetchFeeSuggestion(base: string, apiKey: string, options
  * 所以客户端**不传方向**（传了也是冗余信息，可能与项目本身矛盾）；角色校验在服务端。
  * 方向 B 下服务端会在这一步预检学生余额（不足 → 402），因为接受方是导师，
  * 押金不足要让**出价的人**当场知道。
+ *
+ * ⚠️ **论文类条件（`PAPER_ACCEPTED` / `PAPER_PUBLISHED`）必须带等级**：服务器把它读成
+ * `success_condition.jcr_level` / `ccf_level`，缺失直接 400 `INVALID_PROPOSAL`
+ * （"等级就是价格"，没有等级这份提案的价钱无法被重新推导出来）。界面负责先拦一次，
+ * 这里不做第二套校验 —— 规则只有服务器一个来源。
  */
 export interface ProposeInput {
     guidanceScope: string;
@@ -960,6 +1038,10 @@ export interface ProposeInput {
     successCondition: {
         type: string;
         description: string | null;
+        /** 论文等级（JCR 分区）；非论文类条件留空。 */
+        jcrLevel?: number | null;
+        /** 论文等级（CCF 类别）；给了 jcrLevel 就不必给这个（服务器以 JCR 为准）。 */
+        ccfLevel?: string | null;
     };
 }
 export declare function fetchPropose(base: string, apiKey: string, projectId: string, input: ProposeInput, options?: ServerRequestOptions): Promise<MentorshipProposal>;
