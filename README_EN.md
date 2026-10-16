@@ -7,10 +7,10 @@
 <p align="center"><strong>A research operating system plugin built for DeepSeek Harness</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.6.2-4a43ea" alt="Version 0.6.2">
+  <img src="https://img.shields.io/badge/version-v0.6.3-4a43ea" alt="Version 0.6.3">
   <img src="https://img.shields.io/badge/DeepSeek_Harness-plugin-4a43ea" alt="DeepSeek Harness Plugin">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="MIT License"></a>
-  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-v0.6.2-6b7280" alt="Changelog"></a>
+  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-v0.6.3-6b7280" alt="Changelog"></a>
 </p>
 
 <p align="center">

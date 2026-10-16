@@ -178,7 +178,6 @@ import {
 } from './research/upload-selection.js'
 import {
   createMemoryPublishedStore,
-  parsePublishedStoreKey,
   type PublishedRecord,
   type PublishedStore,
 } from './research/published-store.js'
@@ -1081,9 +1080,17 @@ export function createSettingsRpcHandler(
     )
 
   /** 服务器请求参数（统一注入 fetch / 超时 / 环境变量）。 */
-  const netOptions = (): Parameters<typeof fetchAccount>[2] => ({
+  /**
+   * 服务器调用的公共选项。
+   *
+   * @param workspaceId 这项工作在本机的身份（`ws_…`）——**写请求带上它**，
+   *   服务器据此拒绝"往别人的项目里写"（本机映射指错时唯一的兜底，
+   *   见 `server-client.ts` 的 `ServerRequestOptions.workspaceId`）。
+   */
+  const netOptions = (workspaceId?: string | null): Parameters<typeof fetchAccount>[2] => ({
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     ...(deps.serverTimeoutMs === undefined ? {} : { timeoutMs: deps.serverTimeoutMs }),
+    ...(workspaceId ? { workspaceId } : {}),
   })
 
   /**
@@ -1556,6 +1563,20 @@ export function createSettingsRpcHandler(
       if (it.workId) continue
       it.workId = readLocalIdentity(it.researchRoot, deps.workIdentity).workspaceId
     }
+    /*
+     * ③ **有 id 才谈"更新"**（2026-10 用户拍板）：服务器支持身份、而这项工作本机拿不到 id
+     * → 那条发布记录无法归属到它（可能是**路径换过住户**留下的），一律当"未发布"处理：
+     * 界面因此显示【寻找…】（不会出现【更新研究工作】），也就不会把内容写进别人的项目。
+     *
+     * 只在服务器**确实有身份概念**时这么做（`workspaceId !== undefined`）：
+     * 老服务器没有这个概念 → 保持原行为（否则会让老用户重新发布，反而多出一个项目）。
+     */
+    const serverHasIds = checks.some((c) => c.workspaceId !== undefined)
+    if (serverHasIds) {
+      for (const it of scoped) {
+        if (!it.workId && it.published.length > 0) it.published = []
+      }
+    }
     return scoped
   }
 
@@ -1589,11 +1610,11 @@ export function createSettingsRpcHandler(
     if (items.length === 0) return
     const ids = new Set(items.map((it) => it.projectId))
     const checkedAt = new Date().toISOString()
-    for (const [key, record] of Object.entries(publishedStore.all())) {
+    for (const record of Object.values(publishedStore.all())) {
       if (!ids.has(record.projectId)) continue
       if (record.serverVisibility === 'PUBLISHED' && record.checkedAt) continue
-      const { researchRoot, direction } = parsePublishedStoreKey(key)
-      publishedStore.set(researchRoot, { ...record, direction, serverVisibility: 'PUBLISHED', checkedAt })
+      // 键可能是**身份**也可能是路径（迁移期）→ 必须按项目原地更新，不能"解析键再 set"
+      publishedStore.updateByProject(record.projectId, { serverVisibility: 'PUBLISHED', checkedAt })
     }
   }
 
@@ -2153,6 +2174,13 @@ export function createSettingsRpcHandler(
              *      可以有多项研究，见 2026-10 用户要求）。
              */
             const localIdentity = readLocalIdentity(source.root, deps.workIdentity)
+            /**
+             * 本次发布认定的工作身份：本机已有的（沿用）或建项目时服务器新给的。
+             *
+             * ⚠️ 传状态 / 传附件 / 发布三个写请求都要带上它 —— 服务器只要有一个环节
+             * 能校验，就能拦住"往别人的项目里写"（覆盖不可逆）。
+             */
+            let workIdForWrite: string | null = localIdentity.workspaceId
 
             /** 把服务器给的身份落到本机（标记 + 注册表）；没有值就**什么都不写**。 */
             const rememberIdentity = (workspaceId: string | null | undefined): void => {
@@ -2193,6 +2221,7 @@ export function createSettingsRpcHandler(
               created = true
               // 服务器给的才是权威：本机没有就记下，本机有但不同则**以服务器为准**（同一次发布）
               rememberIdentity(project.workspaceId)
+              workIdForWrite = normalizeWorkspaceId(project.workspaceId) ?? workIdForWrite
               return project.id
             }
             if (!projectId) projectId = await create()
@@ -2204,7 +2233,9 @@ export function createSettingsRpcHandler(
              */
             if (!created && !localIdentity.workspaceId) {
               try {
-                rememberIdentity((await fetchProject(base, apiKey, projectId, netOptions())).workspaceId)
+                const project = await fetchProject(base, apiKey, projectId, netOptions())
+                rememberIdentity(project.workspaceId)
+                workIdForWrite = workIdForWrite ?? normalizeWorkspaceId(project.workspaceId)
               } catch {
                 /* 回查失败不影响发布：下一次发布还会再试 */
               }
@@ -2220,7 +2251,7 @@ export function createSettingsRpcHandler(
                   content: content as unknown as Record<string, unknown>,
                   intentKey: crypto.randomUUID(),
                 },
-                netOptions(),
+                netOptions(workIdForWrite),
               )
             const saveStateWithRebase = async (version: number | null) => {
               try {
@@ -2310,7 +2341,7 @@ export function createSettingsRpcHandler(
               if (payload.length === 0) continue
               const results = await uploadProjectFiles(base, apiKey, projectId, payload, {
                 stateVersion: uploaded.version,
-                ...netOptions(),
+                ...netOptions(workIdForWrite),
               })
               uploadedFiles += results.length
               uploadedBytes += results.reduce((n, r) => n + r.size, 0)
@@ -2324,7 +2355,7 @@ export function createSettingsRpcHandler(
             // 幂等键由 (项目, 版本) 决定：同一次发布的重试不会重复扣费。
             const { visibility, chargedTokens } = await publishProject(base, apiKey, projectId, {
               intentKey: `convfusion-dsh-publish-${projectId}-v${uploaded.version}`,
-              ...netOptions(),
+              ...netOptions(workIdForWrite),
             })
             /*
              * 名字会在**论文起名 / 主题演进**之后变化，而项目标题只在建项目时写过一次。

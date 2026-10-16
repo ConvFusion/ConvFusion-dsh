@@ -1725,8 +1725,10 @@ section('[6e] 发布本机研究（work/publish）')
     conflictOnce = false,
     failPublish = false,
     serverVersion = null,
-    /* 建项目时服务器返回的 `workspace_id`；`null` = 模拟**老服务器**（没有这个字段）。 */
+    /** 建项目/回查项目时服务器返回的 `workspace_id`。 */
     returnWorkspaceId = 'ws_11111111111111111111111111111111',
+    /** `true` = 模拟**老服务器**（响应里**没有**这个字段 → 插件按"无法判定"处理）。 */
+    omitWorkspaceId = false,
     /* 附件请求**进行中**的钩子：测试据此在那一刻读进度端点（模拟界面按秒轮询）。 */
     onFilesPost = null,
   } = {}) => {
@@ -1750,7 +1752,7 @@ section('[6e] 发布本机研究（work/publish）')
           visibility: 'PRIVATE',
           status: 'ACTIVE',
           // 服务器给这项工作一个**跨项目生命周期不变**的身份（v3 规格：POST /projects 回 workspace_id）
-          ...(returnWorkspaceId === null ? {} : { workspace_id: returnWorkspaceId }),
+          ...(omitWorkspaceId ? {} : { workspace_id: returnWorkspaceId }),
           updated_at: '',
         })
       }
@@ -1782,7 +1784,7 @@ section('[6e] 发布本机研究（work/publish）')
           title: 'x',
           visibility: 'PUBLISHED',
           status: 'ACTIVE',
-          ...(returnWorkspaceId === null ? {} : { workspace_id: returnWorkspaceId }),
+          ...(omitWorkspaceId ? {} : { workspace_id: returnWorkspaceId }),
           updated_at: '',
         })
       }
@@ -1925,12 +1927,24 @@ section('[6e] 发布本机研究（work/publish）')
       forgetIdentity()
       const store1 = PUB.createMemoryPublishedStore()
       const identity1 = WI.createMemoryWorkIdentityStore()
-      const host1 = makePubHost(makePublisher({ returnWorkspaceId: WSID }), store1, {}, identity1)
+      const server1 = makePublisher({ returnWorkspaceId: WSID })
+      const host1 = makePubHost(server1, store1, {}, identity1)
       assert((await host1('work/publish', { id: 'ws-pub' })).ok, '首传成功')
       assert(fs.existsSync(markerPath), '本机标记写下了（<研究根>/.convfusion/work.json）')
       // `readWorkMarker` 回的是**解析后的对象**（驼峰字段；文件里是 snake_case）
       assertEq(WI.readWorkMarker(K_ROOT)?.workspaceId, WSID, '标记里是**服务器返回的**身份')
       assertEq(identity1.get(K_ROOT)?.workspaceId, WSID, '插件侧注册表也记一份（解压前就能判）')
+      {
+        // 三个**写请求**都带上身份：服务器只要在一个环节校验，就能拦住"写进别人的项目"
+        const writes = server1.calls.filter(
+          (c) => c.method === 'POST' && /(\/state|\/files|\/publish)$/.test(c.url),
+        )
+        assert(writes.length >= 3, `三个写请求都发出去了（实测 ${writes.length} 个）`)
+        assert(
+          writes.every((c) => (c.headers ?? {})['x-workspace-id'] === WSID),
+          '传状态 / 传附件 / 发布都带 X-Workspace-Id（服务器据此拒绝写错项目）',
+        )
+      }
 
       // ② 再传（换了本地发布记录、但标记还在）→ 建项目时**沿用**同一个身份
       const store2 = PUB.createMemoryPublishedStore()
@@ -1968,7 +1982,7 @@ section('[6e] 发布本机研究（work/publish）')
       // ④ **老服务器**不返回 id → 什么都不写（绝不编造身份）
       forgetIdentity()
       const host4 = makePubHost(
-        makePublisher({ returnWorkspaceId: null }),
+        makePublisher({ omitWorkspaceId: true }),
         PUB.createMemoryPublishedStore(),
         {},
         WI.createMemoryWorkIdentityStore(),
@@ -2040,6 +2054,179 @@ section('[6e] 发布本机研究（work/publish）')
     assertEq(store.get(K)?.projectId, 'srv-project-1', '映射记录写入（工作区 → project_id）')
     assertEq(store.get(K)?.version, 1, '映射记录版本号')
   }
+
+    /*
+     * ── 用户的工作习惯：在同一个会话工作区里**换进换出**多项研究 ──────────────
+     *
+     * 把当前 `workspace/` 改名、把另一项研究改名成 `workspace/`。记录键若还是**路径**，
+     * 新占用者就会继承旧研究的记录 → 点【更新研究工作】把新工作的状态写进**旧工作的项目**
+     * （覆盖，不可逆），附件还会拿旧指纹跳过该传的文件。所以键改成**工作身份**，
+     * 并用「占用者守卫」（身份 + `project.md` 的 created_at 指纹）拦住继承。
+     */
+    {
+      const WI = await import(lib('research/work-identity.js'))
+      const K_ROOT = fs.realpathSync(root)
+      const WS_A = 'ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+      const WS_B = 'ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+
+      /** 直接造一条"属于 A 的旧记录"（键=路径，模拟迁移前的落盘）。 */
+      const seedLegacy = (store, { fingerprint = null } = {}) => {
+        const seed = PUB.createMemoryPublishedStore()
+        seed.set(K_ROOT, {
+          direction: 'SEEK_MENTOR',
+          projectId: 'srv-project-1',
+          serverUrl: 'http://localhost:8000',
+          accountId: 'acc-1',
+          version: 1,
+          contentHash: 'sha256:x',
+          files: {},
+          selection: [],
+          workId: WS_A,
+          ...(fingerprint ? { rootFingerprint: fingerprint } : {}),
+        })
+        // 再灌进被测 store（模拟"这份 JSON 已经在盘上"）
+        for (const [key, record] of Object.entries(seed.all())) store.set(key.split('\u0000')[0], record)
+      }
+
+      // ① 路径上的研究换成了 B（标记是 B）→ A 的记录**读不到**（不会写进 A 的项目）
+      {
+        fs.rmSync(path.join(K_ROOT, '.convfusion'), { recursive: true, force: true })
+        WI.writeWorkMarker(K_ROOT, { workspaceId: WS_B })
+        const store = PUB.createMemoryPublishedStore()
+        seedLegacy(store)
+        const scoped = PUB.createMemoryPublishedStore(store.all(), {
+          workIdOf: (r) => WI.readWorkMarker(r)?.workspaceId ?? null,
+        })
+        assertEq(scoped.get(K_ROOT, 'SEEK_MENTOR'), undefined, '路径换过住户（标记是 B）→ A 的记录读不到')
+      }
+
+      // ② 新占用者**还没有标记**，但指纹不同 → 同样读不到（这正是"新建的研究"那种情形）
+      {
+        fs.rmSync(path.join(K_ROOT, '.convfusion'), { recursive: true, force: true })
+        const store = PUB.createMemoryPublishedStore()
+        seedLegacy(store, { fingerprint: '2026-01-01T00:00:00.000Z' })
+        const scoped = PUB.createMemoryPublishedStore(store.all(), {
+          workIdOf: () => null,
+          fingerprintOf: () => '2026-10-13T00:49:11.929Z',
+        })
+        assertEq(scoped.get(K_ROOT, 'SEEK_MENTOR'), undefined, '指纹不同（路径换过住户）→ 记录读不到')
+      }
+
+      // ③ 指纹相同（同一项研究，只是搬了个位置/备份回来）→ 照旧读得到
+      {
+        const fp = '2026-10-13T00:49:11.929Z'
+        const store = PUB.createMemoryPublishedStore()
+        seedLegacy(store, { fingerprint: fp })
+        const scoped = PUB.createMemoryPublishedStore(store.all(), {
+          workIdOf: () => WS_A,
+          fingerprintOf: () => fp,
+        })
+        assertEq(scoped.get(K_ROOT, 'SEEK_MENTOR')?.projectId, 'srv-project-1', '同一项研究（指纹/身份一致）照旧读得到')
+      }
+
+      // ④ 有身份时**按身份落盘**，并迁掉旧的路径键（否则身份缺失时它会被误读）
+      {
+        const store = PUB.createMemoryPublishedStore()
+        const scoped = PUB.createMemoryPublishedStore(store.all(), {
+          workIdOf: () => WS_A,
+          fingerprintOf: () => '2026-10-13T00:49:11.929Z',
+        })
+        scoped.set(K_ROOT, {
+          direction: 'SEEK_MENTOR',
+          projectId: 'p-new',
+          serverUrl: 'http://localhost:8000',
+          accountId: 'acc-1',
+          version: 1,
+          publishedAt: '',
+          updatedAt: '',
+        })
+        const keys = Object.keys(scoped.all())
+        assertEq(keys.length, 1, '迁移：旧的路径键被删掉（同一方向不留两条）')
+        assert(keys[0].startsWith(WS_A), `键以工作身份开头（实测 ${keys[0].slice(0, 12)}…）`)
+        assertEq(scoped.all()[keys[0]].workId, WS_A, '记录里也记下了身份（供下次守卫）')
+
+        // 换个方向时互不影响
+        scoped.set(K_ROOT, {
+          direction: 'SEEK_STUDENT',
+          projectId: 'p-topic',
+          serverUrl: 'http://localhost:8000',
+          accountId: 'acc-1',
+          version: 1,
+          publishedAt: '',
+          updatedAt: '',
+        })
+        assertEq(Object.keys(scoped.all()).length, 2, '两个方向各一条（都按身份）')
+      }
+
+      // ⑤ 服务器给 id、而这项工作没有 id → 列表不显示"已在网络中"（也就没有【更新】按钮）
+      {
+        const store = PUB.createMemoryPublishedStore()
+        store.set(K_ROOT, {
+          direction: 'SEEK_MENTOR',
+          projectId: 'srv-project-1',
+          serverUrl: 'http://localhost:8000',
+          accountId: 'acc-1',
+          version: 1,
+          contentHash: 'sha256:x',
+          files: {},
+          selection: [],
+        })
+        const host = makePubHost(makePublisher({ returnWorkspaceId: WS_A }), store)
+        const mine = await host('work/mine', {})
+        const item = (mine.value?.items ?? []).find((x) => x.id === 'ws-pub')
+        // 服务器能回 workspace_id（对齐会补上）→ 这条记录仍然有效，且身份已补
+        assertEq(item?.workId, WS_A, '服务器支持身份 → 核对时把 id 补上')
+        assertEq(item?.published.length, 1, 'id 补上后记录仍然有效（显示更新按钮）')
+      }
+
+      // ⑦ **老服务器**（没有身份字段）→ 记录照旧（否则会诱使用户重复发布，多出一个项目）
+      {
+        fs.rmSync(path.join(K_ROOT, '.convfusion'), { recursive: true, force: true })
+        const store = PUB.createMemoryPublishedStore()
+        store.set(K_ROOT, {
+          direction: 'SEEK_MENTOR',
+          projectId: 'srv-project-1',
+          serverUrl: 'http://localhost:8000',
+          accountId: 'acc-1',
+          version: 1,
+          contentHash: 'sha256:x',
+          files: {},
+          selection: [],
+        })
+        const host = makePubHost(makePublisher({ omitWorkspaceId: true }), store)
+        const mine = await host('work/mine', {})
+        const item = (mine.value?.items ?? []).find((x) => x.id === 'ws-pub')
+        assertEq(item?.published.length, 1, '老服务器没有身份概念 → 记录照旧（不变更行为）')
+        assertEq(item?.workId ?? null, null, '拿不到身份就如实为空')
+      }
+
+      // ⑧ 服务器**有**身份概念、而这项工作本机拿不到 id（项目本身没有 id）→ 当"未发布"处理
+      {
+        fs.rmSync(path.join(K_ROOT, '.convfusion'), { recursive: true, force: true })
+        const store = PUB.createMemoryPublishedStore()
+        store.set(K_ROOT, {
+          direction: 'SEEK_MENTOR',
+          projectId: 'srv-project-1',
+          serverUrl: 'http://localhost:8000',
+          accountId: 'acc-1',
+          version: 1,
+          contentHash: 'sha256:x',
+          files: {},
+          selection: [],
+        })
+        // 服务器会回这个字段、但值是 null（项目在身份概念之前建的）
+        const host = makePubHost(makePublisher({ returnWorkspaceId: null }), store)
+        const mine = await host('work/mine', {})
+        const item = (mine.value?.items ?? []).find((x) => x.id === 'ws-pub')
+        assertEq(
+          item?.published.length,
+          0,
+          '有身份概念但拿不到 id → 当作"未发布"（界面显示【寻找…】，不会出现【更新研究工作】）',
+        )
+      }
+
+      fs.rmSync(path.join(K_ROOT, '.convfusion'), { recursive: true, force: true })
+    }
 
   // ── 再点一次：复用同一个项目，上传 v2，**不再建项目** ──
   {

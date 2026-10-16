@@ -220,13 +220,13 @@ export declare const zh: {
     'community.mentor.mentorIs': string;
     'community.mentor.researcherIs': string;
     'community.mentor.feeText': string;
-    'community.mentor.progress.studentWaiting': string;
-    'community.mentor.progress.studentGot': string;
-    'community.mentor.progress.mentorWaiting': string;
-    'community.mentor.progress.mentorDone': string;
+    'community.mentor.progress.awaitingMentor': string;
+    'community.mentor.progress.mentorGuided': string;
+    'community.mentor.progress.iToGuide': string;
+    'community.mentor.progress.iGuided': string;
     'community.mentor.progress.iToDeliver': string;
     'community.mentor.progress.iDelivered': string;
-    'community.mentor.progress.studentToDeliver': string;
+    'community.mentor.progress.awaitingStudent': string;
     'community.mentor.progress.studentDelivered': string;
     'community.mentor.peerNeverDownloaded': string;
     'community.mentor.peerUpdated': string;

@@ -61,6 +61,24 @@ export interface PublishedRecord {
     title?: string;
     /** 服务器上的 Research Project id。 */
     projectId: string;
+    /**
+     * 这条记录属于**哪一项研究**（`workspace_id`）。
+     *
+     * ⚠️ 为什么必须有：用户会在同一个会话工作区里**换进换出**多项研究
+     * （把当前 `workspace/` 改名、把另一项研究改名成 `workspace/`）。记录键若是路径，
+     * 新占用同一个路径的研究就会**继承**旧研究的这条记录 —— 点【更新研究工作】会把
+     * 新工作的状态写进**旧工作的服务器项目**（覆盖，不可逆）。
+     *
+     * 旧记录没有这个字段 → 无从校验（按现状用），下一次发布/核对时补上。
+     */
+    workId?: string;
+    /**
+     * 写下这条记录时研究根的指纹（`project.md` 的 `created_at`）。
+     *
+     * 与 {@link workId} 互补：`workId` 拦"标记不同"，指纹拦"**标记缺失**时路径换了住户"
+     * （新占用者还没发布过 → 没有标记，只有指纹能说明住在这里的不是当初那项研究）。
+     */
+    rootFingerprint?: string;
     /** 发布时用的服务器地址（归一后的根地址）。 */
     serverUrl: string;
     /** 发布时的账号 id（换账号不重用旧项目）。 */
@@ -97,8 +115,34 @@ export interface PublishedRecord {
      */
     selection?: string[];
 }
+/**
+ * 记录键的**作用域**：怎么把"研究根"翻成"这是哪一项研究"。
+ *
+ * 注入而不是写死：`published-store` 是纯 JSON 表读写，不认识研究根的布局
+ * （标记文件在哪、`project.md` 长什么样），那两个认识的地方由宿主注入。
+ */
+export interface PublishedStoreScope {
+    /** 研究根 → 当前工作身份（`ws_…`）；`null` = 还不知道。 */
+    workIdOf?: (researchRoot: string) => string | null;
+    /** 研究根 → 指纹（`project.md` 的 `created_at`）；`null` = 读不到。 */
+    fingerprintOf?: (researchRoot: string) => string | null;
+}
+/**
+ * 这条记录属于**现在住在这个路径上**的研究吗？
+ *
+ * 两个判据各自独立，缺一个就**不拦**（宁可按现状用，也不误伤）：
+ *   - 双方都有身份且不同 → 不是我的；
+ *   - 双方都有指纹且不同 → 不是我的（路径换过住户）。
+ */
+export declare function occupantMatches(record: PublishedRecord, workId: string | null, fingerprint: string | null): boolean;
 /** 组装表键（落盘 / 遍历用）。 */
-export declare function publishedStoreKey(researchRoot: string, direction: ProjectDirection): string;
+/**
+ * 组装表键。
+ *
+ * `scopeKey` 传**工作身份**（`ws_…`，有身份时）或**研究根路径**（还没身份时）——
+ * 优先身份：路径会换住户（用户换进换出多项研究），身份不会。
+ */
+export declare function publishedStoreKey(scopeKey: string, direction: ProjectDirection): string;
 /** 拆表键；不带分隔符的旧键 → 研究根本身 + `SEEK_MENTOR`（旧文件只有这一个方向）。 */
 export declare function parsePublishedStoreKey(key: string): {
     researchRoot: string;
@@ -111,6 +155,11 @@ export interface PublishedStore {
     set(researchRoot: string, record: PublishedRecord): void;
     /** 删一条记录（例如服务器上项目已不存在时）。 */
     remove(researchRoot: string, direction?: ProjectDirection): void;
+    /**
+     * 按项目**原地**更新（键不动）。用于"工作列表核对"回写可见性 ——
+     * 键改成身份之后，不能再靠"解析键得到研究根"再 `set` 回去。
+     */
+    updateByProject(projectId: string, patch: Partial<PublishedRecord>): boolean;
     /** 全部记录（只读快照）；键是 {@link publishedStoreKey} —— 同一个根**可以出现两次**。 */
     all(): Record<string, PublishedRecord>;
     /** 落盘位置（设置页/日志展示用）。 */
@@ -121,12 +170,12 @@ export interface PublishedStore {
  *
  * @param resolvePath 延迟求值（与 Skill 定制同款：设置里改了目录立刻生效）
  */
-export declare function createFilePublishedStore(resolvePath: () => string): PublishedStore;
+export declare function createFilePublishedStore(resolvePath: () => string, scope?: PublishedStoreScope): PublishedStore;
 /**
  * 内存存储（离线验证 / 精简环境）。
  *
  * `seed` 的键可以是**裸研究根**（旧写法，按 `SEEK_MENTOR` 收）或
  * {@link publishedStoreKey} 的完整键；记录自己带的 `direction` 优先。
  */
-export declare function createMemoryPublishedStore(seed?: Record<string, PublishedRecord>): PublishedStore;
+export declare function createMemoryPublishedStore(seed?: Record<string, PublishedRecord>, scope?: PublishedStoreScope): PublishedStore;
 //# sourceMappingURL=published-store.d.ts.map

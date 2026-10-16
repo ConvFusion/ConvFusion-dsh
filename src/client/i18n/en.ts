@@ -254,13 +254,18 @@ export const en = {
   // Progress after the relationship exists. `review_files` counts the **non-owner**
   // side: in direction A that is the mentor's guidance, in direction B the student's
   // delivery — so all four phrasings are needed, not just mentor/student.
-  'community.mentor.progress.studentWaiting': 'Awaiting guidance',
-  'community.mentor.progress.studentGot': 'Mentor has given guidance',
-  'community.mentor.progress.mentorWaiting': 'Guidance pending',
-  'community.mentor.progress.mentorDone': 'Guidance delivered',
+  // Progress after ACCEPTED. ⚠️ Whose actions the wording describes is decided by the
+  // DIRECTION, not by the role: direction A (a work seeking a mentor) is owned by the
+  // student, so the mentor delivers; direction B (a topic recruiting students) is owned
+  // by the mentor, so the student delivers. `review_files` counts the NON-owner side.
+  // Rule: src/client/mentorship-labels.ts (pure, asserted for all four combinations).
+  'community.mentor.progress.awaitingMentor': 'Awaiting guidance',
+  'community.mentor.progress.mentorGuided': 'Mentor has given guidance',
+  'community.mentor.progress.iToGuide': 'Guidance pending',
+  'community.mentor.progress.iGuided': 'Guidance delivered',
   'community.mentor.progress.iToDeliver': 'I still need to deliver',
   'community.mentor.progress.iDelivered': 'I have delivered',
-  'community.mentor.progress.studentToDeliver': 'Waiting for the student to deliver',
+  'community.mentor.progress.awaitingStudent': 'Waiting for the student to deliver',
   'community.mentor.progress.studentDelivered': 'Student has delivered',
   // The watermark is on the **owner** side, so only the party that downloads that side
   // (the non-owner) sees these — hence "the other side", not "the student".

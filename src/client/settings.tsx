@@ -52,6 +52,7 @@ import {
 } from './i18n/index.js'
 import { syncCommandLine } from './sync-command.js'
 import { publishActionPlan, type PublishActionItem } from './publish-actions.js'
+import { acceptedProgressKey } from './mentorship-labels.js'
 
 /* ════════════════════════════════════════════════════════════════════════
  * 跨插件服务的结构化契约（镜像，不 import）
@@ -1619,19 +1620,9 @@ function proposalView(p: HostProposal, myAccountId: string | null): HostProposal
  * 所以同一个数在两个方向下要换一套称呼 —— 而且按"是我传的还是对方传的"分。
  */
 function progressLabelKey(p: HostProposal, view: HostProposalView): string {
-  if (p.status !== 'ACCEPTED') return PROPOSAL_STATUS_KEYS[p.status] ?? p.status
-  const hasDelivered = typeof p.reviewFiles === 'number' && p.reviewFiles > 0
-  // 非 owner 那一侧 = 我 → 文案说"我"；否则说对方
-  if (!view.iAmOwner) {
-    if (p.direction === 'SEEK_STUDENT') {
-      return hasDelivered ? 'community.mentor.progress.iDelivered' : 'community.mentor.progress.iToDeliver'
-    }
-    return hasDelivered ? 'community.mentor.progress.studentGot' : 'community.mentor.progress.studentWaiting'
-  }
-  if (p.direction === 'SEEK_STUDENT') {
-    return hasDelivered ? 'community.mentor.progress.studentDelivered' : 'community.mentor.progress.studentToDeliver'
-  }
-  return hasDelivered ? 'community.mentor.progress.mentorDone' : 'community.mentor.progress.mentorWaiting'
+  // 非 ACCEPTED → 显示状态名（那是另一套文案）；ACCEPTED 之后的规则见纯函数
+  const accepted = acceptedProgressKey(p, view)
+  return accepted ?? PROPOSAL_STATUS_KEYS[p.status] ?? p.status
 }
 
 /**

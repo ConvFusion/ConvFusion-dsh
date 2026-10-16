@@ -262,15 +262,20 @@ export const zh = {
   // 「指导中」只留状态 + 费用数字：描述性文字（指导范围 / 成功条件 / 简介 / 机构）全部去掉
   'community.mentor.feeText': '{total} Token（押金 {deposit} · 成功 {success}）',
   // 关系建立之后的**进展**（提案状态接受后就不再变了，光看它永远是"已接受"）。
-  // `review_files` 数的是**非 owner 那一侧**：方向 A 是导师的指导产物，方向 B 是学生的交付 ——
-  // 所以四个说法都要有，不能只用"导师/学生"这两个词。
-  'community.mentor.progress.studentWaiting': '等待指导意见',
-  'community.mentor.progress.studentGot': '导师已指导',
-  'community.mentor.progress.mentorWaiting': '待我指导',
-  'community.mentor.progress.mentorDone': '我已指导',
+  //
+  // ⚠️ 视角由**方向**决定，不是由角色决定（配反过一次，用户实测抓到）：
+  //   · 方向 A（学生发布工作求指导）→ **学生是 owner**，非 owner 那一侧（导师）交付指导产物；
+  //   · 方向 B（导师出题招学生）    → **导师是 owner**，非 owner 那一侧（学生）交付研究进展。
+  // `review_files` 数的正是**非 owner 那一侧** → owner 侧说"对方"、非 owner 侧说"我"。
+  // 命名取"谁在做这个动作"：`*Guided` = 导师的动作，`*Deliver*` = 学生的动作。
+  // 规则在 src/client/mentorship-labels.ts（纯函数，自检逐一断言四种组合）。
+  'community.mentor.progress.awaitingMentor': '等待指导意见',
+  'community.mentor.progress.mentorGuided': '导师已指导',
+  'community.mentor.progress.iToGuide': '待我指导',
+  'community.mentor.progress.iGuided': '我已指导',
   'community.mentor.progress.iToDeliver': '待我交付',
   'community.mentor.progress.iDelivered': '我已交付',
-  'community.mentor.progress.studentToDeliver': '等待学生交付',
+  'community.mentor.progress.awaitingStudent': '等待学生交付',
   'community.mentor.progress.studentDelivered': '学生已交付',
   // 「对方更新了 → 重新下载」的两态（判据：时间戳变大 / 文件数变，见 sync-watermarks.ts）。
   // 水位记的是 **owner 侧**，所以只有"下载 owner 侧"的一方（= 非 owner）看得到：措辞用"对方"。

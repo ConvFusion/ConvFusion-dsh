@@ -65,6 +65,24 @@ export interface PublishedRecord {
   title?: string
   /** 服务器上的 Research Project id。 */
   projectId: string
+  /**
+   * 这条记录属于**哪一项研究**（`workspace_id`）。
+   *
+   * ⚠️ 为什么必须有：用户会在同一个会话工作区里**换进换出**多项研究
+   * （把当前 `workspace/` 改名、把另一项研究改名成 `workspace/`）。记录键若是路径，
+   * 新占用同一个路径的研究就会**继承**旧研究的这条记录 —— 点【更新研究工作】会把
+   * 新工作的状态写进**旧工作的服务器项目**（覆盖，不可逆）。
+   *
+   * 旧记录没有这个字段 → 无从校验（按现状用），下一次发布/核对时补上。
+   */
+  workId?: string
+  /**
+   * 写下这条记录时研究根的指纹（`project.md` 的 `created_at`）。
+   *
+   * 与 {@link workId} 互补：`workId` 拦"标记不同"，指纹拦"**标记缺失**时路径换了住户"
+   * （新占用者还没发布过 → 没有标记，只有指纹能说明住在这里的不是当初那项研究）。
+   */
+  rootFingerprint?: string
   /** 发布时用的服务器地址（归一后的根地址）。 */
   serverUrl: string
   /** 发布时的账号 id（换账号不重用旧项目）。 */
@@ -110,9 +128,45 @@ export interface PublishedRecord {
  */
 const KEY_SEP = '\u0000'
 
+/**
+ * 记录键的**作用域**：怎么把"研究根"翻成"这是哪一项研究"。
+ *
+ * 注入而不是写死：`published-store` 是纯 JSON 表读写，不认识研究根的布局
+ * （标记文件在哪、`project.md` 长什么样），那两个认识的地方由宿主注入。
+ */
+export interface PublishedStoreScope {
+  /** 研究根 → 当前工作身份（`ws_…`）；`null` = 还不知道。 */
+  workIdOf?: (researchRoot: string) => string | null
+  /** 研究根 → 指纹（`project.md` 的 `created_at`）；`null` = 读不到。 */
+  fingerprintOf?: (researchRoot: string) => string | null
+}
+
+/**
+ * 这条记录属于**现在住在这个路径上**的研究吗？
+ *
+ * 两个判据各自独立，缺一个就**不拦**（宁可按现状用，也不误伤）：
+ *   - 双方都有身份且不同 → 不是我的；
+ *   - 双方都有指纹且不同 → 不是我的（路径换过住户）。
+ */
+export function occupantMatches(
+  record: PublishedRecord,
+  workId: string | null,
+  fingerprint: string | null,
+): boolean {
+  if (record.workId && workId && record.workId !== workId) return false
+  if (record.rootFingerprint && fingerprint && record.rootFingerprint !== fingerprint) return false
+  return true
+}
+
 /** 组装表键（落盘 / 遍历用）。 */
-export function publishedStoreKey(researchRoot: string, direction: ProjectDirection): string {
-  return `${researchRoot}${KEY_SEP}${direction}`
+/**
+ * 组装表键。
+ *
+ * `scopeKey` 传**工作身份**（`ws_…`，有身份时）或**研究根路径**（还没身份时）——
+ * 优先身份：路径会换住户（用户换进换出多项研究），身份不会。
+ */
+export function publishedStoreKey(scopeKey: string, direction: ProjectDirection): string {
+  return `${scopeKey}${KEY_SEP}${direction}`
 }
 
 /** 拆表键；不带分隔符的旧键 → 研究根本身 + `SEEK_MENTOR`（旧文件只有这一个方向）。 */
@@ -132,6 +186,11 @@ export interface PublishedStore {
   set(researchRoot: string, record: PublishedRecord): void
   /** 删一条记录（例如服务器上项目已不存在时）。 */
   remove(researchRoot: string, direction?: ProjectDirection): void
+  /**
+   * 按项目**原地**更新（键不动）。用于"工作列表核对"回写可见性 ——
+   * 键改成身份之后，不能再靠"解析键得到研究根"再 `set` 回去。
+   */
+  updateByProject(projectId: string, patch: Partial<PublishedRecord>): boolean
   /** 全部记录（只读快照）；键是 {@link publishedStoreKey} —— 同一个根**可以出现两次**。 */
   all(): Record<string, PublishedRecord>
   /** 落盘位置（设置页/日志展示用）。 */
@@ -201,7 +260,10 @@ function parseTable(text: string): Record<string, PublishedRecord> {
  *
  * @param resolvePath 延迟求值（与 Skill 定制同款：设置里改了目录立刻生效）
  */
-export function createFilePublishedStore(resolvePath: () => string): PublishedStore {
+export function createFilePublishedStore(
+  resolvePath: () => string,
+  scope: PublishedStoreScope = {},
+): PublishedStore {
   const load = (): Record<string, PublishedRecord> => {
     const path = resolvePath()
     try {
@@ -219,22 +281,80 @@ export function createFilePublishedStore(resolvePath: () => string): PublishedSt
     renameSync(tmp, path)
   }
   return {
-    get: (root, direction = 'SEEK_MENTOR') => load()[publishedStoreKey(root, direction)],
+    ...scopedOps(load, save, scope),
+    all: () => load(),
+    get path() {
+      return resolvePath()
+    },
+  }
+}
+
+/**
+ * 按**作用域**实现 get/set/remove（file 与 memory 两个存储共用同一份逻辑）。
+ *
+ * 读：先按身份找，再按路径找（迁移期的旧记录），两处都过占用者守卫；
+ * 写：按身份落盘（拿不到身份才落路径），并删掉同方向的旧路径键（迁移）；
+ * 删：两个键都清。
+ */
+function scopedOps(
+  load: () => Record<string, PublishedRecord>,
+  save: (table: Record<string, PublishedRecord>) => void,
+  scope: PublishedStoreScope = {},
+): Pick<PublishedStore, 'get' | 'set' | 'remove' | 'updateByProject'> {
+  const idOf = (root: string): string | null => scope.workIdOf?.(root) ?? null
+  const keyOf = (root: string, direction: ProjectDirection): string =>
+    publishedStoreKey(idOf(root) ?? root, direction)
+  return {
+    get: (root, direction = 'SEEK_MENTOR') => {
+      const table = load()
+      const id = idOf(root)
+      const fingerprint = scope.fingerprintOf?.(root) ?? null
+      if (id) {
+        const hit = table[publishedStoreKey(id, direction)]
+        if (hit && occupantMatches(hit, id, fingerprint)) return hit
+      }
+      const legacy = table[publishedStoreKey(root, direction)]
+      return legacy && occupantMatches(legacy, id, fingerprint) ? legacy : undefined
+    },
     set: (root, record) => {
       const table = load()
-      table[publishedStoreKey(root, record.direction)] = record
+      const id = idOf(root)
+      const fingerprint = scope.fingerprintOf?.(root) ?? null
+      const key = keyOf(root, record.direction)
+      table[key] = {
+        ...record,
+        ...(id ? { workId: id } : {}),
+        ...(fingerprint ? { rootFingerprint: fingerprint } : {}),
+      }
+      // 迁移：同方向的旧路径键不再需要（否则身份缺失时它会被误读成"我的记录"）
+      const legacyKey = publishedStoreKey(root, record.direction)
+      if (legacyKey !== key) delete table[legacyKey]
       save(table)
     },
     remove: (root, direction = 'SEEK_MENTOR') => {
       const table = load()
-      const key = publishedStoreKey(root, direction)
-      if (!(key in table)) return
-      delete table[key]
-      save(table)
+      const id = idOf(root)
+      const keys = [publishedStoreKey(root, direction)]
+      if (id) keys.push(publishedStoreKey(id, direction))
+      let hit = false
+      for (const k of keys) {
+        if (k in table) {
+          delete table[k]
+          hit = true
+        }
+      }
+      if (hit) save(table)
     },
-    all: () => load(),
-    get path() {
-      return resolvePath()
+    updateByProject: (projectId, patch) => {
+      const table = load()
+      let hit = false
+      for (const [key, record] of Object.entries(table)) {
+        if (record.projectId !== projectId) continue
+        table[key] = { ...record, ...patch }
+        hit = true
+      }
+      if (hit) save(table)
+      return hit
     },
   }
 }
@@ -245,7 +365,10 @@ export function createFilePublishedStore(resolvePath: () => string): PublishedSt
  * `seed` 的键可以是**裸研究根**（旧写法，按 `SEEK_MENTOR` 收）或
  * {@link publishedStoreKey} 的完整键；记录自己带的 `direction` 优先。
  */
-export function createMemoryPublishedStore(seed: Record<string, PublishedRecord> = {}): PublishedStore {
+export function createMemoryPublishedStore(
+  seed: Record<string, PublishedRecord> = {},
+  scope: PublishedStoreScope = {},
+): PublishedStore {
   const table: Record<string, PublishedRecord> = {}
   for (const [key, record] of Object.entries(seed)) {
     const parsed = parsePublishedStoreKey(key)
@@ -253,13 +376,16 @@ export function createMemoryPublishedStore(seed: Record<string, PublishedRecord>
     table[publishedStoreKey(parsed.researchRoot, direction)] = { ...record, direction }
   }
   return {
-    get: (root, direction = 'SEEK_MENTOR') => table[publishedStoreKey(root, direction)],
-    set: (root, record) => {
-      table[publishedStoreKey(root, record.direction)] = record
-    },
-    remove: (root, direction = 'SEEK_MENTOR') => {
-      delete table[publishedStoreKey(root, direction)]
-    },
+    /*
+     * ⚠️ `load()` 返回的就是这张表本身，`set` / `remove` 已经在上面改完了 →
+     * `save` 必须是**空操作**。第一版写成"清空再赋值"，而传入的对象就是 `table`，
+     * 于是每次写入都把自己清空（整批记录消失，自检当场抓到）。
+     */
+    ...scopedOps(
+      () => table,
+      () => undefined,
+      scope,
+    ),
     all: () => ({ ...table }),
     path: '(memory)',
   }

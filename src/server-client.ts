@@ -396,6 +396,18 @@ export interface ServerRequestOptions {
   fetchImpl?: FetchLike
   /** 超时（毫秒）；缺省 {@link SERVER_TIMEOUT_MS}。 */
   timeoutMs?: number
+  /**
+   * **这项工作在本机的身份** `workspace_id`（`ws_…`）——写请求一律带上，作为 `X-Workspace-Id` 头。
+   *
+   * 为什么：写操作（传状态 / 传附件 / 发布）都只按 `project_id` 定位项目，而本机的
+   * "哪个工作对应哪个项目"是一张**本地映射**；映射一旦指错（用户会在同一个会话工作区里
+   * 换进换出多项研究），写就会落到**别人的项目**上（覆盖，不可逆）。
+   *
+   * 带上身份之后，服务器可以**校验并拒绝**不匹配的写入（见
+   * `dev-notes/v0.6.2-workspace-write-guard-api.md`）。服务器不认识这个头时忽略即可，
+   * 插件行为不变（老服务器照旧工作）。
+   */
+  workspaceId?: string | null
 }
 
 /**
@@ -663,6 +675,8 @@ async function requestJson(
           ...(init.apiKey ? { authorization: `Bearer ${init.apiKey}` } : {}),
           // 幂等键：**同一次业务意图**重试必须复用（402 后充值再试就靠它不重复扣费）
           ...(init.idempotencyKey ? { 'idempotency-key': init.idempotencyKey } : {}),
+          // 这项工作是谁：服务器据此拒绝"往别人的项目里写"（老服务器忽略该头）
+          ...(options.workspaceId ? { 'x-workspace-id': options.workspaceId } : {}),
         },
         ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
         signal: controller.signal,
@@ -1020,7 +1034,7 @@ async function postProjectFiles(
   options: { stateVersion?: number } & ServerRequestOptions,
   timeoutMessage: string,
 ): Promise<UploadedFile[]> {
-  const { stateVersion, fetchImpl: fetchOption, timeoutMs } = options
+  const { stateVersion, fetchImpl: fetchOption, timeoutMs, workspaceId } = options
   const key = requireKey(apiKey)
   const id = (projectId ?? '').trim()
   if (!id) throw new ServerError('bad-request', '缺少 projectId。')
@@ -1057,7 +1071,11 @@ async function postProjectFiles(
       fetchImpl(`${apiBase(base)}/projects/${encodeURIComponent(id)}/files`, {
         method: 'POST',
         // ⚠️ 不设 content-type：multipart 的 boundary 由运行时生成
-        headers: { authorization: `Bearer ${key}` },
+        headers: {
+          authorization: `Bearer ${key}`,
+          // 这项工作是谁：与 JSON 写请求同一个头（服务器据此拒绝"往别人的项目里写"）
+          ...(workspaceId ? { 'x-workspace-id': workspaceId } : {}),
+        },
         body: form,
         signal: controller.signal,
       }),

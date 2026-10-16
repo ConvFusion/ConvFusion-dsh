@@ -1798,36 +1798,35 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
    * "我在哪一侧 + 项目哪个方向"选，不能只用"导师 / 学生"两个词。
    */
   assert(
-    /if \(!view\.iAmOwner\) \{/.test(src) && /if \(view\.iAmOwner\) return true/.test(src),
+    /if \(view\.iAmOwner\) return true/.test(src) && /acceptedProgressKey\(p, view\)/.test(src),
     '文案与下载可用性都按"我在哪一侧"（owner 侧 = 项目所有者）判',
   )
-  assert(
-    /return hasDelivered \? 'community\.mentor\.progress\.studentGot' : 'community\.mentor\.progress\.studentWaiting'/.test(src),
-    '方向 A 非 owner 侧（学生）：等待指导意见 / 导师已指导',
-  )
-  assert(
-    /return hasDelivered \? 'community\.mentor\.progress\.mentorDone' : 'community\.mentor\.progress\.mentorWaiting'/.test(src),
-    '方向 A owner 侧（导师）：我已指导 / 待我指导',
-  )
-  assert(
-    /return hasDelivered \? 'community\.mentor\.progress\.iDelivered' : 'community\.mentor\.progress\.iToDeliver'/.test(src),
-    '方向 B 非 owner 侧（学生）：我已交付 / 待我交付',
-  )
-  assert(
-    /return hasDelivered \? 'community\.mentor\.progress\.studentDelivered' : 'community\.mentor\.progress\.studentToDeliver'/.test(src),
-    '方向 B owner 侧（导师）：学生已交付 / 等待学生交付',
-  )
+  /*
+   * ⚠️ 四组文案的**取值规则**在纯函数 `src/client/mentorship-labels.ts` 里，上面已经
+   * 行为级断言了四种（方向 × 视角）组合 + 文案本身。这里只钉住两件事：
+   *   ① 规则确实由那个纯函数决定（不是又散回 JSX 里）；
+   *   ② 词条用的是**语义化名字**（`*Guided` = 导师的动作、`*Deliver*` = 学生的动作）——
+   *      旧名字（studentGot / mentorDone / studentToDeliver …）编码了错误的心理模型，
+   *      正是"方向 A 两侧配反"那个 bug 的来源，不该再回来。
+   */
+  assert(/from '\.\/mentorship-labels\.js'/.test(src), '进展文案走纯函数模块（可被自检直接断言）')
   for (const k of [
-    'studentWaiting',
-    'studentGot',
-    'mentorWaiting',
-    'mentorDone',
+    'awaitingMentor',
+    'mentorGuided',
+    'iToGuide',
+    'iGuided',
     'iToDeliver',
     'iDelivered',
-    'studentToDeliver',
+    'awaitingStudent',
     'studentDelivered',
   ]) {
     assert(zhDict.includes(`'community.mentor.progress.${k}'`), `进展文案有中文：${k}`)
+  }
+  for (const gone of ['studentGot', 'studentWaiting', 'mentorDone', 'mentorWaiting', 'studentToDeliver']) {
+    assert(
+      !zhDict.includes(`'community.mentor.progress.${gone}'`),
+      `旧的、按角色猜的名字已移除：${gone}`,
+    )
   }
   /*
    * 行首必须同时说出"**哪份工作、和谁**"（2026-10 用户要求）：
@@ -2337,6 +2336,43 @@ async function importClientModule(rel) {
   // 历史数据（旧版本允许一个工作两个方向各发一次）：主按钮一个，另一个进下拉而不是丢掉
   const legacy = planOf(true, ['SEEK_MENTOR', 'SEEK_STUDENT'])
   assertEq(legacy.more.length, 1, '历史双发：另一个方向进下拉（让用户仍有路可走，不静默丢掉）')
+
+  /*
+   * ──【指导中】的进展文案：**视角由方向决定，不是由角色决定** ──────────────
+   *
+   * 用户实测到的 bug：方向 A（学生发布工作）下两侧配反了 —— 学生看到「我已指导」
+   * （导师的第一人称），导师看到「导师已指导」（给学生的第三人称）。
+   * 这里把四种（方向 × 视角）组合**逐一**钉住，并连**文案**一起断言
+   * （只断言 key 的话，把两个 key 的文案对调也能过）。
+   */
+  {
+    const { acceptedProgressKey } = await importClientModule('mentorship-labels.ts')
+    const keyOf = (direction, iAmOwner, reviewFiles) =>
+      acceptedProgressKey({ status: 'ACCEPTED', direction, reviewFiles }, { iAmOwner })
+    // 方向 A：学生是 owner，导师交付
+    assertEq(keyOf('SEEK_MENTOR', true, 3), 'community.mentor.progress.mentorGuided', '方向 A · 学生看已完成：说导师')
+    assertEq(keyOf('SEEK_MENTOR', true, 0), 'community.mentor.progress.awaitingMentor', '方向 A · 学生看未完成：等导师')
+    assertEq(keyOf('SEEK_MENTOR', false, 3), 'community.mentor.progress.iGuided', '方向 A · 导师看已完成：说我')
+    assertEq(keyOf('SEEK_MENTOR', false, 0), 'community.mentor.progress.iToGuide', '方向 A · 导师看未完成：待我')
+    // 方向 B：导师是 owner，学生交付
+    assertEq(keyOf('SEEK_STUDENT', true, 3), 'community.mentor.progress.studentDelivered', '方向 B · 导师看已完成：说学生')
+    assertEq(keyOf('SEEK_STUDENT', true, 0), 'community.mentor.progress.awaitingStudent', '方向 B · 导师看未完成：等学生')
+    assertEq(keyOf('SEEK_STUDENT', false, 3), 'community.mentor.progress.iDelivered', '方向 B · 学生看已完成：说我')
+    assertEq(keyOf('SEEK_STUDENT', false, 0), 'community.mentor.progress.iToDeliver', '方向 B · 学生看未完成：待我')
+    // `reviewFiles` 查不到（null）→ 当"还没交付"（与旧行为一致：不撒谎说已完成）
+    assertEq(keyOf('SEEK_MENTOR', false, null), 'community.mentor.progress.iToGuide', '查不到文件数 → 按"待交付"')
+    // 未 ACCEPTED → 交给状态名（不在本函数里混）
+    assertEq(acceptedProgressKey({ status: 'PROPOSED', direction: 'SEEK_MENTOR' }, { iAmOwner: true }), null, '非 ACCEPTED → 返回 null')
+
+    const zhText = readFileSync(join(PKG, 'src/client/i18n/zh.ts'), 'utf8')
+    const textOf = (key) => new RegExp(`'${key}': '([^']*)'`).exec(zhText)?.[1] ?? ''
+    assertEq(textOf('community.mentor.progress.mentorGuided'), '导师已指导', '学生看到的是「导师已指导」')
+    assertEq(textOf('community.mentor.progress.iGuided'), '我已指导', '导师看到的是「我已指导」')
+    assertEq(textOf('community.mentor.progress.iToGuide'), '待我指导', '导师未交付时是「待我指导」')
+    assertEq(textOf('community.mentor.progress.awaitingMentor'), '等待指导意见', '学生未收到时是「等待指导意见」')
+    assertEq(textOf('community.mentor.progress.studentDelivered'), '学生已交付', '方向 B 导师看到的是「学生已交付」')
+    assertEq(textOf('community.mentor.progress.iDelivered'), '我已交付', '方向 B 学生看到的是「我已交付」')
+  }
   assert(!/republishMentor|republishStudent/.test(src), '两个方向各自的"更新"文案已从源码移除')
   assert(!/readAsDataURL/.test(src), '不再走 base64（宿主读盘取代了它）')
   // 只查**代码**：注释里还会提到 base64（解释为什么不用它），那不算违规

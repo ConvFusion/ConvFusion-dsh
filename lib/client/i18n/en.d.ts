@@ -220,13 +220,13 @@ export declare const en: {
     readonly 'community.mentor.mentorIs': "Mentor: {name}";
     readonly 'community.mentor.researcherIs': "Student: {name}";
     readonly 'community.mentor.feeText': "{total} Token (deposit {deposit} · success {success})";
-    readonly 'community.mentor.progress.studentWaiting': "Awaiting guidance";
-    readonly 'community.mentor.progress.studentGot': "Mentor has given guidance";
-    readonly 'community.mentor.progress.mentorWaiting': "Guidance pending";
-    readonly 'community.mentor.progress.mentorDone': "Guidance delivered";
+    readonly 'community.mentor.progress.awaitingMentor': "Awaiting guidance";
+    readonly 'community.mentor.progress.mentorGuided': "Mentor has given guidance";
+    readonly 'community.mentor.progress.iToGuide': "Guidance pending";
+    readonly 'community.mentor.progress.iGuided': "Guidance delivered";
     readonly 'community.mentor.progress.iToDeliver': "I still need to deliver";
     readonly 'community.mentor.progress.iDelivered': "I have delivered";
-    readonly 'community.mentor.progress.studentToDeliver': "Waiting for the student to deliver";
+    readonly 'community.mentor.progress.awaitingStudent': "Waiting for the student to deliver";
     readonly 'community.mentor.progress.studentDelivered': "Student has delivered";
     readonly 'community.mentor.peerNeverDownloaded': "This workspace has not been downloaded yet — download it first.";
     readonly 'community.mentor.peerUpdated': "The other side updated files — re-download.";
