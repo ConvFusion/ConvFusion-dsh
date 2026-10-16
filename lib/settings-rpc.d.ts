@@ -590,6 +590,8 @@ export declare function compareVersions(a: string, b: string): number;
  * |---|---|---|
  * | `state` | `{}` | 整页状态（类别 → Skill → 章节） |
  * | `dependencies/check` | `{}` | 重新探测本地外部依赖（tectonic），供【系统设置】的"重新检查" |
+ * | `retrieval/saveKey` | `{ apiKey }` | 保存 OpenAlex API Key（**宿主侧落盘**，见端点实现里的理由）；回检索状态 |
+ * | `retrieval/clearKey` | `{}` | 清除 OpenAlex API Key（回到"跟随环境变量"）；回检索状态 |
  * | `version/check` | `{}` | 插件更新检查（GitHub Releases `latest`；离线/无 release 时 `latest:null`） |
  * | `customization/save` | `{ skillId, section, text }` | 写入覆盖（空文本 = 清除） |
  * | `customization/reset` | `{ skillId, section }` | 清除一个章节的覆盖 |

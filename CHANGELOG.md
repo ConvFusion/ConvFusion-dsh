@@ -51,6 +51,30 @@
   "测试阶段请联系管理员发放 Token"写在**错误本身**里，界面直接展示 message 也不会漏掉动作。
 - **协议号 27 → 28**（旧宿主会把等级丢掉、把两池读成一个数 → 设置页提示"宿主需重启"）。
 
+### 修复：OpenAlex API Key 保存**静默失败**（"明明设置了却总是未配置"）
+
+用户 2026-10 报告：【设置】-【ConvFusion】-【系统设置】里填了 OpenAlex API Key、看着提示
+「已保存」，徽章却永远是**未配置**。查出来是一条完整的失败链 —— 两层 bug 叠在一起：
+
+- **写入根本没发生**：旧实现由**浏览器**调 `configForm.set('openalexApiKey', …)`。而
+  `dsh-client-ui-settings` 只在**页面来源是 loopback** 时才把写入交给宿主
+  （`persistence = ctx.remote.$host.isLoopback ? "host" : "memory"`），memory 模式下
+  `set()` **不抛错**、只 resolve `false`，**一个字节都不写**。
+- **界面还替它说谎**：那个 `false` 返回值被忽略了 —— 照样弹「已保存」、照样清空输入框，
+  于是用户没有任何线索知道"其实没保存"。本机 profile 里确实没有这个字段（实证）。
+
+修法：**改由宿主落盘** —— 新增端点 `retrieval/saveKey` / `retrieval/clearKey`，走
+`deps.setConfig`（与 `account/login` 保存凭据**同一条路**，本机 profile 里有 serverUrl /
+convfusionProdApiKey 的实证）。同时把界面上的三件事对齐：
+
+- 失败**必须说出来**并**保留输入框里的 Key**（不再谎报已保存）；
+- 成功后用宿主回的那份**刚写完**的状态就地更新徽章，不必再手动刷新整页；
+- 旧宿主没有这两条端点 → `unknown-endpoint` → 提示"宿主侧需重启"。
+- 顺带删掉设置页顶部那个「只读」徽章：它只看浏览器侧设置面能不能写，而本页的写入
+  现在全部走宿主（定制内容走 `customization/*`），留着会与"这一页真的能保存"自相矛盾。
+- 协议号 **28 → 29**；`buildSettingsState` 的 `retrieval` 补上漏传的 `env` 参数
+  （与 `buildAccountState(config, env)` 同口径，否则自检注入的 env 被无视）。
+
 ### 自检
 
 - `verify-settings-page.mjs`：新增 ⑥b（等级定价：条件下拉、等级下拉只在论文类出现、未选等级

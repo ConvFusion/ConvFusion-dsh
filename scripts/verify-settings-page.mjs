@@ -89,13 +89,32 @@ const HOME = mkdtempSync(join(tmpdir(), 'cf-settings-'))
 mkdirSync(join(HOME, 'convfusion'), { recursive: true })
 
 /* ── 夹具：一个「配置可变」的 host 设置面 ───────────────────────────── */
-function makeHost({ file = 'skill-customizations.json', dir = join(HOME, 'convfusion') } = {}) {
+function makeHost({
+  file = 'skill-customizations.json',
+  dir = join(HOME, 'convfusion'),
+  /** true = 这个宿主有可用的设置存储（能落盘配置补丁）—— 见 [1h]。 */
+  writableConfig = false,
+} = {}) {
   let config = { customizationFile: file, customizationDir: dir }
+  const writes = []
   const store = CUST.createFileCustomizationStore(() => CFG.resolveCustomizationPath(config))
-  const handler = RPC.createSettingsRpcHandler({ getConfig: () => config, store })
+  const handler = RPC.createSettingsRpcHandler({
+    getConfig: () => config,
+    store,
+    ...(writableConfig
+      ? {
+          setConfig: async (patch) => {
+            writes.push(patch)
+            // 真实实现里这次写入**立刻**生效（落盘后 `getConfig()` 就看得见）
+            config = { ...config, ...patch }
+          },
+        }
+      : {}),
+  })
   return {
     handler,
     store,
+    writes,
     get config() {
       return config
     },
@@ -279,7 +298,14 @@ console.log('\n[1d] 定制文件不出现在界面上')
   assert(!src.includes('尚未创建'), '不再显示"尚未创建"这类内部状态')
   // 界面**可以**写 OpenAlex Key（Tab 3），但绝不能再写定制文件相关字段
   assert(!/scope\.set\(\s*['"]customization/.test(src), '界面不往 scope 写 customization* 字段')
-  assert(!/scope\.set\(\s*['"]openalexApiKey/.test(src) === false, 'Tab 3 用 scope 写 OpenAlex Key')
+  /*
+   * ⚠️ 2026-10：Tab 3 的 Key **不许**再走 `scope.set('openalexApiKey', …)`。
+   * 那条路在非 loopback 页面上是静默 no-op（`configForm.set()` resolve `false` 且不写盘），
+   * 而返回值当时被忽略 → 界面谎报「已保存」，用户看到的是"设置了却总是未配置"。
+   * 现在走宿主的 `retrieval/saveKey` / `retrieval/clearKey`（见 [1h] 的端点断言）。
+   */
+  assert(!/scope\.set\(\s*['"]openalexApiKey/.test(src), 'Tab 3 **不再**用 scope 写 OpenAlex Key（会静默失败）')
+  assert(/retrieval\/saveKey/.test(src) && /retrieval\/clearKey/.test(src), 'Tab 3 的保存 / 清除走宿主端点')
 
   // 但底层配置仍然存在（文件仍可经设置文档 / profile patch 调整）
   const cfg = readFileSync(join(PKG, 'src', 'config.ts'), 'utf8')
@@ -771,6 +797,72 @@ console.log('\n[1f] OpenAlex Key 的存储与暴露面')
   assertEq(depRes.ok, true, 'dependencies/check 端点可用')
   assertEq(typeof depRes.value.tectonic.available, 'boolean', '端点返回 tectonic 状态')
   assert(!('categories' in depRes.value), '端点只返回依赖报告（不重算整页状态）')
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 1h. OpenAlex Key 的**写入**必须走宿主（2026-10 用户实测 Bug 的回归锁）
+ *
+ * 故障现象：「明明设置了 OpenAlex API Key，却总是显示未配置」。
+ * 根因：旧实现由**浏览器**写 `configForm.set('openalexApiKey', …)`，而
+ * `dsh-client-ui-settings` 只在**页面来源是 loopback** 时才把写入交给宿主：
+ *
+ * ```js
+ * const persistence = ctx.remote.$host.isLoopback ? "host" : "memory"
+ * enqueue(op) { if (this.persistence === "memory") return Promise.resolve(false) }   // ← 静默 no-op
+ * ```
+ *
+ * 而那个返回值当时被忽略了：界面照样说「已保存」、清空输入框，一个字节都没写。
+ * 现在两条端点都由宿主落盘（与 `account/login` 保存凭据同一条路，本机 profile 有实证），
+ * 所以这里钉四件事：① 写入真的落到配置；② 回的是**刚写完**的状态；
+ * ③ 空 Key 本地拒绝、设置存储不可用时明确报错（绝不静默）；④ 返回值里没有密钥。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[1h] OpenAlex Key 由宿主落盘（retrieval/saveKey / clearKey）')
+{
+  const secret = 'sk-openalex-regression-value'
+
+  // ① 保存 → 真的写进配置，并回"已配置"
+  const h = makeHost({ writableConfig: true })
+  const saved = await h.handler('retrieval/saveKey', { apiKey: secret })
+  assertEq(saved.ok, true, 'retrieval/saveKey 成功')
+  assertEq(h.config.openalexApiKey, secret, '密钥真的落进配置（不是只回一句"已保存"）')
+  assertEq(h.writes.length, 1, '只写一次设置存储')
+  assertEq(saved.value.retrieval.configured, true, '回的是**刚写完**的状态：已配置')
+  assertEq(saved.value.retrieval.source, 'settings', '来源 = settings')
+  assertEq(saved.value.retrieval.envVar, 'OPENALEX_API_KEY', '带上环境变量名（界面提示要用）')
+  assert(!JSON.stringify(saved.value).includes(secret), '返回值里**没有**密钥明文')
+  // 整页状态也跟着变（徽章不必等下一次手动刷新）
+  assertEq((await h.handler('state', {})).value.retrieval.configured, true, 'state 随之报告已配置')
+
+  // ② 清除 → 回到"未配置"（配置里是空串，不是删字段）
+  const cleared = await h.handler('retrieval/clearKey', {})
+  assertEq(cleared.ok, true, 'retrieval/clearKey 成功')
+  assertEq(h.config.openalexApiKey, '', '密钥被清空')
+  assertEq(cleared.value.retrieval.configured, false, '回的状态是未配置')
+
+  // ③ 空 Key 本地拒绝（不必跑一趟宿主设置存储）
+  const empty = makeHost({ writableConfig: true })
+  assertEq((await empty.handler('retrieval/saveKey', { apiKey: '   ' })).error.code, 'bad-request', '空 Key → bad-request')
+  assertEq(empty.writes.length, 0, '空 Key 不写设置存储')
+
+  // ④ 设置存储不可用 → **明确报错**（"看着保存成功、重启后没了"是最坏的形态）
+  const readOnly = makeHost()
+  assertEq(
+    (await readOnly.handler('retrieval/saveKey', { apiKey: secret })).error.code,
+    'storage-unavailable',
+    '没有设置存储 → storage-unavailable（不装作保存成功）',
+  )
+
+  // ⑤ 环境变量回退仍然有效：清除设置里的 Key 之后，环境变量里的那份说了算
+  const envHost = makeHost({ writableConfig: true })
+  await envHost.handler('retrieval/clearKey', {})
+  const envState = RPC.buildSettingsState(
+    { customizationFile: 'x.json', customizationDir: '/tmp', openalexApiKey: '' },
+    CUST.createMemoryCustomizationStore(),
+    undefined,
+    undefined,
+    { OPENALEX_API_KEY: 'from-env' },
+  )
+  assertEq(envState.retrieval.source, 'env', '设置里没有 → 回退到环境变量（source=env）')
 }
 
 /* ════════════════════════════════════════════════════════════════════════

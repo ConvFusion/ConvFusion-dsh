@@ -186,8 +186,15 @@
  *     条件（`PAPER_ACCEPTED` / `PAPER_PUBLISHED`）**必须**带等级（服务器缺等级直接 400
  *     `INVALID_PROPOSAL`）—— 旧宿主会把这个字段丢掉，于是论文类提案一律发不出去。
  *   故照旧升号，让设置页把"宿主需重启"说出来。
+ *
+ * - `29`：新增 **`retrieval/saveKey`** / **`retrieval/clearKey`**（OpenAlex API Key 改由
+ *   **宿主**落盘）。起因是一个实测故障：浏览器那侧的 `configForm.set()` 在**非 loopback
+ *   页面**上会静默变成 no-op（`dsh-client-ui-settings` 的 `persistence = isLoopback ?
+ *   'host' : 'memory'`），而旧界面忽略它的布尔返回值、照样说「已保存」——
+ *   表现为"明明设置了 OpenAlex API Key，却总是显示未配置"。旧宿主没有这两个端点
+ *   → `unknown-endpoint`，界面提示"宿主需重启"（不升号的话，用户只会看到又一次失败）。
  */
-export const HOST_PROTOCOL = 28
+export const HOST_PROTOCOL = 29
 
 /** 状态响应里的协议字段名（两边共用，避免拼错）。 */
 export const HOST_PROTOCOL_FIELD = 'protocol'

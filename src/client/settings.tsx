@@ -959,20 +959,17 @@ export function ConvFusionProjectSettings({
   const [saving, setSaving] = React.useState(false)
   const [notice, setNotice] = React.useState<{ tone: 'success' | 'error'; text: string } | null>(null)
 
-  // settings scope 只用来判断"这个环境能不能持久化设置"（非 loopback 时为 memory），
-  // 用来显示一个只读徽章；定制文件本身的路径不在界面上出现。
-  const scopeSnap = React.useSyncExternalStore(
-    (cb) => scope.subscribe(cb),
-    () => scope.getSnapshot(),
-    () => scope.getSnapshot(),
-  )
-
   // ── 定制文件的落盘位置对用户不可见 ──────────────────────────────────
   //
   // 「用户定制保存为文件、设置文档只记文件名」是**内部实现**：它保证 settings.yaml
   // 不会因定制内容变多而膨胀。用户不需要知道文件名，更不该看到"尚未创建"这种状态
   // —— 那只是"还没定制过"而已。因此这里不做任何 UI 暴露，也**不读取** scope 值。
   // 路径仍由 `src/config.ts` 管理（可通过 profile patch / 设置文档调整）。
+  //
+  // ⚠️ 2026-10：**这一页的所有写入都不走 `scope` 了**（检索凭据改走宿主的
+  // `retrieval/*`，定制内容本来就走 `customization/*`）。原来那个"浏览器侧设置面不可写"
+  // 的**只读徽章**因此删掉了 —— 它会与本页现在真的能保存的事实自相矛盾。
+  // `scope` 仍由装配层注入（`index.tsx`），只是这一页不再读它。
 
   /**
    * 调一个端点并把结果落到组件状态。
@@ -1054,6 +1051,41 @@ export function ConvFusionProjectSettings({
       alive = false
     }
   }, [reload])
+
+  /**
+   * 保存 / 清除 OpenAlex 检索凭据 —— **走宿主**（`retrieval/saveKey` / `clearKey`）。
+   *
+   * ⚠️ 别再改回浏览器侧的 `scope.set('openalexApiKey', …)`：那条路在非 loopback 页面上
+   * 是**静默 no-op**（`configForm.set()` resolve `false` 且一个字节都不写），而它的返回值
+   * 一被忽略，界面就会谎报「已保存」—— 2026-10 用户实测报告的那个 Bug
+   * （"明明设置了 OpenAlex API Key，却总是显示未配置"）就是这么来的。
+   *
+   * 这里返回一个**可显示的错误**（`null` = 成功），由调用方决定要不要清空输入框：
+   * 失败时**必须保留**用户粘贴的内容，否则他得再找一次 Key。
+   */
+  const writeRetrievalKey = React.useCallback(
+    async (endpoint: 'retrieval/saveKey' | 'retrieval/clearKey', payload: unknown): Promise<string | null> => {
+      try {
+        // ⚠️ 直接走 `send`，不用上面的 `call`：那个辅助函数把**任何**响应都当成整页状态
+        // `setState`（它只为 `state` 而写）。这两条端点回的是检索状态那一小块。
+        const res = await send(endpoint, payload)
+        if (!res || res.ok !== true) {
+          // 旧宿主没有这两条端点 → 说清"需重启"，而不是让用户再试一次同样的失败
+          return res?.error?.code === 'unknown-endpoint'
+            ? t('community.error.hostRestart')
+            : (res?.error?.message ?? t('community.error.unknown'))
+        }
+        // 宿主回的检索状态是**刚写完**的那一份，直接落进页面状态 —— 徽章立刻变"已配置"，
+        // 不必等下一次整页读（旧实现里徽章永远停在旧值，这正是"总是未配置"的另一半原因）。
+        const next = (res.value as { retrieval?: HostState['retrieval'] } | undefined)?.retrieval
+        if (next) setState((prev) => (prev ? { ...prev, retrieval: next } : prev))
+        return null
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e)
+      }
+    },
+    [send, t],
+  )
 
   /**
    * 更新检查：**尽力而为**。GitHub 不可达 / 尚无 release / 已是最新 → 静默（不显示）。
@@ -1211,7 +1243,6 @@ export function ConvFusionProjectSettings({
           ) : (
             <Badge tone="neutral">{t('settings.badge.systemDefaults')}</Badge>
           )}
-          {scopeSnap.status === 'unavailable' ? <Badge tone="warn">{t('settings.badge.readOnly')}</Badge> : null}
         </div>
       </div>
 
@@ -1296,7 +1327,8 @@ export function ConvFusionProjectSettings({
           envVar={state?.retrieval.envVar ?? 'OPENALEX_API_KEY'}
           tectonic={state?.dependencies?.tectonic ?? null}
           onRecheck={recheckDependencies}
-          scope={scope}
+          onSaveKey={(key) => writeRetrievalKey('retrieval/saveKey', { apiKey: key })}
+          onClearKey={() => writeRetrievalKey('retrieval/clearKey', {})}
           onNotice={setNotice}
           t={t}
         />
@@ -8034,7 +8066,8 @@ function SystemTab({
   envVar,
   tectonic,
   onRecheck,
-  scope,
+  onSaveKey,
+  onClearKey,
   onNotice,
   t,
 }: {
@@ -8043,7 +8076,15 @@ function SystemTab({
   envVar: string
   tectonic: HostDependency | null
   onRecheck: () => Promise<HostDependency | null>
-  scope: SettingsScopeLike
+  /**
+   * 保存 / 清除 OpenAlex Key。
+   *
+   * ⚠️ 这两件事**必须由宿主落盘**（`retrieval/saveKey` / `clearKey`）：
+   * 浏览器侧的 `configForm.set()` 在非 loopback 页面上是静默 no-op（见父组件里
+   * `writeRetrievalKey` 的说明）。返回 `null` = 成功，否则是**给人看**的失败原因。
+   */
+  onSaveKey: (key: string) => Promise<string | null>
+  onClearKey: () => Promise<string | null>
   onNotice: (n: { tone: 'success' | 'error'; text: string } | null) => void
   t: Translate
 }): JSX.Element {
@@ -8060,14 +8101,14 @@ function SystemTab({
     if (!draft.trim()) return
     setBusy(true)
     try {
-      await scope.set('openalexApiKey', draft.trim())
-      setDraft('') // 明文不留在界面状态里
+      const failure = await onSaveKey(draft.trim())
+      if (failure !== null) {
+        // **失败就把内容留在输入框里**：清空等于把用户刚粘的 Key 扔了，还得再找一次
+        onNotice({ tone: 'error', text: t('system.retrieval.saveFailed', { detail: failure }) })
+        return
+      }
+      setDraft('') // 成功才清（明文不留在界面状态里）
       onNotice({ tone: 'success', text: t('system.retrieval.saved') })
-    } catch (e) {
-      onNotice({
-        tone: 'error',
-        text: t('system.retrieval.saveFailed', { detail: e instanceof Error ? e.message : String(e) }),
-      })
     } finally {
       setBusy(false)
     }
@@ -8076,14 +8117,13 @@ function SystemTab({
   const clear = async (): Promise<void> => {
     setBusy(true)
     try {
-      await scope.unset('openalexApiKey')
+      const failure = await onClearKey()
+      if (failure !== null) {
+        onNotice({ tone: 'error', text: t('system.retrieval.clearFailed', { detail: failure }) })
+        return
+      }
       setDraft('')
       onNotice({ tone: 'success', text: t('system.retrieval.cleared') })
-    } catch (e) {
-      onNotice({
-        tone: 'error',
-        text: t('system.retrieval.clearFailed', { detail: e instanceof Error ? e.message : String(e) }),
-      })
     } finally {
       setBusy(false)
     }

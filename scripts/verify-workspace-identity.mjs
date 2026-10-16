@@ -411,7 +411,7 @@ const registryOf = (dirs) => async () => ({
   // ⚠️ 这里**故意**钉死当前协议号：它是"v23 那批字段存在"的直接证据。
   // 升协议号时必须同步改这一行（v0.6.0 出题模式 → 24；v0.6.3 论文等级定价 + Token 分池 → 28），
   // 否则会以假红提醒你回来确认。
-  assertEq(s1.value.protocol, 28, '协议已升到 28（论文等级定价 + Token 分池）')
+  assertEq(s1.value.protocol, 29, '协议已升到 29（retrieval/saveKey：OpenAlex Key 改由宿主落盘）')
 
   // ② 同一项研究 → same，且**下载成功后**才写身份
   const same = makeWorkspace('v-same', { research: true, marker: WS_A })
@@ -629,7 +629,7 @@ section('[6] 静态边界：插件不拦、只填不发送、标记不进上传'
   }
 
   // ⑥ 协议号与历史
-  assertEq(PROTO.HOST_PROTOCOL, 28, 'HOST_PROTOCOL = 28（论文等级定价 + Token 分池）')
+  assertEq(PROTO.HOST_PROTOCOL, 29, 'HOST_PROTOCOL = 29（retrieval/saveKey / clearKey）')
   assert(readFileSync(join(PKG, 'src', 'protocol.ts'), 'utf8').includes('**【下载】先校验目标工作区**'), 'protocol.ts 写了 23 的理由')
 }
 
