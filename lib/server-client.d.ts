@@ -709,6 +709,22 @@ export declare function updateProject(base: string, apiKey: string, projectId: s
     title?: string;
 }, options?: ServerRequestOptions): Promise<ServerProject>;
 /** 读一台自己的项目（owner-only；非 owner 或已删除 → 404 `not-found`）。 */
+/**
+ * **我的项目列表**（`GET /projects`，owner-only）。
+ *
+ * 这是【我的】列表的**服务器那一半数据源**（另一半是本机扫描到的研究根）。
+ * 界面按 `workspace_id` 把两半**合并**（2026-10 用户要求）：
+ *
+ * ```text
+ * 本地 + 服务器（同一项研究，work_id 相同） → 一行，显示【更新研究工作】
+ * 只在服务器（本机没打开这项工作）           → 一行（说明"本机当前未打开"）
+ * 只在本机（还没发布）                       → 一行，显示两条发布通道
+ * ```
+ *
+ * 为什么必须从服务器取：本机记录只存在这台机器上 —— 换机器、或本机记录被删之后，
+ * "我之前发布过哪些研究工作"就只剩服务器知道。列表依赖 work_id 而不是文件夹位置。
+ */
+export declare function fetchProjects(base: string, apiKey: string, options?: ServerRequestOptions): Promise<ServerProject[]>;
 export declare function fetchProject(base: string, apiKey: string, projectId: string, options?: ServerRequestOptions): Promise<ServerProject>;
 /** 读当前研究状态的版本号；项目还没有状态时返回 `null`（服务器 404）。 */
 export declare function readStateVersion(base: string, apiKey: string, projectId: string, options?: ServerRequestOptions): Promise<number | null>;

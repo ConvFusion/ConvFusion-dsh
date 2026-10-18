@@ -148,14 +148,28 @@ One call renders one `.pdf`; there is no IR to keep in sync.
 
 | Input | Meaning |
 |---|---|
-| `nodes[]` | boxes in reading order: `label` (bold), `desc` (grey), `role` = normal / accent / reject, and placement — `col`/`row` on the grid, or `lane` + `x` + `width` in lane mode |
+| `nodes[]` | boxes in reading order: `label` (bold), `desc` (grey), `role` = normal / accent / reject, and placement — `col`/`row` on the grid, or `lane` + `x`/`width` in lane mode |
 | `lanes[]` | optional lane containers (`{id, label}`): the lane rectangle and the canvas height are computed from the measured size of their member boxes, so never pass coordinates |
-| `edges[]` | connections with an explicit `route`: `auto` / `v` / `down` / `back` / `over` / `rowgap` / `outer` / `points` |
+| `edges[]` | connections with an explicit `route`: `auto` / `v` / `down` / `back` / `over` / `around` / `lshape` / `leftup` / `left` / `rowgap` / `outer` / `points`. See the return-edge note below — the choice matters and the wrong one is rejected with an error naming a box |
 | `cols` / `rows` | column and row centres as fractions of the inner width / height |
 | `size` | canvas in inches (default `[3.45, 1.9]`, aspect 1.8) |
 | `note` | one grey line under the flow |
+| `columnWidthPt` | the width the figure will be drawn at (252 single column / 516 full width); decides the reported `legible` flag |
 
 A worked swimlane example ships with the plugin at `assets/figures_kit/examples/lanes_feedback.json` — read it before writing your first lane figure.
+
+**Text the default font cannot draw is dropped silently.** The kit renders with DejaVuSans, which has no CJK coverage: Chinese/Japanese/Korean labels disappear from the PDF with **no warning and no tofu box**, leaving blank space in the figure. Match the language of the manuscript (English for an English paper). Check the produced PDF's extracted text, not just `ok: true` — the geometry checks pass either way.
+
+**A lane figure takes `cols` and must NOT take `rows`.** The renderer has two modes, and the presence of `rows` picks between them:
+
+- **mode A (no `rows`) — the lane figure.** Each lane is a row; member boxes get their y from the lane, so give `col` (or `x`/`width`) and omit `row` entirely. Non-member boxes form the bottom belt.
+- **mode B (`rows` present) — a grid figure with lane containers.** All boxes are placed by `cols`/`rows`, and `lanes[]` is only drawn *around* its members. This suits a figure like a central guarded band with boxes on both sides — not a swimlane.
+
+Passing `rows` to a lane figure silently switches it to mode B, so boxes in different lanes that share a `col`/`row` land on the same coordinate; the geometry check then reports *text/box overlap*, which points at the wrong cause. **If a lane figure reports overlapping boxes, first check whether `rows` was passed.** (Triggered for real on 2026-10-16: four failed attempts, and the figure had to be drawn with the other renderer instead.)
+
+**A cross-lane feedback edge needs `around`, not `outer`.** `route: outer` runs along the outside of the *whole lane stack* and returns along the top belt, so an edge from a lower lane back to an upper one crosses the boxes of every lane in between, and the geometry check rejects it by naming the box it hit. To close a loop from a box in one lane back to a box in another, use `route: around` (also `lshape` or `leftup` for same-lane returns): it exits the side, runs outside the lane stack, and re-enters the target lane's side. Verified on 2026-10-16 — `outer` was rejected on a two-lane figure, `around` rendered and passed on the same spec. The outer corridor needs room in the margin (0.30 in was enough for a full-width two-lane figure), otherwise the error is `回边外侧净空不足`.
+
+**Every edge must be horizontal or vertical, and `route: "v"` only works in-column.** `route: "v"` connects box A's bottom to box B's top, but it draws between the two boxes' **centre x** — so if the boxes do not overlap horizontally the result is a **diagonal** that starts and ends exactly on the box borders. That diagonal passes every endpoint-anchored check while looking like the line leaves the box. So: same-row neighbours use the default horizontal connection; a cross-lane trunk is `v` **only** when the two boxes share a column, which usually means reordering one lane (a right-to-left lane reads fine and puts the entry box under its predecessor). Check the produced figure, not just `ok: true`: pick a few segments and confirm Δx = 0 or Δy = 0.
 
 **Keep it wide and short** (aspect ≥ 1.8): the figure is scaled by column width / canvas width, so a wide canvas makes the text unreadable. The result reports `effectiveNodePt` and `legible`; a wide schematic is normally a **full-width** float, and the same figure that fails at one column can pass at two.
 

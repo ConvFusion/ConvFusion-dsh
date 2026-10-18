@@ -99,6 +99,50 @@ def wrap(text: str, max_lines: int = 3, max_chars: int = 26) -> list[str]:
     return lines
 
 
+def _segment_rect_interval(px, py, qx, qy, x0, y0, x1, y1):
+    """Liang–Barsky: the parameter interval [t0,t1] of segment p→q inside the rectangle.
+
+    Returns None when the segment misses the rectangle.  The interval (rather than a boolean) is
+    what makes the caller able to tell "the segment ends at this box" (t0≈0 or t1≈1) from "the
+    segment passes through this box" — the distinction the old 5-point sampling could not make.
+    """
+    if x1 <= x0 or y1 <= y0:
+        return None
+    dx, dy = qx - px, qy - py
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, px - x0), (dx, x1 - px), (-dy, py - y0), (dy, y1 - py)):
+        if abs(p) < 1e-12:
+            if q < 0:
+                return None
+            continue
+        t = q / p
+        if p < 0:
+            if t > t1:
+                return None
+            if t > t0:
+                t0 = t
+        else:
+            if t < t0:
+                return None
+            if t < t1:
+                t1 = t
+    return (t0, t1) if t0 < t1 else None
+
+
+def _segment_crosses_rect(px, py, qx, qy, x0, y0, x1, y1, endpoint_margin: float = 0.02) -> bool:
+    """True when the *middle* of segment p→q runs inside the rectangle.
+
+    An arrow legitimately starts or ends at a box boundary, so the portion of the segment within
+    ``endpoint_margin`` (as a fraction of the segment) of either end is ignored.  Everything that
+    survives that margin is a genuine crossing of a box the edge does not belong to.
+    """
+    iv = _segment_rect_interval(px, py, qx, qy, x0, y0, x1, y1)
+    if iv is None:
+        return False
+    t0, t1 = iv
+    return t0 > endpoint_margin and t1 < 1.0 - endpoint_margin
+
+
 class Sheet:
     """以英寸为数据坐标的画布；提供文字实测与几何断言。"""
 
@@ -272,14 +316,16 @@ class Sheet:
                 continue
             for i in range(len(pts) - 1):
                 (px, py), (qx, qy) = pts[i], pts[i + 1]
-                for t in (0.1, 0.3, 0.5, 0.7, 0.9):
-                    X, Y = px + t * (qx - px), py + t * (qy - py)
-                    for x0, y0, bw, bh, nid in self.boxes:
-                        if nid in ends:
-                            continue
-                        if x0 + 0.02 < X < x0 + bw - 0.02 and y0 + 0.02 < Y < y0 + bh - 0.02:
-                            bad.append(f"连线穿过 {nid}: {ends[0]}→{ends[1]}")
-                            break
+                for x0, y0, bw, bh, nid in self.boxes:
+                    if nid in ends:
+                        continue
+                    # 用**精确线段-矩形求交**，不做采样。此前按 5 个参数点采样，一条斜穿薄框的
+                    # 线段可以整体落在采样点之间而不被发现（实测：4 条横向流程全部用 route="v"
+                    # 画成斜线、斜穿左右邻居，而 ③ 判据"校验通过"）。
+                    if _segment_crosses_rect(px, py, qx, qy, x0 + 0.02, y0 + 0.02,
+                                             x0 + bw - 0.02, y0 + bh - 0.02):
+                        bad.append(f"连线穿过 {nid}: {ends[0]}→{ends[1]} ({px:.2f},{py:.2f})→({qx:.2f},{qy:.2f})")
+                        break
         # ④ 车道名不得压到任何节点框（车道名保留带就是为此存在的）
         m_lab = None
         for (lx0, ly0, lw, lh, lbl), artist, band in zip(self.lanes, self.lane_labels, self.lane_bands):

@@ -126,6 +126,12 @@ section('[2] 两级身份记录：工作区内标记（权威、可移植）+ �
 {
   const root = join(work, 'ws-two-level', 'workspace')
   mkdirSync(root, { recursive: true })
+  // 研究根必须像真的那样有 `project.md`（指纹 = 它的 `created_at`）——
+  // 注册表项现在靠这个指纹核对"这个路径当时住的是哪项研究"
+  writeFileSync(
+    join(root, 'project.md'),
+    '---\ncreated_at: 2026-01-02T03:04:05.000Z\ntopic: 两级身份测试\n---\n\n# 两级身份测试\n',
+  )
 
   // ① 只有标记
   WI.writeWorkMarker(root, { workspaceId: WS_A, projectId: PROJECT_ID, serverUrl: 'http://s', role: 'mentor' })
@@ -138,13 +144,22 @@ section('[2] 两级身份记录：工作区内标记（权威、可移植）+ �
 
   // ② 标记 + 注册表一致
   const store = WI.createMemoryWorkIdentityStore()
-  store.set(root, WI.makeWorkIdentity({ workspaceId: WS_A, projectId: PROJECT_ID, serverUrl: 'http://s', accountId: 'u1', role: 'mentor' }))
+  /*
+   * ⚠️ 注册表项必须带**研究根指纹**（v0.6.2 起）：注册表按**路径**存，而路径会换住户
+   * （用户在同一个会话工作区里换进换出多项研究）。没有指纹的老记录**不采信**
+   * —— 实测：H-MEM 的 id 被贴到了换进来的新研究上，界面显示"已在网络中"。
+   */
+  const FP = WI.researchRootFingerprint(root)
+  assert(Boolean(FP), '测试工作区有指纹（project.md 的 created_at）')
+  const identOf = (workspaceId) =>
+    WI.makeWorkIdentity({ workspaceId, projectId: PROJECT_ID, serverUrl: 'http://s', accountId: 'u1', role: 'mentor', rootFingerprint: FP })
+  store.set(root, identOf(WS_A))
   const both = WI.readLocalIdentity(root, store)
   assertEq(both.workspaceId, WS_A, '两级一致 → 用同一个值')
   assertEq(both.source, 'both', '来源标成 both')
 
   // ③ 两级**冲突** → 判不了（绝不静默取一个：取错就是"把 A 的研究融合进 B 的工作区"）
-  store.set(root, WI.makeWorkIdentity({ workspaceId: WS_B, projectId: PROJECT_ID, serverUrl: 'http://s', accountId: 'u1', role: 'mentor' }))
+  store.set(root, identOf(WS_B))
   const conflicted = WI.readLocalIdentity(root, store)
   assertEq(conflicted.workspaceId, null, '两级矛盾 → workspaceId 归 null（判不了）')
   assertEq(conflicted.conflict, true, '并置 conflict 标记（界面据此说"身份记录冲突"）')

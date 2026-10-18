@@ -227,6 +227,7 @@ export declare const zh: {
     'community.mentor.profileInterests': string;
     'community.mentor.profileExpertise': string;
     'community.mentor.unknownParty': string;
+    'community.hint.detachedWork': string;
     'community.mentor.untitledProject': string;
     'community.mentor.mentorIs': string;
     'community.mentor.researcherIs': string;

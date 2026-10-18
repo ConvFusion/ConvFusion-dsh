@@ -123,8 +123,12 @@ console.log('\n[1] 技能登记 C08P07')
     'C08P01,C08P02,C08P03,C08P04,C08P05,C08P06,C08P07,C08P08,C08P09,C08P10,C08P11,C08P12',
     'C08 编号连续且顺序正确',
   )
-  const v = CODES.validateSkillCodes(docs.map((d) => d.id))
-  assertEq(v.ok, true, '编号表整体校验通过')
+  // 只校验**方法技能**：`validateSkillCodes` 的作用域是研究方法（C01–C09），
+  // 操作类技能（`kind: 'operation'`，如 `sync`）按设计没有编号也没有分类。
+  // 此前这里把全部系统技能喂了进去，`sync` 永远被判成 unmapped，这条断言长期为红。
+  // 与 library.ts / methods-export.ts / skill-customization.ts 的过滤方式一致。
+  const v = CODES.validateSkillCodes(docs.filter((d) => d.kind === 'method').map((d) => d.id))
+  assertEq(v.ok, true, '编号表整体校验通过（仅方法技能）')
   assertEq(v.duplicates.length, 0, '没有重复编号')
 
   // taxonomy：叶子分类已登记，且能由 frontmatter 的 category 反查回来

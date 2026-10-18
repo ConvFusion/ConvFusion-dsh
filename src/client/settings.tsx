@@ -1839,6 +1839,13 @@ interface HostLocalWork {
    * "这是哪一项研究"由它区分，而不是由工作区名区分。
    */
   workId?: string | null
+  /**
+   * **本机当前没有打开**这项研究工作（研究根不在当前会话工作区里），但它在网络上仍属于我。
+   *
+   * 这种行只显示"名字 + work_id + 已在网络中"，**不给发布/更新按钮**（没有文件可传）。
+   * 好处：换进换出研究时，之前发布过的工作依然看得见 —— 列表按 **work_id** 归属。
+   */
+  detached?: boolean
   path: string
   researchRoot: string
   missingDir: boolean
@@ -7778,7 +7785,11 @@ export function CommunityTab({
                         {/*
                           身份 + 路径：**id 在前**（这是"哪一项研究"的判据），路径在后（技术细节）。
                           新建的本机研究还没有 id → 这一行只显示路径（名字就是判据）。
+                          `detached`（本机没打开，但网络上仍是我的）→ 只说明"为什么不能更新"。
                         */}
+                        {w.detached ? (
+                          <div style={S.hint}>{t('community.hint.detachedWork')}</div>
+                        ) : null}
                         <div
                           style={{
                             ...S.mono,
@@ -7790,7 +7801,7 @@ export function CommunityTab({
                           title={w.researchRoot}
                         >
                           {w.workId ? <span>{w.workId}</span> : null}
-                          <span>{w.path}</span>
+                          {w.path ? <span>{w.path}</span> : null}
                         </div>
                       </div>
                       {/*
@@ -7824,7 +7835,7 @@ export function CommunityTab({
                         {w.published.length > 0 ? (
                           <Badge tone="success">{t('community.badge.inNetwork')}</Badge>
                         ) : null}
-                        {(() => {
+                        {w.detached ? null : (() => {
                           const plan = publishActionPlan(
                             canMentor,
                             w.published.map((r) => r.direction),

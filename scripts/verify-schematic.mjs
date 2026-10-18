@@ -202,6 +202,43 @@ const vBad = S.renderSchematic({ spec: { ...laneSpec, name: 'bad_rowgap', outDir
   edges: [{ from: 'g', to: 'd', route: 'rowgap' }] } })
 ok('rowgap 端点不在车道内时被拒', vBad.ok === false, String(vBad.error ?? '').slice(0, 80))
 
+// 模式 A 的回归（2026-10-16）：泳道图**只给 cols、不给 rows** 是唯一正确的写法。
+// 实测事故：调用方为了消除「需要 cols 与 rows」而补上 rows，于是切到模式 B，
+// 不同车道里同一 col/row 的框落在同一坐标上，报出的是"文字重叠/框重叠"——
+// 指向完全错误的方向，连改三次 IR 都没改对，最后换用了另一个渲染器。
+// 这两条断言把「不给 rows 能渲染」和「给了 rows 会得到解释」钉死。
+const laneNoRows = S.renderSchematic({
+  spec: {
+    name: 'verify_lane_no_rows', outDir: out, size: [7.16, 3.2],
+    cols: [0.15, 0.4, 0.65, 0.9],
+    lanes: [{ id: 'a', label: 'lane a' }, { id: 'b', label: 'lane b' }],
+    nodes: [
+      { id: 'a1', lane: 'a', col: 1, label: 'A1' }, { id: 'a2', lane: 'a', col: 2, label: 'A2' },
+      { id: 'b1', lane: 'b', col: 1, label: 'B1' }, { id: 'b2', lane: 'b', col: 2, label: 'B2' },
+    ],
+    edges: [{ from: 'a2', to: 'b1', route: 'rowgap' }],
+  },
+})
+ok('模式 A：泳道图只给 cols（不给 rows）可渲染', laneNoRows.ok === true, laneNoRows.error ?? '')
+ok('模式 A：两条车道都被登记', laneNoRows.stats?.lanes === 2, JSON.stringify(laneNoRows.stats ?? {}))
+
+const laneWithRows = S.renderSchematic({
+  spec: {
+    name: 'verify_lane_with_rows', outDir: out, size: [7.16, 3.2],
+    cols: [0.15, 0.4, 0.65, 0.9], rows: [0.5],
+    lanes: [{ id: 'a', label: 'lane a' }, { id: 'b', label: 'lane b' }],
+    nodes: [
+      { id: 'a1', lane: 'a', col: 1, row: 1, label: 'A1' }, { id: 'a2', lane: 'a', col: 2, row: 1, label: 'A2' },
+      { id: 'b1', lane: 'b', col: 1, row: 1, label: 'B1' }, { id: 'b2', lane: 'b', col: 2, row: 1, label: 'B2' },
+    ],
+    edges: [{ from: 'a2', to: 'b1', route: 'rowgap' }],
+  },
+})
+ok('模式 A 陷阱：泳道图给了 rows 会被拒', laneWithRows.ok === false, String(laneWithRows.error ?? '').slice(0, 80))
+ok('模式 A 陷阱的报错解释真正原因（提到 rows / grid 摆放），不只是一堆框重叠',
+  /rows/.test(String(laneWithRows.error ?? '')) && /grid|摆放/.test(String(laneWithRows.error ?? '')),
+  String(laneWithRows.error ?? '').slice(-160))
+
 // 模式 B：给了 rows 时，框按 grid 摆、lane 只作容器（Paper 2 Fig 1 的结构）
 const modeB = {
   name: 'verify_modeb', outDir: out, size: [7.16, 3.7],

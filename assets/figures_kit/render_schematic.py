@@ -88,6 +88,16 @@ def _grid_positions(spec: dict) -> tuple[dict[int, float], dict[int, float]]:
     cols = grid.get("cols") or spec.get("cols")
     rows = grid.get("rows") or spec.get("rows")
     if not cols or not rows:
+        # 泳道图（lanes[] + 模式 A）只需要 cols：行位置由车道推算，不需要 rows。
+        # 提示里必须说清这一点，否则调用方会为了消除本错误而补上 rows，
+        # 反而把图切到模式 B，得到一堆指向错误的"框重叠"。
+        if spec.get("lanes"):
+            _fail(
+                "泳道图需要 cols（列中心比例数组），但**不要**给 rows："
+                "车道本身决定每行 y，给了 rows 会切到 grid 摆放模式，"
+                "不同车道里同一 col/row 的框会叠在一起。"
+                "每条车道放一行，框用 col 定列即可（或用 x/width 绝对定位）。"
+            )
         _fail("需要 cols 与 rows（列/行中心的比例数组）")
     W, H = float(size[0]), float(size[1])
     ml, mb, mr, mt = (float(v) for v in margin)
@@ -168,6 +178,11 @@ def _lane_layout(spec: dict, s: "Sheet", ninfo: dict, cx: dict) -> dict | None:
     #  · 模式 A（未给 rows）：车道驱动 —— 成员行由车道推、非成员构成底部「带」；
     #  · 模式 B（给了 rows）：grid 驱动 —— 所有框按 cols/rows 摆放，车道只作**容器**画在成员框外面
     #    （Paper 2 Fig 1 那种"中列一块守卫带、左右各有框"的图就是模式 B）。
+    #
+    # 关键分别：**泳道图属于模式 A，不能填 rows**。填了 rows 会把所有框按 grid 摆，
+    # 于是不同车道里同一 col/row 的框落在同一个坐标上，报出的是"文字重叠 / 框重叠"
+    # 这种指错方向的错误。空数组 `rows: []` 仍算模式 A（下面的 `if spec.get("rows")`
+    # 对空列表为假），`_grid_positions` 也已把空 rows 当"未给"处理。
     if spec.get("rows"):
         cx2, cy2 = _grid_positions(spec)
         y: dict[str, float] = {}
@@ -465,7 +480,20 @@ def render(spec: dict) -> dict:
         s.ax.text(float(spec.get("margin", [0.12])[0]), lowest - gap, str(note),
                   ha="left", va="top", fontsize=7.0, color=MUT, zorder=3)
 
-    stats = s.assert_clean(str(spec.get("name", "schematic")))
+    try:
+        stats = s.assert_clean(str(spec.get("name", "schematic")))
+    except AssertionError as e:
+        # 泳道图填了 rows 会切到 grid 摆放模式，导致不同车道里同一 col/row 的框叠在一起。
+        # 报出来的现象是"文字重叠/框重叠"，指向完全错误的方向 —— 直接把真正的原因附上。
+        if spec.get("lanes") and spec.get("rows"):
+            raise AssertionError(
+                f"{e}\n\n"
+                "提示：这张图声明了 lanes[]，同时提供了 rows。二者同时给会让所有框按 "
+                "cols/rows 摆放（grid 模式），车道只当容器 —— 不同车道里同一 col/row 的框"
+                "因此落在同一坐标上。泳道图请**去掉 rows**（只留 cols），"
+                "每条车道放一行，框用 col 定列即可。"
+            ) from e
+        raise
 
     out_dir = Path(str(spec.get("outDir") or ".")).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)

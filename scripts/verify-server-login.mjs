@@ -1845,6 +1845,155 @@ section('[6e] 发布本机研究（work/publish）')
       ...(workIdentity ? { workIdentity } : {}),
     })
 
+  /**
+   * ════════════════════════════════════════════════════════════════════════
+   * 用户的真实用法：**同一个会话工作区里换进换出多项研究**
+   *
+   * 他们把 `workspace/` 改名挪走、把另一项研究挪成 `workspace/`，反复切换。
+   * 所以**路径不能当身份**：身份跟目录走（研究根里的 `.convfusion/work.json`），
+   * 发布记录按 `workspace_id` 存，路径 → 身份的"注册表"只是一层**用指纹核对的缓存**。
+   *
+   * 完整循环：发布 A → 换成 B（A 的记录还在）→ 换回 A。
+   * ════════════════════════════════════════════════════════════════════════
+   */
+  /*
+   * ════════════════════════════════════════════════════════════════════════
+   * 【6k】换进换出：**同一个路径**住不同研究 —— 路径不是身份
+   *
+   * 用户的真实用法：把 `workspace/` 整个目录挪走（改名），把另一项研究挪成
+   * `workspace/`，反复切换。研究根的**路径始终不变**，变的是谁住在里面。
+   *
+   * 完整循环：A 就位并发布 → 挪走 A、换进新研究 B → 挪走 B、把 A 换回来。
+   * 断言三件事：
+   *   ① A 的身份写在 **A 的目录里**（标记跟着目录走）+ 注册表缓存带 A 的指纹；
+   *   ② B 住进同一路径时**不继承** A 的身份与发布记录（缓存指纹不符 → 不采信）；
+   *   ③ A 换回来时立刻认得，仍显示它的发布记录（【更新研究工作】）。
+   * ════════════════════════════════════════════════════════════════════════
+   */
+  section('[6k] 换进换出：同一个路径住不同研究（路径不是身份）')
+  {
+    const WI2 = await import(lib('research/work-identity.js'))
+    const swap = join(HOME3, 'swap')
+    const live = join(swap, 'workspace') // 会话里的研究根：**路径固定**
+    const stashA = join(swap, 'stash-a')
+    const stashB = join(swap, 'stash-b')
+    for (const [d, topic, createdAt] of [
+      ['stash-a', '研究 A：换出去又换回来', '2026-01-01T00:00:00.000Z'],
+      ['stash-b', '研究 B：换进来的新研究', '2026-02-02T00:00:00.000Z'],
+    ]) {
+      fs.mkdirSync(join(swap, d), { recursive: true })
+      fs.writeFileSync(
+        join(swap, d, 'project.md'),
+        `---\ncreated_at: ${createdAt}\ntopic: ${topic}\n---\n\n# ${topic}\n`,
+      )
+      fs.writeFileSync(join(swap, d, 'research-state.md'), `# ${topic}\n\n- Version: v1\n`)
+    }
+
+    const WS_A = 'ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    const identity = WI2.createMemoryWorkIdentityStore()
+    const store = PUB.createMemoryPublishedStore(undefined, {
+      workIdOf: (r) => WI2.readLocalIdentity(r, identity).workspaceId,
+      fingerprintOf: WI2.researchRootFingerprint,
+    })
+    const serverFor = (ws) => {
+      const srv = makePublisher({ returnWorkspaceId: ws })
+      return srv
+    }
+    let srv = serverFor(WS_A)
+    const host = () =>
+      RPC.createSettingsRpcHandler({
+        getConfig: () =>
+          CFG.resolveConfig({
+            customizationFile: 'x.json',
+            customizationDir: HOME3,
+            convfusionApiKey: KEY,
+            serverUrl: 'http://localhost:8000',
+          }),
+        store: CUST.createMemoryCustomizationStore(),
+        listLocalWorkspaces: async () => ({
+          available: true,
+          items: [{ id: 'ws-one', title: '切换中的工作区', path: swap, updatedAt: '' }],
+        }),
+        publishedStore: store,
+        fetchImpl: srv.fetchImpl,
+        workIdentity: identity,
+      })
+    const mineRow = async () => {
+      const res = await host()('work/mine', {})
+      return (res.value?.items ?? []).find((x) => !x.detached)
+    }
+
+    // ① A 就位 → 发布
+    fs.renameSync(stashA, live)
+    const LIVE = fs.realpathSync(live)
+    const fpA = WI2.researchRootFingerprint(LIVE)
+    assert(Boolean(fpA), 'A 的研究根有指纹')
+    const pubA = await host()('work/publish', { id: 'ws-one' })
+    assert(pubA.ok, `A 发布成功${pubA.ok ? '' : `（${pubA.error?.code}）`}`)
+    assertEq(WI2.readWorkMarker(LIVE)?.workspaceId, WS_A, '身份写在 **A 的目录**里（跟着目录走）')
+    assertEq(identity.get(LIVE)?.rootFingerprint, fpA, '注册表缓存带 A 的指纹')
+
+    // ② 挪走 A、换进 B（同一路径、新研究）
+    fs.renameSync(live, stashA)
+    fs.renameSync(stashB, live)
+    const rowB = await mineRow()
+    assertEq(rowB?.workId ?? null, null, 'B 拿不到 A 的身份（注册表指纹不符 → 不采信）')
+    assertEq(rowB?.published.length, 0, 'B 也不继承 A 的发布记录（**路径不是身份**）')
+
+    // ③ 挪走 B、把 A 换回来 → 立刻认得
+    fs.renameSync(live, stashB)
+    fs.renameSync(stashA, live)
+    const rowA = await mineRow()
+    assertEq(rowA?.workId, WS_A, 'A 换回来：身份立刻认得（标记跟着目录）')
+    assertEq(rowA?.published.length, 1, 'A 换回来：仍显示它的发布记录（【更新研究工作】）')
+  }
+
+
+  /*
+   * ── ⑩ 「服务器 + 本机」两个数据源都命中同一个项目 → **只能一行** ────────────
+   *
+   * 用户 2026-10 实测：H-MEM 在【我的】里出现了**两次** —— 带 `ws_…` 的那行来自
+   * 服务器列表，不带 id 的那行来自**本机记录**（旧记录没有 `workId` 字段，map 键是
+   * `project:<id>`，而服务器那条键是 `ws_…`，**按键去重必然重**）。去重必须按 **projectId**。
+   */
+  section('[6l] 两源命中同一项目 → 一行')
+  {
+    const PROJECT = 'proj-two-sources'
+    const WS_ONE = 'ws_dddddddddddddddddddddddddddddddd'
+    const store = PUB.createMemoryPublishedStore()
+    store.set(fs.realpathSync(root), {
+      direction: 'SEEK_STUDENT',
+      projectId: PROJECT,
+      serverUrl: 'http://localhost:8000',
+      accountId: 'acc-1',
+      version: 1,
+      contentHash: 'sha256:x',
+      title: '两源合并的工作',
+      files: {},
+      selection: [],
+    })
+    const server = makePublisher({ returnWorkspaceId: WS_ONE })
+    server.fetchImpl = async (url, init) => {
+      if (String(url).endsWith('/api/v1/projects') && (init?.method ?? 'GET') === 'GET') {
+        return {
+          ok: true, status: 200, headers: { get: () => null },
+          json: async () => [{
+            id: PROJECT, workspace_id: WS_ONE, visibility: 'PUBLISHED',
+            direction: 'SEEK_STUDENT', title: '两源合并的工作', updated_at: '2026-10-15T00:00:00Z',
+          }],
+        }
+      }
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) }
+    }
+    const mine = await makePubHost(server, store)('work/mine', {})
+    const rows = (mine.value?.items ?? []).filter((x) =>
+      x.published.some((r) => r.projectId === PROJECT) || x.id.includes(PROJECT),
+    )
+    assertEq(rows.length, 1, `同一个项目只出现一行（实测 ${rows.length} 行）`)
+    assertEq(rows[0]?.workId, WS_ONE, '合并成的那一行带出 work_id（服务器那一半给的）')
+    assertEq(rows[0]?.detached, true, '本机没打开 → detached（不给更新按钮）')
+  }
+
   // ── 未登录：本地就拒 ──
   {
     const anon = RPC.createSettingsRpcHandler({
@@ -2254,6 +2403,96 @@ section('[6e] 发布本机研究（work/publish）')
 
       fs.rmSync(path.join(K_ROOT, '.convfusion'), { recursive: true, force: true })
     }
+
+    /*
+     * ── ⑨ 用户实测的故障：**新建的研究**占用了旧路径 ───────────────────────
+     *
+     * 旧记录（v0.6.2 之前写的：没有 workId、没有指纹，但有名字与文件指纹）会"贴"到
+     * 现在住在这个路径上的新研究身上 —— 界面显示"已在网络中"，点【更新研究工作】
+     * 就把新研究的状态写进**旧研究的服务器项目**（覆盖，不可逆）。
+     *
+     * 归属判定必须只认**能自证**的记录：文件指纹对得上（同一项研究）或名字未变；
+     * 名字不同且文件都对不上 → 不认（当成"未发布"）。
+     */
+    {
+      const WI = await import(lib('research/work-identity.js'))
+      const K_ROOT = fs.realpathSync(root)
+      fs.rmSync(path.join(K_ROOT, '.convfusion'), { recursive: true, force: true })
+      const legacy = {
+        direction: 'SEEK_MENTOR',
+        projectId: 'srv-project-1',
+        serverUrl: 'http://localhost:8000',
+        accountId: 'acc-1',
+        version: 1,
+        contentHash: 'sha256:x',
+        // 旧研究的名字与文件指纹（都不属于现在这个路径上的研究）
+        title: '旧的研究工作（H-MEM 期刊版）',
+        files: { 'project.md': 'sha256:deadbeef' },
+        selection: ['project.md'],
+      }
+      const WS_NEW = 'ws_cccccccccccccccccccccccccccccccc'
+
+      // ① 列表：不显示"已在网络中"，也不把旧身份盖到新研究上
+      {
+        const store = PUB.createMemoryPublishedStore()
+        store.set(K_ROOT, { ...legacy })
+        const host = makePubHost(makePublisher({ returnWorkspaceId: WS_NEW }), store)
+        const mine = await host('work/mine', {})
+        const item = (mine.value?.items ?? []).find((x) => x.id === 'ws-pub')
+        assertEq(item?.published.length, 0, '路径上换了研究 → 旧记录不算它的（不显示"已在网络中"）')
+        assertEq(item?.workId ?? null, null, '也不会把旧研究的身份盖到新研究上')
+      }
+
+      // ② 发布：不复用旧研究的项目（新建一个），避免写进别人的项目
+      {
+        const store = PUB.createMemoryPublishedStore()
+        store.set(K_ROOT, { ...legacy })
+        const server = makePublisher({ returnWorkspaceId: WS_NEW })
+        const pub = await makePubHost(server, store)('work/publish', { id: 'ws-pub' })
+        assert(pub.ok, '新研究发布成功')
+        assert(
+          server.calls.some((c) => c.method === 'POST' && c.url.endsWith('/api/v1/projects')),
+          '归属不明 → **新建项目**（绝不复用旧研究的 project_id）',
+        )
+      }
+
+      // ④ 已在网络、但本机**没打开**的研究工作 → 列表里仍要出现（detached，无发布按钮）
+      {
+        const store = PUB.createMemoryPublishedStore()
+        // 另一项研究的记录（projectId 不属于当前任何研究根）
+        store.set(K_ROOT, { ...legacy, projectId: 'srv-elsewhere', title: '另一项已在网络的研究' })
+        const host = makePubHost(makePublisher({ returnWorkspaceId: WS_NEW }), store)
+        const mine = await host('work/mine', {})
+        const rows = mine.value?.items ?? []
+        const detached = rows.find((x) => x.detached)
+        assert(Boolean(detached), '本机没打开、但在网络上的研究工作仍出现在列表里')
+        assertEq(detached?.workName, '另一项已在网络的研究', 'detached 行显示记录里的研究工作名')
+        assertEq(detached?.published.length, 1, 'detached 行带出它的发布记录（界面显示"已在网络中"）')
+        assertEq(detached?.researchRoot, '', 'detached 行没有研究根（本机没打开它）')
+        // 同一个项目不会重复出现（已归属当前研究根的记录不再造一行）
+        assertEq(
+          rows.filter((x) => x.published.some((r) => r.projectId === 'srv-elsewhere')).length,
+          1,
+          '同一个项目只出现一次（不重复造 detached 行）',
+        )
+      }
+
+      // ③ 同一项研究改名（文件没变）→ 文件指纹是正面证据 → 认（继续走"改名"路径）
+      {
+        const store = PUB.createMemoryPublishedStore()
+        store.set(K_ROOT, {
+          ...legacy,
+          title: '改名前的工作名',
+          files: {}, // 没有文件证据 → 只能看名字
+        })
+        const host = makePubHost(makePublisher({ returnWorkspaceId: WS_NEW }), store)
+        const mine = await host('work/mine', {})
+        const item = (mine.value?.items ?? []).find((x) => x.id === 'ws-pub')
+        assertEq(item?.published.length, 0, '名字不同且无文件证据 → 不认（保守的一侧）')
+      }
+    }
+
+    fs.rmSync(path.join(root, '.convfusion'), { recursive: true, force: true })
 
   // ── 再点一次：复用同一个项目，上传 v2，**不再建项目** ──
   {
@@ -2885,7 +3124,13 @@ section('[6h] 「已在网络中」以服务器为准')
     })
     const server2 = makeServer6({ project: 'PUBLISHED' })
     const swapped = await makeHost6(server2, other)('work/mine', {})
-    assertEq(server2.calls.length, 0, '记录属于别的服务器 → 不去当前服务器上核对')
+    // 【我的】现在有**服务器那一半数据源**（GET /projects），所以这里不是"零联网"；
+    // 要求的是"**不逐个**拿别的服务器的记录去当前服务器上核对"
+    assertEq(
+      server2.calls.filter((u) => /\/projects\/srv-9$/.test(u)).length,
+      0,
+      '记录属于别的服务器 → 不拿它去当前服务器上核对',
+    )
     /*
      * ⚠️ **用户报的问题**：切到另一台服务器后，【我的】还带着上一台的「已在网络中」。
      * 记录属于别的服务器 = 在**当前**这台服务器上根本没发布过 —— 必须显示成未发布，

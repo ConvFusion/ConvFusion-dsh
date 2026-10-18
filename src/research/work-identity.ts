@@ -62,6 +62,15 @@ export interface WorkIdentity {
   role: 'owner' | 'mentor'
   /** 写入时刻（ISO）。 */
   updatedAt: string
+  /**
+   * 写入这条记录时**研究根的指纹**（`project.md` 的 `created_at`）。
+   *
+   * ⚠️ 注册表按**路径**存，而路径会换住户（用户在同一个会话工作区里换进换出多项研究）。
+   * 指纹是"这个路径当时住的是哪项研究"的凭据：读取时对不上 → **不采信**这条记录
+   * （2026-10 实测：H-MEM 的 id 被贴到换进来的新研究上，界面因此显示"已在网络中"）。
+   * 老记录没有这个字段 → 无从核对 → 也不采信（让发布记录自己的名字/文件证据去判）。
+   */
+  rootFingerprint?: string
 }
 
 /** 注册表（`$DSH_HOME/convfusion/work-identities.json`）。 */
@@ -351,7 +360,16 @@ export function readLocalIdentity(
   store?: Pick<WorkIdentityStore, 'get'> | undefined,
 ): LocalIdentity {
   const marker = readWorkMarker(researchRoot)
-  const registry = normalizeWorkspaceId(store?.get(researchRoot)?.workspaceId)
+  const fingerprint = researchRootFingerprint(researchRoot)
+  const entry = store?.get(researchRoot)
+  /*
+   * 注册表项的**指纹核对**：注册表按路径存、路径会换住户 ——
+   * 只有"写这条记录时的研究根指纹"与当前一致才采信；老记录没有指纹 → 不采信。
+   */
+  const registryTrusted = Boolean(
+    entry && entry.rootFingerprint && fingerprint && entry.rootFingerprint === fingerprint,
+  )
+  const registry = registryTrusted ? normalizeWorkspaceId(entry?.workspaceId) : null
   if (marker && registry) {
     if (marker.workspaceId === registry) {
       return { workspaceId: marker.workspaceId, source: 'both', conflict: false }
@@ -427,6 +445,8 @@ export function makeWorkIdentity(input: {
   accountId: string
   role: 'owner' | 'mentor'
   updatedAt?: string
+  /** 研究根指纹（`project.md` 的 `created_at`）—— 注册表按路径存，靠它认住户。 */
+  rootFingerprint?: string
 }): WorkIdentity {
   return {
     workspaceId: normalizeWorkspaceId(input.workspaceId) ?? input.workspaceId,
@@ -435,5 +455,6 @@ export function makeWorkIdentity(input: {
     accountId: input.accountId,
     role: input.role,
     updatedAt: input.updatedAt || new Date().toISOString(),
+    ...(input.rootFingerprint ? { rootFingerprint: input.rootFingerprint } : {}),
   }
 }

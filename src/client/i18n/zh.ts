@@ -271,6 +271,7 @@ export const zh = {
   'community.mentor.profileInterests': '研究兴趣',
   'community.mentor.profileExpertise': '研究专长',
   'community.mentor.unknownParty': '未知用户',
+  'community.hint.detachedWork': '本机当前未打开这项工作（切回它的研究目录后才能更新）',
   'community.mentor.untitledProject': '未命名项目',
   'community.mentor.mentorIs': '导师：{name}',
   // 方向 B 里要判断/确认的对象是出价的学生

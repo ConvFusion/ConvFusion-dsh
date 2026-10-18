@@ -232,6 +232,7 @@ export declare const dictionaries: {
         'community.mentor.profileInterests': string;
         'community.mentor.profileExpertise': string;
         'community.mentor.unknownParty': string;
+        'community.hint.detachedWork': string;
         'community.mentor.untitledProject': string;
         'community.mentor.mentorIs': string;
         'community.mentor.researcherIs': string;
@@ -899,6 +900,7 @@ export declare const dictionaries: {
         readonly 'community.mentor.profileInterests': "Research interests";
         readonly 'community.mentor.profileExpertise': "Research expertise";
         readonly 'community.mentor.unknownParty': "Unknown user";
+        readonly 'community.hint.detachedWork': "Not open in this workspace right now (switch to its research directory to update)";
         readonly 'community.mentor.untitledProject': "Untitled project";
         readonly 'community.mentor.mentorIs': "Mentor: {name}";
         readonly 'community.mentor.researcherIs': "Student: {name}";

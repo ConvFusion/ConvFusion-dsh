@@ -227,6 +227,7 @@ export declare const en: {
     readonly 'community.mentor.profileInterests': "Research interests";
     readonly 'community.mentor.profileExpertise': "Research expertise";
     readonly 'community.mentor.unknownParty': "Unknown user";
+    readonly 'community.hint.detachedWork': "Not open in this workspace right now (switch to its research directory to update)";
     readonly 'community.mentor.untitledProject': "Untitled project";
     readonly 'community.mentor.mentorIs': "Mentor: {name}";
     readonly 'community.mentor.researcherIs': "Student: {name}";

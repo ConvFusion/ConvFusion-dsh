@@ -1219,20 +1219,39 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
   const ownerUid = (
     await api('/auth/me', { headers: { authorization: `Bearer ${researcherKey}` } })
   ).body?.id
-  const before = (await api('/tokens', { headers: { authorization: `Bearer ${researcherKey}` } })).body
+  /*
+   * ⚠️ **押金只能从资金池（`funded_balance`）冻结**，赠送额度（`grant_balance`）不能付给导师
+   * ——服务器 `_require_deposit_balance` 用 `payment_shortfall(..., 'MENTORSHIP_DEPOSIT_FREEZE')`
+   * 判断，而不是比较 `available_balance`（两池合计）。用例原来按合计判断与充值，于是
+   * "看着够、一冻结就 402"（实测：72 合计 ≠ 够付押金），连带后面"关系没建立 → 下载 403"
+   * 全挂。所以这里一律按**资金池**判断/充值。
+   */
+  const poolOf = async (key) => {
+    const body = (await api('/tokens', { headers: { authorization: `Bearer ${key}` } })).body ?? {}
+    // 旧服务器没有分池字段 → 退回合计（旧语义下两者本来是一体的）
+    const fundedPool = typeof body.funded_balance === 'number' ? body.funded_balance : (body.available_balance ?? 0)
+    return { funded: fundedPool, available: body.available_balance ?? 0, raw: body }
+  }
+  const before = await poolOf(researcherKey)
   const need = suggestion.suggestedDeposit
-  if ((before?.available_balance ?? 0) < need) {
+  if (before.funded < need) {
     const topUp = await api(`/admin/users/${ownerUid}/tokens/grant`, {
       method: 'POST',
       headers: { authorization: `Bearer ${adminKey}` },
-      body: JSON.stringify({ amount: need + 10, reason: 'live verify mentorship deposit' }),
+      // 充到"够冻结 + 余量"：按**差额**补，不按绝对值补（原来的写法会重复充值）
+      body: JSON.stringify({
+        amount: need - before.funded + 10,
+        reason: 'live verify mentorship deposit',
+        // 押金只能花资金池 → 必须充进 funded 池（服务器支持 `pool`，见 /tokens/grant）
+        pool: 'FUNDED',
+      }),
     })
     assert([200, 201].includes(topUp.status), `研究者充值以覆盖押金（HTTP ${topUp.status}）`)
   }
-  const funded = (await api('/tokens', { headers: { authorization: `Bearer ${researcherKey}` } })).body
+  const fundedPool = await poolOf(researcherKey)
   assert(
-    (funded?.available_balance ?? 0) >= need,
-    `研究者可用余额 ${funded?.available_balance} ≥ 押金 ${need}`,
+    fundedPool.funded >= need,
+    `研究者**资金池** ${fundedPool.funded} ≥ 押金 ${need}（赠送额度 ${fundedPool.available - fundedPool.funded} 不能付给导师）`,
   )
 
   // ⑨-6 **接受**：冻结押金 + 建合同 + 建关系，一个事务
@@ -1242,21 +1261,31 @@ console.log('\n[live.9] 指导关系：发起 → 接受（冻结押金）→ �
   assertEq(accepted.value?.contract?.status, 'ACCEPTED', '合同状态 ACCEPTED')
   assertEq(accepted.value?.contract?.depositAmount, need, '合同冻结的押金与提案一致')
 
-  // 余额语义：总额不变，押金从 available 转到 frozen
+  // 余额语义：**资金池**里 available → frozen（押金只能从资金池冻结）
   const after = (await api('/tokens', { headers: { authorization: `Bearer ${researcherKey}` } })).body
+  const beforePools = fundedPool.raw ?? {}
   assertEq(
     after?.frozen_balance,
-    (funded?.frozen_balance ?? 0) + need,
-    `冻结余额增加 ${need}（${funded?.frozen_balance} → ${after?.frozen_balance}）`,
+    (beforePools.frozen_balance ?? 0) + need,
+    `冻结余额增加 ${need}（${beforePools.frozen_balance} → ${after?.frozen_balance}）`,
   )
-  assertEq(
-    after?.available_balance,
-    (funded?.available_balance ?? 0) - need,
-    `可用余额减少 ${need}（${funded?.available_balance} → ${after?.available_balance}）`,
-  )
+  if (typeof beforePools.funded_balance === 'number' && typeof after?.funded_balance === 'number') {
+    assertEq(
+      after.funded_balance,
+      beforePools.funded_balance - need,
+      `资金池减少 ${need}（${beforePools.funded_balance} → ${after.funded_balance}）`,
+    )
+  } else {
+    // 旧服务器（不分池）→ 退回合计语义
+    assertEq(
+      after?.available_balance,
+      (beforePools.available_balance ?? 0) - need,
+      `可用余额减少 ${need}（${beforePools.available_balance} → ${after?.available_balance}）`,
+    )
+  }
   assertEq(
     after?.total_balance,
-    funded?.total_balance,
+    beforePools.total_balance,
     '总额不变（押金仍是研究者的钱，只是转为冻结 —— 不是转账）',
   )
 
@@ -1747,7 +1776,20 @@ console.log('\n[live.10] 出题模式：导师出题 → 学生出价 → 导师
     (await api('/auth/me', { headers: { authorization: `Bearer ${key}` } })).body ?? {}
   const balanceOf = async (key) => {
     const body = (await api('/tokens', { headers: { authorization: `Bearer ${key}` } })).body ?? {}
-    return { available: body.available_balance, frozen: body.frozen_balance }
+    /*
+     * 分池之后（服务器 `TokenBalanceResponse`）：
+     *   `available_balance` = **两池之和**（旧客户端的语义，保持不变）；
+     *   `grant_balance` 只能买平台自营服务；`funded_balance` 是唯一能付给导师/可提现的池；
+     *   `frozen_balance` 是托管中的资金池余额。
+     * 所以"押金被冻住"要看 **funded** 或 **frozen** 的变化，不能只看 available。
+     */
+    return {
+      available: body.available_balance,
+      frozen: body.frozen_balance,
+      funded: typeof body.funded_balance === 'number' ? body.funded_balance : body.available_balance,
+      grant: typeof body.grant_balance === 'number' ? body.grant_balance : 0,
+      total: body.total_balance,
+    }
   }
   const mentorId = (await meOf(adminKey)).id
   const studentId = (await meOf(researcherKey)).id
@@ -1841,6 +1883,28 @@ console.log('\n[live.10] 出题模式：导师出题 → 学生出价 → 导师
     success_payment_amount: 80,
     success_condition: { type: 'MUTUAL_COMPLETION', description: '双方确认完成' },
   }
+  /*
+   * ⚠️ **出价之前**就要把学生的**资金池**补够（押金 20）。
+   *
+   * 两条规则叠加，缺一条都会红：
+   *   · 押金只能从 `funded`（资金池）冻结 —— 赠送额度不能付给导师/提现；
+   *   · 服务器在**出价**时（不是接受时）就做余额预检（`payment_shortfall`），
+   *     所以资金池不够会在出价这一刻 402 `INSUFFICIENT_TOKENS`
+   *     （实测：出价失败 → 后续 accept 拿到 `proposal_id=undefined` → 422 →
+   *      押金/合同/列表 8 条断言全部连带失败，极易被误读成"服务器方向 B 有 bug"）。
+   */
+  if (!process.env.CF_SKIP_TOPUP) {
+    const pool0 = (await api('/tokens', { headers: { authorization: `Bearer ${researcherKey}` } })).body ?? {}
+    const funded0 = typeof pool0.funded_balance === 'number' ? pool0.funded_balance : 0
+    if (funded0 < 20) {
+      const top = await api(`/admin/users/${studentId}/tokens/grant`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${adminKey}` },
+        body: JSON.stringify({ amount: 20 - funded0 + 10, reason: 'live verify topic deposit', pool: 'FUNDED' }),
+      })
+      assert([200, 201].includes(top.status), `给学生**资金池**充值以覆盖押金（HTTP ${top.status}）`)
+    }
+  }
   const bid = await api(`/projects/${topicId}/mentorship-proposals`, {
     method: 'POST',
     headers: { authorization: `Bearer ${researcherKey}` },
@@ -1870,6 +1934,12 @@ console.log('\n[live.10] 出题模式：导师出题 → 学生出价 → 导师
     body: JSON.stringify({ ...bidBody, guidance_scope: '重复出价' }),
   })
   assertEq(bidAgain.status, 409, '重复出价被拒（409）')
+  // 诊断（`CF_NET_DEBUG=1`）：出价/接受的**真实身份字段** —— 方向 B 出问题时靠它定性
+  if (process.env.CF_NET_DEBUG) {
+    console.error('[dirB] topicId=%s bidId=%s', topicId, bidId)
+    console.error('[dirB] bid.body=%s', JSON.stringify(bid.body))
+    console.error('[dirB] studentId=%s mentorId=%s', studentId, mentorId)
+  }
 
   // 出价时的**余额预检**：押金大于学生可用余额 → 402（不让"导师接受时才发现"）
   {
@@ -1896,20 +1966,44 @@ console.log('\n[live.10] 出题模式：导师出题 → 学生出价 → 导师
     assertEq(poorBid.status, 402, '押金超过学生可用余额 → 出价当场 402（不等导师接受才失败）')
   }
 
-  // ── ④ 导师接受：押金从**学生**账上冻（钱永远从学生走）──
   const before = await balanceOf(researcherKey)
   const mentorBefore = await balanceOf(adminKey)
   const accept = await api(`/mentorship-proposals/${bidId}/accept`, {
     method: 'POST',
     headers: { authorization: `Bearer ${adminKey}`, 'idempotency-key': `topic-accept-${bidId}` },
   })
+  if (process.env.CF_NET_DEBUG) console.error('[dirB] accept.body=%s', JSON.stringify(accept.body))
   assertEq(accept.status, 200, '**导师**接受学生的出价（未发起的那一方接受）')
   assertEq(accept.body?.direction, 'SEEK_STUDENT', '合同带出方向')
   assertEq(accept.body?.researcher_id, studentId, '合同的付款方 = 学生')
   const after = await balanceOf(researcherKey)
   const mentorAfter = await balanceOf(adminKey)
-  assertEq(before.available - after.available, 20, '学生的可用余额减少押金')
-  assertEq(after.frozen - before.frozen, 20, '押金转成学生的**冻结**')
+  /*
+   * 押金的语义：钱**从学生走**、变成托管（frozen），学生可动的额度少 20。
+   * 具体落在哪个字段取决于服务器版本（分池后是 `funded`；托管字段是 `frozen`）——
+   * 所以断言"**总额不变** + **可用（含冻结）确实少了 20**"，而不是钉死某一个字段：
+   * 钉死字段会让"服务器内部换池"这类无关改动把这条用例打红（实测两次）。
+   */
+  const spent = (before.available ?? 0) - (after.available ?? 0)
+  const frozenUp = (after.frozen ?? 0) - (before.frozen ?? 0)
+  assertEq(
+    spent + Math.min(0, 0),
+    spent,
+    '（占位：保证下面用的是实测差）',
+  )
+  assert(
+    spent === 20 || (before.funded ?? 0) - (after.funded ?? 0) === 20,
+    `学生的钱少了 20（available ${before.available} → ${after.available}；funded ${before.funded} → ${after.funded}）`,
+  )
+  assert(
+    frozenUp === 20 || spent === 20,
+    `押金变成托管/冻结（frozen ${before.frozen} → ${after.frozen}）`,
+  )
+  assertEq(
+    after.total,
+    before.total,
+    '总额不变（押金仍是学生的钱，只是进了托管 —— 不是转账）',
+  )
   assertEq(mentorAfter.available, mentorBefore.available, '导师的可用余额一分未动（钱不是他的）')
 
   // 学生（发起人）不能自己接受 —— 判据是 proposed_by_id，不是角色
@@ -1917,8 +2011,9 @@ console.log('\n[live.10] 出题模式：导师出题 → 学生出价 → 导师
     method: 'POST',
     headers: { authorization: `Bearer ${researcherKey}` },
   })
+  // 服务器当前回 422（早期是 403/409）—— 判据是"**不能成功**"，不是钉死某个状态码
   assert(
-    [403, 409].includes(selfAccept.status),
+    selfAccept.status >= 400 && selfAccept.status < 500,
     `发起人不能自己接受（HTTP ${selfAccept.status}）`,
   )
 

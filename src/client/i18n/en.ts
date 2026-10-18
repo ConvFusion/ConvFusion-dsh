@@ -263,6 +263,7 @@ export const en = {
   'community.mentor.profileInterests': 'Research interests',
   'community.mentor.profileExpertise': 'Research expertise',
   'community.mentor.unknownParty': 'Unknown user',
+  'community.hint.detachedWork': 'Not open in this workspace right now (switch to its research directory to update)',
   'community.mentor.untitledProject': 'Untitled project',
   'community.mentor.mentorIs': 'Mentor: {name}',
   'community.mentor.researcherIs': 'Student: {name}',

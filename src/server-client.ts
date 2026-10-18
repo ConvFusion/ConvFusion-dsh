@@ -742,7 +742,18 @@ async function requestJson(
     body = undefined
   }
 
-  if (!res.ok) throw mapHttpError(res.status, body)
+  if (!res.ok) {
+    /*
+     * 自检用的诊断（`CF_NET_DEBUG=1` 才输出）：把"哪个请求失败、服务器给了什么码"
+     * 打出来。错误对象里只有映射后的 code+文案，没有路径 —— 排查 403/409 时
+     * 光看文案无法判断是哪一条调用（2026-10 查写守卫/下载权限时踩过）。
+     */
+    if (process.env.CF_NET_DEBUG) {
+      const code = (body as { error?: { code?: unknown } } | undefined)?.error?.code
+      console.error('[net] %s %s → %d %s', init.method, path, res.status, String(code ?? ''))
+    }
+    throw mapHttpError(res.status, body)
+  }
   if (body === undefined) {
     throw new ServerError('bad-response', `${label}：服务器返回的不是 JSON。`)
   }
@@ -1737,6 +1748,45 @@ export async function updateProject(
 }
 
 /** 读一台自己的项目（owner-only；非 owner 或已删除 → 404 `not-found`）。 */
+/**
+ * **我的项目列表**（`GET /projects`，owner-only）。
+ *
+ * 这是【我的】列表的**服务器那一半数据源**（另一半是本机扫描到的研究根）。
+ * 界面按 `workspace_id` 把两半**合并**（2026-10 用户要求）：
+ *
+ * ```text
+ * 本地 + 服务器（同一项研究，work_id 相同） → 一行，显示【更新研究工作】
+ * 只在服务器（本机没打开这项工作）           → 一行（说明"本机当前未打开"）
+ * 只在本机（还没发布）                       → 一行，显示两条发布通道
+ * ```
+ *
+ * 为什么必须从服务器取：本机记录只存在这台机器上 —— 换机器、或本机记录被删之后，
+ * "我之前发布过哪些研究工作"就只剩服务器知道。列表依赖 work_id 而不是文件夹位置。
+ */
+export async function fetchProjects(
+  base: string,
+  apiKey: string,
+  options: ServerRequestOptions = {},
+): Promise<ServerProject[]> {
+  const key = requireKey(apiKey)
+  const body = await requestJson(base, '/projects', { method: 'GET', apiKey: key }, options, '读取我的项目')
+  // 服务器返回**裸数组**；容错一下 `{items: […]}` 的形状（不改语义，只是别整页失败）
+  const list = Array.isArray(body)
+    ? body
+    : Array.isArray((body as { items?: unknown } | undefined)?.items)
+      ? ((body as { items: unknown[] }).items as unknown[])
+      : []
+  const out: ServerProject[] = []
+  for (const raw of list) {
+    try {
+      out.push(parseProject(raw))
+    } catch {
+      /* 单条坏数据不该让整页列表失败 */
+    }
+  }
+  return out
+}
+
 export async function fetchProject(
   base: string,
   apiKey: string,

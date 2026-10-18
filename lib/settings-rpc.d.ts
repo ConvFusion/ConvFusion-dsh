@@ -308,6 +308,14 @@ export interface LocalWorkItem {
         /** 记录属于哪个账号。 */
         accountId: string;
     }>;
+    /**
+     * **本机当前没有打开**这项研究工作（研究根不在当前会话工作区里），但它在网络上仍属于我。
+     *
+     * 界面据此只显示"名字 + work_id + 已在网络中"，**不给发布/更新按钮** ——
+     * 没有文件就没有可上传的内容。这样用户换进换出研究时，之前发布过的工作依然看得见
+     * （列表按 **work_id** 归属，而不是按文件夹在不在）。
+     */
+    detached?: boolean;
 }
 /** 服务器上的账号（`GET /api/v1/auth/me`）。**不含任何凭据。** */
 export interface AccountWire {
