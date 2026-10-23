@@ -1,5 +1,51 @@
 # 版本记录
 
+## v0.6.5
+
+**适配 DSH v0.2.1-rc.2**：确认无破坏性不兼容（类型检查、真实启动、工具/技能/命令注册、
+设置数据通道、客户端 bundle 下发全部实测通过），并处理两处语义/版面适配 —— 会话工作目录
+在 0.2.1 里可变（新 `working_directory` 工具），研究根仍按**会话创建目录**解析，注入提示改给
+绝对路径；研究上下文的 prompt 序号避开 0.2.1 新占用的保留位。另修设置路由在插件重挂载时的
+竞态（路由会永久丢失，直到重启宿主）。
+
+### 适配 DSH v0.2.1-rc.2
+
+- `package.json`：devDeps 全部升到 `0.2.1-rc.2`（`@deepseek-ai/cordis` `^4.0.5`、
+  `@deepseek-ai/schemastery` `^3.18.5`）；新增 `engines.dsh: ">=0.2.0-rc.2 <0.3.0"` ——
+  0.2.1 起兼容性预检**优先按它判断**，不满足的 bundle 会被直接跳过，所以下界放在实测过的
+  0.2.0-rc.2（两个新 prompt 字段在 0.2.0 运行时会被忽略）。
+- **研究根 vs 当前工作目录**：0.2.1 新增 `working_directory` 工具，模型可以 `cd`，而
+  `SessionHeader.cwd` 明确固定为"会话创建目录"。研究根**仍取 `header.cwd`**（`cd` 不移根，
+  否则会把证据/论文写进子目录且不可逆），但 Research Context 的 `Files root` 改为给**绝对路径**
+  + 显式说明"`cd` 不移动研究根"，并保留 `workspace/` 相对写法作对照（旧布局不给错的对照）。
+  决策与理由写在 `src/research/session-workspace.ts` 文件头。
+- **prompt 序号**：`RESEARCH_CONTEXT_ORDER` 200 → **205**。0.2.1 的 `CONTEXT_ORDERS` 把
+  `HARNESS_SOURCE` 放在 200（`dsh-web-app` 默认挂 `harness-dev-context`），同号不报错但顺序
+  变成"看谁先注册"。
+- **prompt 加固**：Research Guide / Context 均加 `interpolate: false`（Harness 默认对段文本做
+  `{{变量}}` 插值，引用未注册变量会直接抛错）；Research Context 另加 `required: true`
+  （部署关掉 `includeRuntimeContext` 时不被一并丢弃）。
+- 注释更正：`src/index.ts` 顶部"外部插件不能持久化自定义 session 事件"已过时 —— 0.2.1 提供了
+  `appendPluginRecord` / `pluginRecordOf`（`plugin:` 命名空间、ignorable，fork/resume 会带上）。
+
+### 修复：设置路由在插件重挂载后永久丢失
+
+DSH 的 `webServer.register()` 同路径会抛 `duplicate … route`，而它的 disposer 是**按路径**
+`delete(path)` 删除的。插件重挂载时若"新实例先注册、旧实例后卸载"，就变成：新实例撞
+duplicate 放弃注册 → 旧实例随后把路径删掉 → **`/dsh-convusion` 路由彻底没有**，表现为
+"研究上下文/工具/技能都正常，但设置页报未认证或读取失败，直到重启宿主"
+（2026-10-23 实测踩到；0.2.0/0.2.1 的 webServer 代码相同，属既有缺口）。
+
+- 注册改为**有上限的退避重试**：撞 duplicate 时每 250 ms 重试（最多 20 次），卸载时清计时器；
+- 新增回归用例 `scripts/verify-plugin-load.mjs` [6]：模拟前两次 register 抛 duplicate →
+  900 ms 内注册成功且只注册一次。
+
+### 说明
+
+- 本次同时提交工作区里此前未提交的改动：科V社区各列表改为**模块级缓存 + 手动 ↻ 刷新**
+  （不再因为 `account` 对象变化而自动重联网）、`figures_kit` 的 desc 换行与回边走线修正、
+  学术写作技能文档补充。
+
 ## v0.6.4
 
 **同一个会话工作区里换进换出多项研究**：【我的】改成**两个数据源合并**（服务器 `GET /projects`

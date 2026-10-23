@@ -28,10 +28,14 @@
  *
  * ## 已知外部约束（影响设计，勿忘）
  *
- * 外部插件**不能**持久化自定义 session 事件类型：`Session.append` 无法设置
- * `ignorable`，而持久化读取路径会拒绝未知类型（会话将不可恢复）。
- * 因此本插件**只使用** Harness 已有的 `user/message`（经 `agent.followup`）与
- * `system/message`（经 system prompt 段）通道；观测状态只留在**内存**。
+ * 外部插件**不能**用 `Session.append` 持久化自定义 session 事件类型：
+ * `append` 无法设置 `ignorable`，而持久化读取路径会拒绝未知类型（会话将不可恢复）。
+ * **DSH 0.2.1 起多了正门**：`appendPluginRecord(session, 'plugin:<own/name>', data)` /
+ * `pluginRecordOf(event)` 可以写**插件自己的**会话记录（`plugin:` 命名空间、ignorable、
+ * 不进模型可见面，fork/resume 会带上）。本插件**目前仍只用** Harness 已有的
+ * `user/message`（经 `agent.followup`）与 `system/message`（经 system prompt 段）通道，
+ * 观测状态只留在**内存**；要不要把运行时观测改成 `appendPluginRecord` 是独立的一次改动
+ * （见 `dev-notes/dsh-0.2.1-rc.2-compat.md` §5）。
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -389,6 +393,10 @@ export function apply(ctx: Context, liveConfig: Partial<LiveConfig> = {}): void 
   // `process.cwd()`（= DSH 服务进程启动目录），于是插件开发仓库的会话会被当成
   // 某个研究项目（2026-09 实测发生）。现在取不到就向会话存储要
   // （`ctx.sessions.get(id).header.cwd`，权威且与会话绑定）。
+  //
+  // ⚠️ **不要**改成读 `ctx.workingDirectory`（DSH 0.2.1 的"当前目录"服务）：本插件的
+  // 研究根按**会话创建目录**解析，模型 `cd` 不移根。理由与后果见
+  // `research/session-workspace.ts` 的文件头。
   ctx.on('agent/pre-step', (payload, next) => {
     const p = payload as unknown as {
       agent?: { id?: unknown; session?: { id?: unknown; header?: { cwd?: string } } }
@@ -657,22 +665,60 @@ export function apply(ctx: Context, liveConfig: Partial<LiveConfig> = {}): void 
 
     // 先注册（可能抛），再把 disposer 交给 effect —— 分两步是为了让"注册失败"
     // 能被 try/catch 抓住并升级成日志，而不是被 effect 吞掉。
+    //
+    // ⚠️ **插件重挂载时的竞态（2026-10-23 实际踩到）**：DSH 的
+    // `webServer.register()` 遇到同路径会**抛 duplicate prefix route**，而它的
+    // disposer 是**按路径** `table.delete(path)` 删除的。于是"新实例先注册、旧实例
+    // 后卸载"的顺序会变成：
+    //
+    //   1. 新实例 register → 抛 duplicate（旧条目还在）→ 我们放弃注册；
+    //   2. 旧实例的 disposer 随后把那条路径删掉 → **路由彻底没了**。
+    //
+    // 症状是"工具/技能/上下文都正常，但设置页报 401/读取失败，直到重启宿主"
+    // （0.2.0 与 0.2.1 的 webServer 代码一致，属既有健壮性缺口，不是升级引入）。
+    // 处理：撞上 duplicate 时**退避重试**（旧条目消失后就能拿到），有上限、可取消。
     let disposeRoute: (() => void) | undefined
-    try {
-      disposeRoute = webServer.register({
-        kind: 'prefix',
-        path: SETTINGS_ROUTE_PREFIX,
-        handler: handler as unknown as (req: unknown, res: unknown) => void | Promise<void>,
-      })
-    } catch (e) {
-      // 静默失败是这里最坏的形态（曾经就是）：宁可吵，也不要"看起来成功了"。
-      ctx.logger?.error(
-        `[convfusion] ${SETTINGS_ROUTE_PREFIX} 路由注册失败：${e instanceof Error ? e.message : String(e)}`,
-      )
-      return
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    let attempts = 0
+    const ROUTE_RETRY_LIMIT = 20
+    const ROUTE_RETRY_MS = 250
+    const registerRoute = (): void => {
+      attempts += 1
+      try {
+        disposeRoute = webServer.register({
+          kind: 'prefix',
+          path: SETTINGS_ROUTE_PREFIX,
+          handler: handler as unknown as (req: unknown, res: unknown) => void | Promise<void>,
+        })
+        ctx.logger?.info(
+          `[convfusion] settings route ready: ${SETTINGS_ROUTE_PREFIX}` +
+            (attempts > 1 ? ` (第 ${attempts} 次尝试)` : ''),
+        )
+        return
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e)
+        const duplicate = /duplicate .*route/i.test(message)
+        if (duplicate && attempts < ROUTE_RETRY_LIMIT) {
+          ctx.logger?.warn(
+            `[convfusion] ${SETTINGS_ROUTE_PREFIX} 被旧实例占用（插件重挂载竞态），` +
+              `${ROUTE_RETRY_MS}ms 后重试（第 ${attempts}/${ROUTE_RETRY_LIMIT} 次）：${message}`,
+          )
+          retryTimer = setTimeout(registerRoute, ROUTE_RETRY_MS)
+          // 计时器不能独自把进程钉住（宿主可能在重挂载中途退出）
+          ;(retryTimer as unknown as { unref?: () => void }).unref?.()
+          return
+        }
+        // 静默失败是这里最坏的形态（曾经就是）：宁可吵，也不要"看起来成功了"。
+        ctx.logger?.error(`[convfusion] ${SETTINGS_ROUTE_PREFIX} 路由注册失败：${message}`)
+      }
     }
-    ctx.logger?.info(`[convfusion] settings route ready: ${SETTINGS_ROUTE_PREFIX}`)
+    registerRoute()
     cctx.effect(() => () => {
+      try {
+        if (retryTimer !== undefined) clearTimeout(retryTimer)
+      } catch {
+        /* 卸载路径必须健壮 */
+      }
       try {
         disposeRoute?.()
       } catch {

@@ -92,6 +92,14 @@ export interface ResearchContext {
    * 旧布局（研究根 = 会话工作区）下为 undefined，路径按原样渲染。
    */
   rootPrefix?: string
+  /**
+   * 研究根目录的**绝对路径**（`resolve(workspace)` 的结果）。
+   *
+   * 为什么要单独带一份：DSH 0.2.1 起模型可以 `cd`（`working_directory` 工具），
+   * 只给 `workspace/` 这种相对写法时，模型会按**新** cwd 去拼路径从而扑空。
+   * 渲染时给绝对根 + "研究根固定在会话创建目录"说明（见 `renderResearchContext`）。
+   */
+  researchRoot?: string
   /** 研究项目（缺失代表还没有 `project.md` —— 走通用助手模式）。 */
   project: ResearchProject | null
   /** 当前激活的论文ID */

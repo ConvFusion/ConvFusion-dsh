@@ -34,12 +34,20 @@ import type { ResearchContext } from './data.js';
 /**
  * 我们的 Prompt Context 排序位。
  *
- * Harness 在 `dsh-system-prompt` 里为若干位置保留了官方 order（如
- * SANDBOX_POLICY=110 / APPROVAL_POLICY=115 / SUBAGENT_DELEGATION=120）。
- * ConvFusion 的科研上下文应在这些**运行时政策之后**、模型真正开始推理之前出现，
- * 因此取 200 —— 不占用官方保留位，也不与它们争夺语义。
+ * Harness 在 `dsh-system-prompt` 里为若干位置保留了官方 order（`CONTEXT_ORDERS`）：
+ *
+ * ```text
+ * WORKING_DIRECTORY=100 · SANDBOX_POLICY=110 · APPROVAL_POLICY=115
+ * SUBAGENT_DELEGATION=120 · TEAM_IDENTITY=125 · HARNESS_SOURCE=200 · WEB_SURFACE=210
+ * ```
+ *
+ * ConvFusion 的科研上下文应在这些**运行时政策之后**、模型真正开始推理之前出现。
+ * ⚠️ **0.2.1 起不要用 200**：`HARNESS_SOURCE`（`dsh-web-app` 默认挂的
+ * `harness-dev-context`）已经占了它。同号不报错，但两者的先后变成"看谁先注册"，
+ * Harness 源码那条指令的位置会随插件加载顺序飘（2026-10 升级 v0.2.1-rc.2 时发现）。
+ * 取 205 —— 落在 HARNESS_SOURCE(200) 与 WEB_SURFACE(210) 之间，不占用任何保留位。
  */
-export declare const RESEARCH_CONTEXT_ORDER = 200;
+export declare const RESEARCH_CONTEXT_ORDER = 205;
 /**
  * 稳定指令段的排序位。
  *

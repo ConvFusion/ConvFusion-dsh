@@ -60,7 +60,7 @@ const withProfileEntry = (ctx, config) => {
  * 失败，而不是在插件缺陷上失败。同时，真实 Context 会真正执行 `inject` 约束 ——
  * 这正是本次缺陷（访问未 inject 的服务）能被抓到的前提。
  */
-async function buildRoot({ provided, cwd } = {}) {
+async function buildRoot({ provided, cwd, registerFailures = 0 } = {}) {
   // cordis 装在插件包的 node_modules 里，脚本从工作区根运行 —— 按包路径解析
   const { createRequire } = await import('node:module')
   const req = createRequire(join(PKG, 'package.json'))
@@ -126,8 +126,15 @@ async function buildRoot({ provided, cwd } = {}) {
       // 设置面的数据通道是**自己的 webServer 前缀路由**（不是 Connection RPC：
       // 后者对外部插件在这版 DSH 上不可用，见 settings-rpc.ts 文件头）
       if (has('webServer')) {
+        // 模拟"旧实例的 /dsh-convusion 前缀路由还没卸载"：前 N 次 register 抛 duplicate，
+        // 与真实 webServer 的行为一致（`webserver: duplicate prefix route "<path>"`）。
+        let failuresLeft = registerFailures
         c.provide('webServer', {
           register: (route) => {
+            if (failuresLeft > 0) {
+              failuresLeft -= 1
+              throw new Error(`webserver: duplicate prefix route "${route.path}"`)
+            }
             recorded.webRoutes.push(route.path)
             recorded.webRouteHandler = route.handler
             return () => {}
@@ -457,6 +464,26 @@ console.log('\n[5] 配置（设置里只有文件名）')
   store.set('patent-drafting', 'Research Method', 'my method')
   assert(store.load()['patent-drafting']['Research Method'] === 'my method', '定制可写入配置指定的文件')
   assert(store.description.includes(join(cfgPath, 'my.json')), 'store 指向配置指定的文件')
+}
+
+/* ── 6. 设置路由：撞上 duplicate（插件重挂载竞态）→ 退避重试 ───────── */
+// 2026-10-23 实测故障：DSH 的 webServer.register 同路径会抛 duplicate，而它的
+// disposer 是**按路径**删除。插件重挂载时若"新实例先注册、旧实例后卸载"，就会
+// 注册失败 + 旧条目被删 → 设置页 401，直到重启宿主。这里锁定退避重试的行为。
+console.log('\n[6] webServer 撞上 duplicate（插件重挂载竞态）→ 退避重试后注册成功')
+{
+  const { root, recorded } = await buildRoot({ registerFailures: 2 })
+  let err = null
+  try {
+    await root.plugin({ name: 'dsh-convfusion', apply: withProfileEntry, inject: PLUGIN.inject })
+  } catch (e) {
+    err = e
+  }
+  assert(err === null, 'duplicate 时装配不抛错（注册失败不升级成加载失败）')
+  assertEq(recorded.webRoutes.length, 0, '首次 register 抛 duplicate → 暂未登记路由')
+  await new Promise((r) => setTimeout(r, 900))
+  assertEq(recorded.webRoutes.length, 1, '退避重试后路由注册成功（且只注册一次）')
+  assertEq(recorded.webRoutes[0], '/dsh-convfusion', '注册的是设置数据通道前缀')
 }
 
 rmSync(ws, { recursive: true, force: true })

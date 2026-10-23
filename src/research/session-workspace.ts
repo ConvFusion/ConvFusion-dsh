@@ -17,6 +17,27 @@
  *
  * `SessionHeader.cwd` 的定义就是 *"Absolute working directory the session was created in"*，
  * 由会话存储填写，不受插件进程启动目录影响。
+ *
+ * ## ⚠️ DSH 0.2.1 起：`header.cwd` ≠ 会话**当前**目录
+ *
+ * 0.2.1 新增了 `working_directory` 工具（`dsh-base` 默认就有），模型可以 `cd`。
+ * 之后：
+ *
+ * ```text
+ * SessionHeader.cwd            → 固定为「会话创建目录」（官方文档明确：immutable header retains the original project）
+ * working-directory/change 事件 → 真正的当前目录，由 ctx.workingDirectory.get(session) 读
+ * ```
+ *
+ * **本插件刻意继续用 `header.cwd` 作为研究根**（2026-10 决策，理由）：
+ *
+ * - 研究根是"这项研究放在哪"的**事实**，不该因为模型中途 `cd experiments` 就漂成
+ *   `experiments/workspace` —— 那会把证据/论文写进子目录，且不可逆；
+ * - 客户端（研究进展 Tab）也按会话 id 判研究项目，两边必须同一个根；
+ * - `cd` 带来的真正风险是**模型按相对路径找文件**，那由 Research Context 给绝对路径解决
+ *   （见 `context.ts` 的 `renderResearchContext`），与这里选哪个根无关。
+ *
+ * 所以：**不要**把这里改成 `workingDirectory.get()`。若将来要看"是否发生了漂移"，
+ * 用结构读取（`ctx.get('workingDirectory')`，0.2.0 上为 undefined）只做**提示**，不换根。
  */
 
 import { isAbsolute, resolve } from 'node:path'

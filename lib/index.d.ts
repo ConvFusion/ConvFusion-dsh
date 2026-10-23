@@ -28,10 +28,14 @@
  *
  * ## 已知外部约束（影响设计，勿忘）
  *
- * 外部插件**不能**持久化自定义 session 事件类型：`Session.append` 无法设置
- * `ignorable`，而持久化读取路径会拒绝未知类型（会话将不可恢复）。
- * 因此本插件**只使用** Harness 已有的 `user/message`（经 `agent.followup`）与
- * `system/message`（经 system prompt 段）通道；观测状态只留在**内存**。
+ * 外部插件**不能**用 `Session.append` 持久化自定义 session 事件类型：
+ * `append` 无法设置 `ignorable`，而持久化读取路径会拒绝未知类型（会话将不可恢复）。
+ * **DSH 0.2.1 起多了正门**：`appendPluginRecord(session, 'plugin:<own/name>', data)` /
+ * `pluginRecordOf(event)` 可以写**插件自己的**会话记录（`plugin:` 命名空间、ignorable、
+ * 不进模型可见面，fork/resume 会带上）。本插件**目前仍只用** Harness 已有的
+ * `user/message`（经 `agent.followup`）与 `system/message`（经 system prompt 段）通道，
+ * 观测状态只留在**内存**；要不要把运行时观测改成 `appendPluginRecord` 是独立的一次改动
+ * （见 `dev-notes/dsh-0.2.1-rc.2-compat.md` §5）。
  */
 import type { Context } from '@deepseek-ai/cordis';
 import { Config, type Config as ConfigShape, type LiveConfig } from './config.js';
