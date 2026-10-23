@@ -433,11 +433,17 @@ def render(spec: dict) -> dict:
             corridor = float(spec.get("corridorY") or (max(a[1] + a[3], b[1] + b[3]) + float(spec.get("corridor", 0.16))))
             swing = float(spec.get("swing", 0.22))
             if upward:
-                x_out = a[0] - swing
-                x_in = b[0] - swing
-                assert x_out > 0 and x_in > 0, "回边外侧净空不足（缩小 swing 或增大左边距）"
-                s.poly([(a[0], center_y(a)), (x_out, center_y(a)), (x_out, corridor),
-                        (x_in, corridor), (x_in, center_y(b)), (b[0], center_y(b))], color=color)
+                # 单一路径：在**两框左侧之外**取一条竖直走廊，直接升到目标的入口高度再水平进入。
+                # 旧写法分别用 a 与 b 各自的 x-swing 起两条竖线，再在顶部走廊汇合；当两个框
+                # 同列（x 相同）时两条竖线重合，走廊又高于入口高度，于是"升过头再折回"，
+                # 同一段竖线被画两遍 —— 看上去就是回边自己叠了一层。
+                x_cor = min(a[0], b[0]) - swing
+                assert x_cor > 0, "回边外侧净空不足（缩小 swing 或增大左边距）"
+                pts = [(a[0], center_y(a)), (x_cor, center_y(a)),
+                       (x_cor, center_y(b)), (b[0], center_y(b))]
+                s.poly(pts, color=color)
+                # 记下端点：几何检查要靠它区分"合法的端点贴合"与"穿过框内部"
+                s.edges[-1] = (list(pts), (str(ed.get("from")), str(ed.get("to"))))
             else:
                 x_out = a[0] + a[2] / 2
                 s.poly([(x_out, a[1] + a[3]), (x_out, corridor),
@@ -477,8 +483,13 @@ def render(spec: dict) -> dict:
         # 绝对坐标在画布缩放时会与框重叠（曾实测重叠 2pt）。
         lowest = min((bb[1] for bb in boxes.values()), default=float(spec.get("noteY", 0.07)))
         gap = float(spec.get("noteGap", 0.14))
+        # 说明行必须按**画布宽度**换行。matplotlib 的 text 默认不换行，一条长说明会画成
+        # 一行、把 tight bbox 撑到画布之外：实测 fig1a 画布 516 pt，说明行画到 561 pt，
+        # 于是整张图被压小（正文只剩 6.4 pt），看起来像"右边被切掉"。
+        note_w = s.w - 2 * float(spec.get("margin", [0.12])[0])
         s.ax.text(float(spec.get("margin", [0.12])[0]), lowest - gap, str(note),
-                  ha="left", va="top", fontsize=7.0, color=MUT, zorder=3)
+                  ha="left", va="top", fontsize=7.0, color=MUT, zorder=3,
+                  wrap=True)
 
     try:
         stats = s.assert_clean(str(spec.get("name", "schematic")))

@@ -1234,18 +1234,30 @@ console.log('\n[1k] 换服务器 →【研究工作】重读')
   )
   // ② 【我的】：换地址就重读，且**不按 configured 拦**（它不依赖登录）
   assert(
-    /if \(!activeServer\) return[\s\S]{0,140}?void loadMine\(\)/.test(src),
-    '【我的】在地址变化时重读（不受登录状态限制）',
+    // 中间现在多了一段"命中缓存 → 直接显示，不联网"
+    /if \(!activeServer\) return[\s\S]{0,420}?void loadMine\(\)/.test(src),
+    '【我的】在地址变化时重读（不受登录状态限制；命中缓存则不联网）',
   )
-  assert(/\[activeServer, loadMine\]/.test(src), '【我的】的依赖里有生效地址')
+  /*
+   * 依赖里**仍然是**生效地址（换服务器必须重读），但账号那一维改成**标量**
+   * `account?.id` —— 用 `account` 对象会让每次 `account/state`/`verify` 回来后
+   * 列表都重拉（用户看到的"自动刷新"）。
+   */
+  assert(/\[activeServer, account\?\.id, loadMine\]/.test(src), '【我的】的依赖里有生效地址（账号用标量）')
   // ③ 【指导中】：地址变化重读；未登录时**清空**而不是留着上一台的数据
-  assert(/\[activeServer, configured, loadProposals\]/.test(src), '【指导中】的依赖里有生效地址')
+  assert(
+    /\[activeServer, account\?\.id, configured, loadProposals\]/.test(src),
+    '【指导中】的依赖里有生效地址（账号用标量）',
+  )
   assert(
     /if \(!activeServer \|\| !configured\) \{[\s\S]{0,140}?setProposals\(null\)/.test(src),
     '未登录时清空上一台服务器的提案（不留着别的服务器的数据）',
   )
   // ④ 【可指导】：地址变化重读；无账号时清空（不能把上一台的条目当本机的）
-  assert(/\[account, activeServer, loadWorks\]/.test(src), '【可指导】的依赖里有生效地址')
+  assert(
+    /\[account\?\.id, activeServer, loadWorks\]/.test(src),
+    '【可指导】的依赖里有生效地址（账号用标量）',
+  )
   assert(
     /if \(!activeServer \|\| !account\) \{[\s\S]{0,180}?setWorks\(null\)/.test(src),
     '无账号 / 无地址时清空【可指导】列表',
@@ -1919,6 +1931,34 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
    *      正是"方向 A 两侧配反"那个 bug 的来源，不该再回来。
    */
   assert(/from '\.\/mentorship-labels\.js'/.test(src), '进展文案走纯函数模块（可被自检直接断言）')
+
+  /*
+   * 【科V社区】**不做自动刷新**（2026-10 用户要求）：
+   *   ① 列表数据有**模块级缓存**，挂载时命中缓存就**不联网**；
+   *   ② 加载 effect 的依赖里用 `account?.id`（**标量**），不再用 `account` 对象 ——
+   *      对象每次 `account/state` / `account/verify` 回来都是新的，会让列表反复重拉
+   *      （那就是用户看到的"页面自己刷新"）；
+   *   ③ 刷新靠每个 Tab 上的 ↻ 按钮（`RefreshIconButton`），而不是定时器。
+   */
+  assert(src.includes('const COMMUNITY_LIST_CACHE = new Map'), '列表有模块级缓存')
+  assert(
+    /communityCacheKey\(activeServer, account\?\.id \?\? null, 'mine'\)/.test(src) &&
+      /communityCacheKey\(activeServer, account\.id, 'works'\)/.test(src),
+    '三个列表按「服务器 + 账号 + 类别」缓存',
+  )
+  assert(
+    /const hit = COMMUNITY_LIST_CACHE\.get\(key\)[\s\S]{0,160}?if \(hit !== undefined\)/.test(src),
+    '命中缓存 → 直接显示，不联网',
+  )
+  assert(!/\}, \[account, activeServer/.test(src), '依赖里不再用 account 对象（否则会自动重拉）')
+  assert(
+    (src.match(/setInterval\(/g) ?? []).length === 3,
+    '只有上传/下载/发布三处进度轮询，没有页面级自动刷新定时器',
+  )
+  assert(
+    (src.match(/<RefreshIconButton/g) ?? []).length >= 4,
+    '每个 Tab 都有刷新按钮（我的 / 可指导 / 可加入 / 指导中）',
+  )
   for (const k of [
     'awaitingMentor',
     'mentorGuided',

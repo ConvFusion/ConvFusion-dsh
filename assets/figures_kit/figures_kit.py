@@ -181,10 +181,26 @@ class Sheet:
             lines = lines[:max_lines - 1] + [" ".join(lines[max_lines - 1:])]
         return lines
 
+    def wrap_desc(self, text: str, max_w: float, fs: float, max_lines: int = 4) -> list[str]:
+        """Like wrap_fit, but an explicit newline in `desc` forces a new line.
+
+        A node carries one description string, yet it usually has two things to say, for
+        example a formula and the role of the stage. Greedy wrapping mixes them. Splitting
+        on newlines keeps the parts on their own lines while staying backward compatible,
+        because a desc without newlines behaves exactly as before.
+        """
+        out: list[str] = []
+        for seg in str(text).split("\n"):
+            budget = max(1, max_lines - len(out))
+            out.extend(self.wrap_fit(seg, max_w, fs, budget))
+            if len(out) >= max_lines:
+                break
+        return out
+
     def size(self, label: str, desc: str, w: float) -> tuple[float, float]:
         """预测量框高（供堆叠布局使用）。"""
         lab = self.wrap_fit(label, w - 2 * PAD, FS_LAB, 2)
-        dsc = self.wrap_fit(desc, w - 2 * PAD, FS_DESC, 4) if desc else []
+        dsc = self.wrap_desc(desc, w - 2 * PAD, FS_DESC, 4) if desc else []
         bh = len(lab) * FS_LAB * LH / 72 + len(dsc) * FS_DESC * LH / 72 + 2 * PAD
         return w, bh
 
@@ -194,7 +210,7 @@ class Sheet:
         bw = w if w else max(self.measure(label, FS_LAB, "bold")[0],
                              self.measure(desc, FS_DESC)[0] if desc else 0.0) + 2 * PAD
         lab_lines = self.wrap_fit(label, bw - 2 * PAD, FS_LAB, 2)
-        desc_lines = self.wrap_fit(desc, bw - 2 * PAD, FS_DESC, 4) if desc else []
+        desc_lines = self.wrap_desc(desc, bw - 2 * PAD, FS_DESC, 4) if desc else []
         bh = len(lab_lines) * FS_LAB * LH / 72 + len(desc_lines) * FS_DESC * LH / 72 + 2 * PAD
         x0, y0 = x - bw / 2, y - bh / 2
         self.ax.add_patch(FancyBboxPatch((x0, y0), bw, bh,

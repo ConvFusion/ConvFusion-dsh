@@ -47,6 +47,14 @@ requires: manuscript | 先有正文才谈得上编译成稿
 5. **Build the reference list from real metadata.** Format entries in the venue style, order them by citation number, and omit a missing field rather than filling it with a placeholder — never emit "Anonymous" or fabricated page ranges. Note what the converter does and does not do: it rewrites `[key]`, `[key1, key2]` and `[12]`-style citations into `\cite{...}` from the `## References` section, but **author–year prose citations like `(Smith et al., 2024)` are left as plain text** — they need a real `.bib`/`\citep` pass or a rewrite in the manuscript.
 6. **Re-verify after each pass**: the document compiles, the reference list contains exactly the cited keys, and the diff contains no change to scientific content.
 
+7. **Cross-references: exactly one form, and always introduced by a pointer phrase.** Every internal reference — section, figure, table, equation — resolves through `\ref{LABEL}`; a hand-typed number (`§4.5`, `Fig. 3`, `Table 2`) is forbidden, because it silently goes stale the moment a section or float is inserted. Every reference is also **introduced by a pointer phrase** (`see`, `as shown in`, `as reported in`, `as proved in`, `as defined in`, `as described in`); a bare `Table 5 reports …` or a parenthetical `(§4.5)` violates house style. Concretely:
+   - Write `see Section~\ref{sec-4-5}`, `as shown in Fig.~\ref{fig-pipeline}`, `as reported in Table~\ref{tab-main}` — the tilde keeps the word and its number on one line.
+   - Coordinate a list once: `as reported in Table~\ref{a} and Fig.~\ref{b}` satisfies the rule for both references.
+   - A reference that is the grammatical subject still needs the phrase: *"As shown in Section~\ref{sec-4-5}, the rule is monotone"*, not *"Section 4.5 shows the rule is monotone"*.
+   - Assign labels from **heading order** (`sec-<n>`, `sec-<n>-<m>`, `app-<A>`), never from the title, so rewording a heading cannot break a reference.
+   - IEEEtran numbers sections with Roman numerals, subsections with letters and tables with Roman numerals, so `\ref` prints "IV", "A" and "II" while the prose says "4.5" and "Table 2". Force Arabic counters in the preamble **and** redefine `\@seccntformat`, otherwise the heading keeps the letter while `\ref` returns the number — the two must be made to agree, not just the counter.
+   - Gate it with a check over the manuscript source: no `§`, no bare `Fig. N` / `Table N`, and every `\ref{` preceded by one of the pointer phrases. Run it in the same pass as the compile, so a reference added later cannot slip through unannounced.
+
 ## Known Limits of the Converter
 
 - **Markdown tables are passed through as plain text** (pipes and all); they must be turned into `table`/`tabular` LaTeX separately. This matches the legacy pipeline, where tables arrived pre-rendered as artifacts.

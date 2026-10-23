@@ -4729,6 +4729,23 @@ export interface SessionBridge {
   draftEmpty: boolean
 }
 
+/**
+ * 【科V社区】各列表的**模块级缓存**。
+ *
+ * 为什么要它（用户 2026-10 反馈："页面会自己刷新，不要自动刷新，加个刷新按钮"）：
+ * 这些列表的加载 effect 依赖里带了 `account`（**对象**，每次 `account/state` /
+ * `account/verify` 回来都是新对象）—— 于是任何一次状态回写都会让三个列表**重新联网**，
+ * 界面上就是一次"自己刷新"。而刷新按钮本来就在每个 Tab 上（`RefreshIconButton`）。
+ *
+ * 缓存把"数据"和"要不要重拉"分开：
+ *   · 挂载时命中缓存 → **直接显示**，不联网；
+ *   · 服务器 / 账号变了（key 变化）→ 自然未命中 → 重拉；
+ *   · 用户点 ↻ 或做了会改数据的动作（发布 / 接受 / 拒绝）→ 显式重拉。
+ */
+const COMMUNITY_LIST_CACHE = new Map<string, unknown>()
+const communityCacheKey = (server: string, accountId: string | null, kind: string): string =>
+  `${server}|${accountId ?? ''}|${kind}`
+
 export function CommunityTab({
   send,
   initial,
@@ -5257,8 +5274,14 @@ export function CommunityTab({
       setList(null)
       return
     }
-    setList((res.value as { items: HostWork[] }).items ?? [])
-  }, [post])
+    const items = (res.value as { items: HostWork[] }).items ?? []
+    setList(items)
+    // 记住这一份（挂载命中就不再联网 —— 见 COMMUNITY_LIST_CACHE）
+    COMMUNITY_LIST_CACHE.set(
+      communityCacheKey(activeServer, account?.id ?? null, direction === 'SEEK_STUDENT' ? 'joinable' : 'works'),
+      items,
+    )
+  }, [post, activeServer, account?.id])
 
   /* ── 指导关系（第三个 Tab）──────────────────────────────────────────── */
 
@@ -5282,8 +5305,10 @@ export function CommunityTab({
       )
       return
     }
-    setProposals((res.value as { proposals: HostProposal[] }).proposals ?? [])
-  }, [post])
+    const proposals = (res.value as { proposals: HostProposal[] }).proposals ?? []
+    setProposals(proposals)
+    COMMUNITY_LIST_CACHE.set(communityCacheKey(activeServer, account?.id ?? null, 'proposals'), proposals)
+  }, [post, activeServer, account?.id])
 
   /**
    * 点【接受】= 打开**确认框**（不直接发请求）。
@@ -5947,7 +5972,8 @@ export function CommunityTab({
     }
     setMine(value.items ?? [])
     setMineRegistry(value.registry ?? null)
-  }, [post])
+    COMMUNITY_LIST_CACHE.set(communityCacheKey(activeServer, account?.id ?? null, 'mine'), value.items ?? [])
+  }, [post, activeServer, account?.id])
 
   /**
    * **换服务器 → 以服务器为准的数据全部重读**（2026-09 用户报的问题）。
@@ -5960,9 +5986,19 @@ export function CommunityTab({
    */
   React.useEffect(() => {
     if (!activeServer) return
+    /*
+     * 命中缓存 → 直接显示，**不联网**（用户要求：不要自动刷新，用 ↻ 按钮）。
+     * 未命中（首次进入 / 换了服务器或账号）→ 才拉一次。
+     */
+    const key = communityCacheKey(activeServer, account?.id ?? null, 'mine')
+    const hit = COMMUNITY_LIST_CACHE.get(key)
+    if (hit !== undefined) {
+      setMine(hit as HostLocalWork[])
+      return
+    }
     // 【我的】不依赖登录（本机项目 + 服务器给的"已在网络中"），所以不按 configured 拦
     void loadMine()
-  }, [activeServer, loadMine])
+  }, [activeServer, account?.id, loadMine])
 
   /**
    * 【指导中】：服务器上的指导提案。
@@ -5976,8 +6012,14 @@ export function CommunityTab({
       setProposalsError(null)
       return
     }
+    const key = communityCacheKey(activeServer, account?.id ?? null, 'proposals')
+    const hit = COMMUNITY_LIST_CACHE.get(key)
+    if (hit !== undefined) {
+      setProposals(hit as HostProposal[])
+      return
+    }
     void loadProposals()
-  }, [activeServer, configured, loadProposals])
+  }, [activeServer, account?.id, configured, loadProposals])
 
   /**
    * 点【寻找指导】/【寻找学生】/【更新…】：**先取上传计划**，再决定是直接更新还是弹对话框。
@@ -6141,9 +6183,16 @@ export function CommunityTab({
       setDetail(null)
       return
     }
-    void loadWorks('SEEK_MENTOR')
-    void loadWorks('SEEK_STUDENT')
-  }, [account, activeServer, loadWorks])
+    // 命中缓存 → 两个列表都直接显示；未命中才联网（↻ 按钮始终在 Tab 上）
+    const keyMentor = communityCacheKey(activeServer, account.id, 'works')
+    const keyJoin = communityCacheKey(activeServer, account.id, 'joinable')
+    const hitMentor = COMMUNITY_LIST_CACHE.get(keyMentor)
+    const hitJoin = COMMUNITY_LIST_CACHE.get(keyJoin)
+    if (hitMentor !== undefined) setWorks(hitMentor as HostWork[])
+    if (hitJoin !== undefined) setJoinable(hitJoin as HostWork[])
+    if (hitMentor === undefined) void loadWorks('SEEK_MENTOR')
+    if (hitJoin === undefined) void loadWorks('SEEK_STUDENT')
+  }, [account?.id, activeServer, loadWorks])
 
   /** 展开 / 收起一项研究工作的摘要（免费）。 */
   const toggleSummary = async (w: HostWork): Promise<void> => {
