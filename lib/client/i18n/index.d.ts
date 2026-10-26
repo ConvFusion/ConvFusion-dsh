@@ -84,6 +84,8 @@ export declare const dictionaries: {
         'community.publish.unchanged': string;
         'community.publish.expand': string;
         'community.publish.collapse': string;
+        'community.publish.moreItems': string;
+        'community.publish.skippedDir': string;
         'community.publish.tooLarge': string;
         'community.publish.oversizeWarning': string;
         'community.publish.summary': string;
@@ -752,6 +754,8 @@ export declare const dictionaries: {
         readonly 'community.publish.unchanged': "no content changes";
         readonly 'community.publish.expand': "Expand";
         readonly 'community.publish.collapse': "Collapse";
+        readonly 'community.publish.moreItems': "{count} more item(s) — tick the folder to select them all";
+        readonly 'community.publish.skippedDir': "skipped";
         readonly 'community.publish.tooLarge': "over the per-file limit";
         readonly 'community.publish.oversizeWarning': "{count} file(s) exceed the server per-file limit (100 MB) and will not be uploaded.";
         readonly 'community.publish.summary': "{files} file(s) selected · {size} · {batches} batch(es)";

@@ -83,6 +83,8 @@ export const en = {
   'community.publish.unchanged': 'no content changes',
   'community.publish.expand': 'Expand',
   'community.publish.collapse': 'Collapse',
+  'community.publish.moreItems': '{count} more item(s) — tick the folder to select them all',
+  'community.publish.skippedDir': 'skipped',
   'community.publish.tooLarge': 'over the per-file limit',
   'community.publish.oversizeWarning': '{count} file(s) exceed the server per-file limit (100 MB) and will not be uploaded.',
   'community.publish.summary': '{files} file(s) selected · {size} · {batches} batch(es)',

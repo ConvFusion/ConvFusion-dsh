@@ -79,6 +79,8 @@ export declare const zh: {
     'community.publish.unchanged': string;
     'community.publish.expand': string;
     'community.publish.collapse': string;
+    'community.publish.moreItems': string;
+    'community.publish.skippedDir': string;
     'community.publish.tooLarge': string;
     'community.publish.oversizeWarning': string;
     'community.publish.summary': string;

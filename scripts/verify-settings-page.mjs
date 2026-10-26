@@ -1919,8 +1919,8 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
    * "我在哪一侧 + 项目哪个方向"选，不能只用"导师 / 学生"两个词。
    */
   assert(
-    /if \(view\.iAmOwner\) return true/.test(src) && /acceptedProgressKey\(p, view\)/.test(src),
-    '文案与下载可用性都按"我在哪一侧"（owner 侧 = 项目所有者）判',
+    /acceptedProgressKey\(p, view\)/.test(src) && /downloadSideCount\(p, view\)/.test(src),
+    '文案与下载可用性都按"我在哪一侧"判（v0.6.8：下载看的是**我要下载的那一侧**，不是角色）',
   )
   /*
    * ⚠️ 四组文案的**取值规则**在纯函数 `src/client/mentorship-labels.ts` 里，上面已经
@@ -1982,13 +1982,26 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
    * 只给人名 → 同一导师的多个研究工作分不出来；只给工作名 → **同名**工作分属
    * 两个学生分不出来（本机实测就有两份都叫「ConvFusion-dsh（run）」的提案）。
    * 区分用的那一半另起一行（粗体那行是 nowrap+ellipsis，挤进去会被截掉）。
+   *
+   * ⚠️ v0.6.7（2026-10-26 用户反馈"列表各项显示不一致"）：**行序不许按"谁该接受"翻**。
+   * 【指导中】的行来自不同来源（导师出题→学生选题 / 学生申请 / 导师邀请…），
+   * 一旦按角色翻行序，同一个列表里有的行粗体是工作名、有的行粗体是学生名。
+   * 现在钉死：第一行（粗体）= 研究工作名，第二行 = 对方是谁。
    */
-  assert(
-    /const line = view\.iAmAcceptor\s*\?\s*\(proposalWorkLabel\(p\) \?\? t\('community\.mentor\.untitledProject'\)\)\s*:\s*\(view\.counterparty\?\.displayName \?\? ''\)/.test(
-      src,
-    ),
-    '【指导中】的行给出"哪份研究工作"（该我接受时）与"对方是谁"（我发起时）',
-  )
+  {
+    const at = src.indexOf('trackItems.map(({ p, view }, i) =>')
+    const nameBlock = at < 0 ? '' : src.slice(at, src.indexOf('{feeText(p)}', at))
+    assert(nameBlock.length > 0, '找得到【指导中】的行渲染代码')
+    assert(
+      /<div style=\{S\.listTitle\}>\s*\{proposalWorkLabel\(p\) \?\? t\('community\.mentor\.untitledProject'\)\}/.test(nameBlock),
+      '【指导中】第一行（粗体）恒为**研究工作名**（不按角色翻）',
+    )
+    assert(
+      /<div style=\{S\.hint\}>\s*\{view\.counterparty\?\.displayName \?\? t\('community\.mentor\.unknownParty'\)\}/.test(nameBlock),
+      '【指导中】第二行是"对方是谁"',
+    )
+    assert(!nameBlock.includes('view.iAmAcceptor'), '名字区**不**再按 `iAmAcceptor` 翻行序（v0.6.7）')
+  }
   /*
    * v0.6.0：显示的名字是**这项工作自己的名字**（服务器的 `work_name`：有论文就是论文标题，
    * 否则是工作确定的主题），`project_title` 只作旧服务器的兜底 —— 看列表的人本机不一定
@@ -2014,10 +2027,6 @@ console.log('\n[12] 指导关系中：第三个 Tab + 接受冻结押金的二�
   assert(
     /community\.notice\.renameFailed/.test(src),
     '改名失败要如实说一句（否则回执显示新名字、网络里还是旧名字）',
-  )
-  assert(
-    /view\.iAmAcceptor\s*\?\s*\(view\.counterparty\?\.displayName \?\? t\('community\.mentor\.unknownParty'\)\)/.test(src),
-    '粗体那行仍是"对方"，补充行不抢主次',
   )
   /*
    * ⚠️ 用 `iAmAcceptor`（谁该接受）而不是"我是不是学生"：方向 B 里该接受的是
@@ -2351,17 +2360,26 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     /canDownloadProposal\(p, view\) \? \(\s*<button[\s\S]{0,260}?requestDownload\(p\)/.test(src),
     '【下载】按 canDownloadProposal 显示',
   )
-  // ⚠️ 学生侧：导师还没传东西时不该能点（下回来的就是自己已发布的那份）
-  //    但 `reviewFiles === null`（探测失败）必须保留 —— 拿不到 ≠ 没有
-  assert(src.includes('function canDownloadProposal('), '下载可用性有独立判据')
+  /*
+   * ⚠️ v0.6.8（2026-10-26 用户反馈）：**提示与按钮必须用同一个判据**。
+   * 旧实现里提示按 `view.otherSide` 取数（学生下载 owner 侧 → 数导师的工作区），
+   * 按钮却一律看 `reviewFiles`（= 非 owner 那一侧，方向 B 下是**学生自己的交付**）：
+   * 导师工作区有内容、学生自己 0 份交付 → 提示"先下载"但按钮被隐藏，用户卡死。
+   * 现在两者都走 `downloadSideCount(p, view)`，并用下面的真值表钉住。
+   */
+  assert(src.includes('export function canDownloadProposal('), '下载可用性有独立判据')
+  assert(src.includes('export function downloadSideCount('), '下载哪一侧有独立判据（按钮与提示共用）')
   assert(
-    /if \(p\.reviewFiles === null \|\| p\.reviewFiles === undefined\) return true/.test(src),
-    '查不到导师是否上传时保留【下载】（不能因探测失败藏掉可能可用的动作）',
+    /return view\.otherSide === 'owner' \? p\.workspaceFiles : p\.reviewFiles/.test(src),
+    '下载那一侧的文件数：owner 侧取 workspaceFiles，非 owner（review）侧取 reviewFiles',
   )
-  assert(/return p\.reviewFiles > 0/.test(src), '确认没有指导结果 → 不给【下载】')
   assert(
-    /if \(view\.iAmOwner\) return true/.test(src),
-    'owner 侧始终可下载（它要的是对方的工作区，关系一建立就该能用）',
+    /const count = downloadSideCount\(p, view\)\s*\n\s*return typeof count !== 'number' \? true : count > 0/.test(src),
+    '查不到（null/undefined）→ 保留【下载】；明确 0 → 不给',
+  )
+  assert(
+    (src.match(/downloadSideCount\(p, view\)/g) ?? []).length >= 2,
+    '"先下载一次"提示与【下载】按钮共用同一个判据（不许各算一套）',
   )
   assert(
     /p\.status === 'ACCEPTED' && !view\.iAmOwner \? \(\s*<button[\s\S]{0,300}?openExchange\(p\)/.test(src),
@@ -2369,6 +2387,58 @@ console.log('\n[13] 指导闭环：下载 / 上传')
   )
   // 下载现在**必须有**对话框（选工作区在那里）
   assert(src.includes('function DownloadDialog('), '下载有工作区选择器对话框')
+
+  // ② 行为真值表：四格（谁下载哪一侧）× 三态（有内容 / 空 / 查不到）
+  {
+    let mod = null
+    try {
+      const code = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
+      let captured = null
+      new Function('window', code)({ __ModuleLoader__: { load: (m) => { captured = m } } })
+      mod = captured.factory(createRequire(import.meta.url))
+    } catch (e) {
+      assert(false, `bundle 可在 node 求值：${e instanceof Error ? e.message : String(e)}`)
+    }
+    if (mod) {
+      const P = (over) => ({ status: 'ACCEPTED', reviewFiles: 0, workspaceFiles: 0, ...over })
+      const V = (over) => ({ iAmOwner: false, otherSide: 'owner', ...over })
+      const can = (p, v) => mod.canDownloadProposal(p, v)
+
+      // 方向 B 的**学生**：下载 owner 侧（导师的工作区）。学生自己的交付是 0 份 ——
+      // 这正是用户报的场景：提示"先下载"，按钮必须在。
+      assert(
+        can(P({ reviewFiles: 0, workspaceFiles: 5 }), V({ iAmOwner: false, otherSide: 'owner' })) === true,
+        '方向 B 学生：导师工作区有内容 → 有【下载】（哪怕自己还没交付，v0.6.8 修的就是这个）',
+      )
+      assert(
+        can(P({ reviewFiles: 0, workspaceFiles: 0 }), V({ iAmOwner: false, otherSide: 'owner' })) === false,
+        '那一侧确实空着 → 不给【下载】（下了也是空包）',
+      )
+      // 方向 A 的导师：同样下载 owner 侧
+      assert(
+        can(P({ reviewFiles: 0, workspaceFiles: 3 }), V({ iAmOwner: false, otherSide: 'owner' })) === true,
+        '方向 A 导师：学生工作区有内容 → 有【下载】',
+      )
+      // 方向 A 的**学生**（owner）：下载 review 侧（导师的指导产物）
+      assert(
+        can(P({ reviewFiles: 2 }), V({ iAmOwner: true, otherSide: 'mentor' })) === true,
+        'owner 下载 review 侧：导师交付过 → 有【下载】',
+      )
+      assert(
+        can(P({ reviewFiles: 0 }), V({ iAmOwner: true, otherSide: 'mentor' })) === false,
+        'owner 但对方还没交付 → 不给【下载】（与提示一致）',
+      )
+      // 三态：查不到 / 旧服务器 → 保留按钮
+      assert(can(P({ reviewFiles: null }), V({ otherSide: 'mentor' })) === true, 'reviewFiles=null（查不到）→ 保留【下载】')
+      assert(can(P({ reviewFiles: undefined }), V({ otherSide: 'mentor' })) === true, 'reviewFiles 缺失（旧服务器）→ 保留【下载】')
+      assert(can(P({ workspaceFiles: null }), V({ otherSide: 'owner' })) === true, 'workspaceFiles=null → 保留【下载】')
+      // 未建立关系 → 一律不给
+      assert(can(P({ status: 'PROPOSED', workspaceFiles: 9 }), V({})) === false, 'PROPOSED 不给【下载】')
+      // 侧别取值本身
+      assertEq(mod.downloadSideCount(P({ workspaceFiles: 7, reviewFiles: 4 }), V({ otherSide: 'owner' })), 7, 'owner 侧取 workspaceFiles')
+      assertEq(mod.downloadSideCount(P({ workspaceFiles: 7, reviewFiles: 4 }), V({ otherSide: 'mentor' })), 4, 'review 侧取 reviewFiles')
+    }
+  }
   assert(src.includes('function UploadDialog('), '有上传对话框')
 
   // ② 点【下载】= 让用户**选一个 DSH 工作区**，把 ZIP 存下来（不走浏览器默认下载）
@@ -2447,9 +2517,9 @@ console.log('\n[13] 指导闭环：下载 / 上传')
   )
   // "那一侧还是空的"就不催下载（与 canDownloadProposal 的判据一致，否则让用户下空包）
   assert(
-    /const count = view\.otherSide === 'owner' \? p\.workspaceFiles : p\.reviewFiles/.test(src) &&
+    /const count = downloadSideCount\(p, view\)/.test(src) &&
       /if \(typeof count !== 'number' \|\| count === 0\) return null/.test(src),
-    '那一侧没有文件时不催【下载】（命令用户下一个空快照没意义）',
+    '那一侧没有文件时不催【下载】（与【下载】按钮同一判据，命令用户下一个空快照没意义）',
   )
   // 资料入口按"服务器**给没给** profile 键"判，不是按"值非空"
   assert(
@@ -3069,6 +3139,196 @@ console.log('\n[9] 对话框渲染：资金池拦截 + Token 两池')
     assert(!legacyMsg.includes('资金池'), '旧服务器不显示「资金池」（那一版没有这个概念）')
   }
 }
+/* ════════════════════════════════════════════════════════════════════════
+ * [10] 上传清单的目录树（v0.6.6：整枝勾选）
+ *
+ * 用户诉求：几百个文件的分类里，要能"去掉/选择某一个文件夹"，而不是一个个点文件。
+ * 这里锁两件事：
+ *   ① 树**怎么建**（纯逻辑）：目录在前、嵌套、体积/项数自底向上累计、跳过占位项不可勾；
+ *   ② 树**渲染成什么**（纯视图）：默认只到第一层、展开后子节点出现、目录三态复选框、
+ *      占位目录没有复选框。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[10] 上传清单：目录树（整枝勾选）')
+{
+  const TREE = await importClientModule('upload-tree.ts')
+  const files = [
+    { relPath: 'project.md', size: 100 },
+    { relPath: 'plans/a.md', size: 10 },
+    { relPath: 'plans/b.md', size: 20 },
+    { relPath: 'plans/sub/c.md', size: 5 },
+    { relPath: 'papers/x/paper.md', size: 1000 },
+    { relPath: 'papers/x/figs/f1.pdf', size: 200 },
+    { relPath: 'research/literature/fulltext/1.pdf', size: 3000 },
+    { relPath: 'node_modules/', size: 0 },
+  ]
+  const nodes = TREE.buildUploadTree(files)
+
+  // ① 结构：目录在前、文件在后；同层按名字排序
+  assertEq(
+    nodes.map((n) => `${n.kind}:${n.path}`),
+    ['dir:node_modules', 'dir:papers', 'dir:plans', 'dir:research', 'file:project.md'],
+    '根层顺序 = 目录（按名）在前、文件在后',
+  )
+  const plans = nodes.find((n) => n.path === 'plans')
+  assert(plans !== undefined && plans.kind === 'dir', 'plans 成了目录节点')
+  assertEq(plans.count, 3, 'plans 整枝 3 个文件（含 plans/sub/c.md）')
+  assertEq(plans.bytes, 35, 'plans 整枝体积自底向上累计（10+20+5）')
+  assertEq(
+    plans.children.map((n) => n.path),
+    ['plans/sub', 'plans/a.md', 'plans/b.md'],
+    '子层同样目录在前、文件在后',
+  )
+
+  // ② 跳过占位项：目录节点、不可勾选、不计入
+  const skipped = nodes.find((n) => n.path === 'node_modules')
+  assert(skipped !== undefined && skipped.placeholder === true, 'node_modules/ 标成跳过占位项')
+  assertEq(skipped.count, 0, '占位项不计文件数')
+  assertEq(TREE.nodeFilePaths(skipped), [], '占位项没有可上传文件（界面上不给复选框）')
+  assertEq(
+    TREE.treeFilePaths(nodes).sort(),
+    files.filter((f) => !f.relPath.endsWith('/')).map((f) => f.relPath).sort(),
+    'treeFilePaths = 全部可上传文件',
+  )
+
+  // ③ 三态
+  const sel = new Set(['plans/a.md'])
+  assertEq(TREE.folderState(plans, sel), 'some', '只选一个子文件 → 目录是"部分选中"')
+  assertEq(TREE.folderState(plans, new Set()), 'none', '一个没选 → 未选')
+  assertEq(TREE.folderState(plans, new Set(TREE.nodeFilePaths(plans))), 'all', '整枝全选 → 全选')
+
+  // ③b 单根剥层：真实数据里一个分类几乎总是"全部在同一个顶层目录下"，
+  // 不剥的话点开「展开」只看到一层壳（还要再点一次）。
+  const single = TREE.buildUploadTree([
+    { relPath: 'research/literature/fulltext/a.pdf', size: 10 },
+    { relPath: 'research/literature/fulltext/b.pdf', size: 20 },
+  ])
+  const flat = TREE.flattenSingleRoot(single)
+  assertEq(flat.prefix, 'research/literature/fulltext', '单根一路剥到底，并被记成前缀')
+  assertEq(flat.nodes.map((n) => n.path), ['research/literature/fulltext/a.pdf', 'research/literature/fulltext/b.pdf'], '剥完就能直接看到文件')
+  const mixed = TREE.buildUploadTree([
+    { relPath: 'papers/a.md', size: 1 },
+    { relPath: 'papers/b.md', size: 2 },
+  ])
+  assertEq(TREE.flattenSingleRoot(mixed).nodes.length, 2, '剥到"不再是单根"为止')
+  assertEq(TREE.flattenSingleRoot(nodes).prefix, '', '多个根目录时不剥（前缀为空）')
+  const placeholderOnly = TREE.buildUploadTree([{ relPath: 'node_modules/', size: 0 }])
+  assertEq(TREE.flattenSingleRoot(placeholderOnly).prefix, '', '占位目录不剥（剥了是空的）')
+
+  // ④ 渲染：默认只到第一层；展开后出现子节点；占位行没有复选框
+  const ZH10 = (await import(join(PKG, 'src', 'client', 'i18n', 'zh.ts'))).zh
+  const t10 = (k, p) => {
+    const tpl = ZH10[k] ?? k
+    return p ? tpl.replace(/\{(\w+)\}/g, (m, n) => (n in p ? String(p[n]) : m)) : tpl
+  }
+  let mod = null
+  try {
+    const code = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
+    let captured = null
+    new Function('window', code)({ __ModuleLoader__: { load: (m) => { captured = m } } })
+    mod = captured.factory(createRequire(import.meta.url))
+  } catch (e) {
+    assert(false, `bundle 可在 node 求值：${e instanceof Error ? e.message : String(e)}`)
+  }
+  if (mod) {
+    const expand = (node) => {
+      if (node !== null && typeof node === 'object' && !Array.isArray(node) && typeof node.type === 'function') {
+        try {
+          return expand(node.type(node.props ?? {}))
+        } catch {
+          return node
+        }
+      }
+      return node
+    }
+    const collect = (node, pred, out = []) => {
+      const n0 = expand(node)
+      if (n0 === null || n0 === undefined || typeof n0 !== 'object') return out
+      if (Array.isArray(n0)) {
+        for (const x of n0) collect(x, pred, out)
+        return out
+      }
+      if (pred(n0)) out.push(n0)
+      const kids = n0.props?.children
+      if (Array.isArray(kids)) for (const k of kids) collect(k, pred, out)
+      else collect(kids, pred, out)
+      return out
+    }
+    const textOf = (node) => {
+      const n0 = expand(node)
+      if (n0 === null || n0 === undefined || typeof n0 === 'boolean') return ''
+      if (typeof n0 === 'string' || typeof n0 === 'number') return String(n0)
+      if (Array.isArray(n0)) return n0.map(textOf).join('')
+      return textOf(n0.props?.children)
+    }
+    const boxes = (tree) => collect(tree, (n) => n.type === 'input' && n.props?.type === 'checkbox')
+    const view = (openSet, selection = new Set(), override = null) =>
+      mod.CategoryFileTreeView({
+        t: t10,
+        nodes: override ? override.nodes : nodes,
+        prefix: override ? override.prefix : '',
+        open: openSet,
+        categoryId: 'paper',
+        selection,
+        maxFileBytes: 100 * 1024 * 1024,
+        onToggleFiles: () => {},
+        onToggleOpen: () => {},
+      })
+
+    const collapsed = view(new Set())
+    const collapsedText = textOf(collapsed)
+    assert(collapsedText.includes('plans/'), '第一层就看得见目录（plans/）')
+    assert(!collapsedText.includes('a.md'), '未展开的目录不渲染子文件（几百项也不会一次全画）')
+    // 复选框：4 个目录中 3 个可选（占位项不给）+ 1 个根层文件
+    assertEq(boxes(collapsed).length, 4, '第一层复选框 = 3 个可选目录 + 1 个根层文件（占位目录没有）')
+    assert(collapsedText.includes('整枝已跳过'), '占位目录显示"整枝已跳过"')
+
+    const opened = view(new Set(['paper::plans']))
+    const openedText = textOf(opened)
+    assert(openedText.includes('a.md') && openedText.includes('sub/'), '展开 plans 后出现子文件与子目录')
+    assert(openedText.includes('3 ·'), '目录行显示整枝文件数')
+
+    // 展开/收起用 + / − （用户 2026-10 指定），不是三角；开合后符号要跟着换
+    const collapsedBtns = collect(collapsed, (n) => n.type === 'button').map((b) => textOf(b))
+    assert(collapsedBtns.includes('+'), '收起态显示 +')
+    assert(!collapsedBtns.includes('▶'), '不再用三角符号')
+    const openedBtns = collect(opened, (n) => n.type === 'button').map((b) => textOf(b))
+    assert(openedBtns.includes('−'), '展开态显示 −')
+
+    // 三态：只选一个子文件 → 目录本身不是"全选"，只有那一个文件是勾的
+    // （`indeterminate` 是 DOM 属性，静态树上观测不到，所以断言"勾选个数" + 纯逻辑的三态用例）
+    const partial = view(new Set(['paper::plans']), new Set(['plans/a.md']))
+    const partialChecked = boxes(partial).filter((b) => b.props?.checked === true)
+    assertEq(partialChecked.length, 1, '部分选中：只有那一个子文件被勾选（目录不是全选态）')
+    assert(textOf(partial).includes('a.md'), '部分选中时子文件仍显示')
+    const allChecked = boxes(view(new Set(['paper::plans']), new Set(['plans/a.md', 'plans/b.md', 'plans/sub/c.md'])))
+    assert(allChecked.some((b) => b.props?.checked === true), '整枝全选后目录复选框为勾选态')
+
+    // 大目录截断：6800+ 文件的目录整枝展开不能一次全画（会卡死浏览器），但仍可整枝勾选
+    const bigFiles = Array.from({ length: 260 }, (_, i) => ({ relPath: `experiments/github-repo/f${i}.json`, size: 1 }))
+    const bigTree = TREE.flattenSingleRoot(TREE.buildUploadTree(bigFiles))
+    const bigView = mod.CategoryFileTreeView({
+      t: t10,
+      nodes: bigTree.nodes,
+      prefix: bigTree.prefix,
+      // github-repo 在剥层后是根层唯一的目录 —— 直接展开它
+      open: new Set(['paper::experiments/github-repo']),
+      categoryId: 'paper',
+      selection: new Set(),
+      maxFileBytes: 100 * 1024 * 1024,
+      onToggleFiles: () => {},
+      onToggleOpen: () => {},
+    })
+    const bigText = textOf(bigView)
+    assert(bigText.includes('还有 60 项'), '超过 200 行的目录只画 200 行 + "还有 N 项"提示')
+    assertEq(boxes(bigView).length, 200, '剥层后根层 260 个文件也只画 200 行（不是 260）')
+
+    // 面包屑：剥掉前缀后要能看到"自己在哪一层"
+    const crumb = view(new Set(), new Set(), flat)
+    assert(textOf(crumb).includes('research/literature/fulltext/'), '剥掉的前缀显示成灰色面包屑')
+    assert(textOf(crumb).includes('a.pdf') && textOf(crumb).includes('b.pdf'), '面包屑下面直接是文件行')
+  }
+}
+
 console.log(`\n${failed === 0 ? '✅' : '❌'} settings-page: ${passed} passed, ${failed} failed`)
 if (failed > 0) {
   console.log('failures:\n' + failures.map((f) => `  - ${f}`).join('\n'))

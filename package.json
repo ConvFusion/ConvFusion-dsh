@@ -1,6 +1,6 @@
 {
   "name": "dsh-convfusion",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "engines": {
     "dsh": ">=0.2.0-rc.2 <0.3.0"
   },

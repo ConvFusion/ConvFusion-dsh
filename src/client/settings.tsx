@@ -51,6 +51,13 @@ import {
   type Translate,
 } from './i18n/index.js'
 import { syncCommandLine } from './sync-command.js'
+import {
+  buildUploadTree,
+  flattenSingleRoot,
+  folderState,
+  nodeFilePaths,
+  type UploadTreeNode,
+} from './upload-tree.js'
 import { publishActionPlan, type PublishActionItem } from './publish-actions.js'
 import { acceptedProgressKey } from './mentorship-labels.js'
 import { mentorshipView, type MentorshipView } from './mentorship-view.js'
@@ -1667,23 +1674,38 @@ function progressLabelKey(p: HostProposal, view: HostProposalView): string {
 }
 
 /**
- * 学生侧的【下载】只有在**导师传了东西**之后才有意义。
+ * **我要下载的那一侧**的文件数（三态：`number` / `null` = 服务器说不知道 / `undefined` = 旧服务器）。
  *
- * 学生下载的是"自己的工作区 + 导师的 review/"；导师什么都没传时，下回来的就是
- * 自己已发布的那份 —— 点了没用（2026-09 用户反馈：还没有人上传，按钮却可点）。
+ * 【下载】按钮与"先下载一次"提示**必须**共用这一个判据 —— v0.6.7 之前的 bug 就是没共用：
+ * 提示按 `view.otherSide` 取数（学生下载 owner 侧 → 数导师的工作区），按钮却一律看
+ * `reviewFiles`（= **非 owner 那一侧**，方向 B 下是**学生自己的交付**）。于是"导师出题 →
+ * 学生选题"的关系里，导师的工作区有内容（提示让先下载）、学生自己的交付是 0 份（按钮判为
+ * 没意义 → 隐藏），学生既被要求下载又没有下载按钮（2026-10-26 用户反馈）。
  *
- * `reviewFiles` 为 `null`（查不到）时**保留按钮**：拿不到 ≠ 没有，不能因为一次探测
- * 失败就把一个可能可用的动作藏起来。
- *
- * ⚠️ v0.6.0：这个"学生侧"= **非 owner 的那一方**（方向 B 下就是学生）—— 判据换成
- * `view.iAmOwner`，不再看角色。owner 侧（方向 A 的学生 / 方向 B 的导师）下载的是
- * 对方那一侧的工作区，关系一建立就该能用。
+ * 取数规则（与 `sideSyncHint` 完全一致）：
+ *   · 下载 `owner` 侧 → `workspaceFiles`（owner 那一侧的工作区文件数）
+ *   · 下载 `mentor` 侧（= 非 owner 侧 / review 侧）→ `reviewFiles`
  */
-function canDownloadProposal(p: HostProposal, view: HostProposalView): boolean {
+export function downloadSideCount(
+  p: HostProposal,
+  view: HostProposalView,
+): number | null | undefined {
+  return view.otherSide === 'owner' ? p.workspaceFiles : p.reviewFiles
+}
+
+/**
+ * 【下载】能不能点：关系已建立，且**我要下载的那一侧**确实有东西。
+ *
+ * 下载回来的是"对方那一侧的快照"；那一侧空着时点了也没用，所以隐藏
+ * （2026-09 用户反馈：还没有人上传，按钮却可点）。
+ *
+ * 三态纪律：`null`（查不到）/ `undefined`（旧服务器）→ **保留按钮** ——
+ * 拿不到 ≠ 没有，不能因为一次探测失败就把一个可能可用的动作藏起来。
+ */
+export function canDownloadProposal(p: HostProposal, view: HostProposalView): boolean {
   if (p.status !== 'ACCEPTED') return false
-  if (view.iAmOwner) return true
-  if (p.reviewFiles === null || p.reviewFiles === undefined) return true
-  return p.reviewFiles > 0
+  const count = downloadSideCount(p, view)
+  return typeof count !== 'number' ? true : count > 0
 }
 
 /**
@@ -1710,8 +1732,10 @@ function sideSyncHint(t: Translate, p: HostProposal, view: HostProposalView): st
   // 三态纪律：`null`/`undefined` = 无从判断（旧服务器、不可知、旧宿主）→ 不编造
   if (!sync) return null
   if ('neverDownloaded' in sync) {
-    const count = view.otherSide === 'owner' ? p.workspaceFiles : p.reviewFiles
-    // 那一侧还没有任何文件 → 没有可下载的东西，别催（下载按钮此时也是隐藏的）
+    // ⚠️ 与【下载】按钮**同一个**判据（`downloadSideCount`）：两边分叉正是 v0.6.7 的 bug ——
+    // 提示"先下载"而按钮不出现，用户就卡死了。
+    const count = downloadSideCount(p, view)
+    // 那一侧还没有任何文件 → 没有可下载的东西，别催（下载按钮此时也是隐藏的，两边一致）
     if (typeof count !== 'number' || count === 0) return null
     return t('community.mentor.peerNeverDownloaded')
   }
@@ -2715,7 +2739,14 @@ export async function copyText(text: string): Promise<boolean> {
  * ```
  *
  * - **排除项（机器产物）完全不显示**（用户拍板）：不参与选择，也不制造噪声；
- * - 分类可整体勾选，也可展开到**逐文件**勾选（"允许调整"落到文件级）；
+ * - 分类可整体勾选；展开后是**目录树**（用户 2026-10："能不能去掉/选择某一个文件夹"）：
+ *   目录行自带三态复选框，点一下就是整枝加入/整枝移出；文件行仍可单独调整
+ *   ——"允许调整落到文件级"这条老契约没变，只是多了一层更省力的粒度；
+ *   ```text
+ *   ┈ papers/                                    ← 面包屑（唯一根目录已剥掉）
+ *   ▸ paper-hmem-tpami/    300 项 · 8.17 MB      ← 目录：复选 + 点开（整枝 300 项）
+ *   ·   paper.md           48 KB                 ← 文件：单独勾选
+ *   ```
  * - 体积/项数/成本/余量/批次数全部实算并显示；
  * - 超过服务器单文件上限（100 MB）的文件**标出来说明传不上去**。
  */
@@ -2734,8 +2765,7 @@ function UploadCategoryList({
   maxFileBytes,
   selection,
   expanded,
-  onToggleCategory,
-  onToggleFile,
+  onToggleFiles,
   onToggleExpand,
 }: {
   t: Translate
@@ -2743,8 +2773,14 @@ function UploadCategoryList({
   maxFileBytes: number
   selection: ReadonlySet<string>
   expanded: ReadonlySet<string>
-  onToggleCategory: (categoryId: string, files: string[], next: boolean) => void
-  onToggleFile: (relPath: string, next: boolean) => void
+  /**
+   * 勾选**一组**文件（分类整选、目录整枝切换共用）。
+   *
+   * 原先分成 `onToggleCategory(categoryId, files, next)` / `onToggleFile(relPath, next)` 两个，
+   * 但前者其实也是"对一组文件做同样的动作"，`categoryId` 在两端实现里都没被用到 ——
+   * 目录树出现后合并成一个（见 `upload-tree.ts` 文件头）。
+   */
+  onToggleFiles: (relPaths: string[], next: boolean) => void
   onToggleExpand: (categoryId: string) => void
 }): JSX.Element {
   const visible = categories.filter((c) => c.decision !== 'excluded' && c.files.length > 0)
@@ -2767,7 +2803,7 @@ function UploadCategoryList({
                 ref={(el) => {
                   if (el) el.indeterminate = some
                 }}
-                onChange={(e) => onToggleCategory(cat.id, files.map((f) => f.relPath), e.target.checked)}
+                onChange={(e) => onToggleFiles(files.map((f) => f.relPath), e.target.checked)}
                 style={{ marginTop: 3 }}
               />
               <div style={{ minWidth: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -2784,31 +2820,258 @@ function UploadCategoryList({
               </button>
             </div>
             {isOpen ? (
-              <div style={{ maxHeight: 200, overflow: 'auto', padding: '4px 12px 10px 34px' }}>
-                {files.map((f) => (
-                  <label
-                    key={f.relPath}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selection.has(f.relPath)}
-                      onChange={(e) => onToggleFile(f.relPath, e.target.checked)}
-                    />
-                    <span style={{ ...S.mono, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {f.relPath}
-                    </span>
-                    <span style={{ ...S.hint, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
-                      {formatBytes(f.size)}
-                      {f.size > maxFileBytes ? ` ⚠ ${t('community.publish.tooLarge')}` : ''}
-                    </span>
-                  </label>
-                ))}
+              <div style={{ maxHeight: 240, overflow: 'auto', padding: '4px 12px 10px 34px' }}>
+                <CategoryFileTree
+                  t={t}
+                  categoryId={cat.id}
+                  files={files}
+                  selection={selection}
+                  maxFileBytes={maxFileBytes}
+                  onToggleFiles={onToggleFiles}
+                />
               </div>
             ) : null}
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * 一个分类的**文件目录树**（发布 / 回传对话框里「展开」之后那一段）。
+ *
+ * 为什么不再平铺：一个分类几百个文件，想排除 `research/literature/fulltext/` 这种整枝，
+ * 平铺就得逐个点几百下（用户 2026-10 的诉求）。树以后**目录行自带三态复选框**：
+ * 点一下就是"整枝加入 / 整枝移出"，文件行仍可单独调整 —— 也就是"允许调整落到文件级"这条
+ * 老契约没变，只是多了一个省力的粒度。
+ *
+ * 约定：
+ * - **默认只展开到第一层**（看到的就是一级目录）—— 深层按需点开，几百项也不会一次全渲染；
+ * - 目录行显示 `整枝文件数 · 整枝体积`，文件名 + 单文件体积；超上限仍标 ⚠；
+ * - 宿主写的**跳过占位项**（`node_modules/` 之类，`relPath` 以 `/` 结尾）渲染成灰色的
+ *   "已跳过"行、**不给复选框**（勾了也没有文件可传）。
+ */
+function CategoryFileTree({
+  t,
+  categoryId,
+  files,
+  selection,
+  maxFileBytes,
+  onToggleFiles,
+}: {
+  t: Translate
+  categoryId: string
+  files: HostUploadPlan['plan']['categories'][number]['files']
+  selection: ReadonlySet<string>
+  maxFileBytes: number
+  onToggleFiles: (relPaths: string[], next: boolean) => void
+}): JSX.Element {
+  /*
+   * 真实数据里一个分类几乎总是"全部在同一个顶层目录下"，所以先剥掉唯一的根
+   * （`plans/…` → 直接看 `history/` 与各文件），否则点开「展开」只看到一层壳。
+   * 剥掉的前缀以灰色面包屑显示（见 `CategoryFileTreeView`）。
+   */
+  const tree = React.useMemo(() => flattenSingleRoot(buildUploadTree(files)), [files])
+  /*
+   * 展开中的目录。键带分类前缀：同一份 `Map` 可能同时管多个分类（其实每个分类是独立组件，
+   * 但这样即使将来把它们合并成一个也不会串）。
+   */
+  const [open, setOpen] = React.useState<ReadonlySet<string>>(() => new Set<string>())
+  const toggleOpen = (path: string): void =>
+    setOpen((prev) => {
+      const next = new Set(prev)
+      const key = `${categoryId}::${path}`
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+
+  return (
+    <CategoryFileTreeView
+      t={t}
+      nodes={tree.nodes}
+      prefix={tree.prefix}
+      open={open}
+      categoryId={categoryId}
+      selection={selection}
+      maxFileBytes={maxFileBytes}
+      onToggleFiles={onToggleFiles}
+      onToggleOpen={toggleOpen}
+    />
+  )
+}
+
+/**
+ * 树的**纯渲染**部分（无 hook）：状态由 {@link CategoryFileTree} 用 `useState` 持有。
+ *
+ * 拆出来是为了能被离线自检**真的渲染一遍**（`scripts/verify-settings-page.mjs` 的渲染段
+ * 直接调用无 hook 组件，见那里的 `expand()`）；带 hook 的组分只能在 React 里跑。
+ */
+/**
+ * 一个目录一次最多渲染多少行。
+ *
+ * 真实工作区里 `experiments/github-repo/` 有 **6800+** 个文件：整枝展开会把浏览器卡住。
+ * 所以超过这个数就只画前 MAX_CHILD_ROWS 行 + 一行"还有 N 项"提示 ——
+ * **整枝勾选不受影响**（那只依赖树上的文件清单，不依赖渲染了多少行）。
+ */
+const MAX_CHILD_ROWS = 200
+
+export function CategoryFileTreeView({
+  t,
+  nodes,
+  prefix = '',
+  open,
+  categoryId,
+  selection,
+  maxFileBytes,
+  onToggleFiles,
+  onToggleOpen,
+}: {
+  t: Translate
+  nodes: readonly UploadTreeNode[]
+  /** 被剥掉的顶层前缀（如 `research/literature`）：渲染成一行灰色面包屑，没有则为空串。 */
+  prefix?: string
+  /** 展开中的目录（键 = `${categoryId}::${path}`）。 */
+  open: ReadonlySet<string>
+  categoryId: string
+  selection: ReadonlySet<string>
+  maxFileBytes: number
+  onToggleFiles: (relPaths: string[], next: boolean) => void
+  onToggleOpen: (path: string) => void
+}): JSX.Element {
+  /**
+   * 画一层节点；**任何一层**超过 {@link MAX_CHILD_ROWS} 都只画前 N 个 + 一行"还有 N 项"。
+   *
+   * 截断必须在**每一层**（含剥层后的根层）：`flattenSingleRoot` 可能把
+   * `experiments/github-repo/` 这种 6800+ 文件的目录一路剥到根层 —— 那里同样不能一次全画。
+   * 截断只影响**画多少行**，整枝勾选仍覆盖全部文件（那依赖树上的文件清单）。
+   */
+  const renderNodes = (list: readonly UploadTreeNode[], depth: number): JSX.Element[] => {
+    const shown = list.slice(0, MAX_CHILD_ROWS)
+    const hidden = list.length - shown.length
+    const rows = shown.flatMap((node) => {
+      const pad = 8 + depth * 14
+      if (node.kind === 'dir') {
+        const isOpen = open.has(`${categoryId}::${node.path}`)
+        const state = folderState(node, selection)
+        const rows: JSX.Element[] = [
+          <div
+            key={`d:${node.path}`}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0', paddingLeft: pad }}
+          >
+            {node.placeholder ? (
+              <span style={{ width: 14 }} />
+            ) : (
+              <button
+                type="button"
+                aria-label={isOpen ? t('community.publish.collapse') : t('community.publish.expand')}
+                onClick={() => onToggleOpen(node.path)}
+                style={{
+                  ...S.linkBtn,
+                  // `+/−` 用等宽字体 + 固定宽高：开合时不左右跳动，也不依赖旋转动画
+                  width: 14,
+                  height: 14,
+                  lineHeight: '14px',
+                  padding: 0,
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontSize: 13,
+                  textAlign: 'center',
+                  color: 'var(--dsw-alias-text-secondary)',
+                }}
+              >
+                {isOpen ? '−' : '+'}
+              </button>
+            )}
+            {node.placeholder ? (
+              <span style={{ width: 13 }} />
+            ) : (
+              <input
+                type="checkbox"
+                checked={state === 'all'}
+                ref={(el) => {
+                  if (el) el.indeterminate = state === 'some'
+                }}
+                onChange={(e) => onToggleFiles(nodeFilePaths(node), e.target.checked)}
+              />
+            )}
+            {/* 目录名**也能点开/收起**（不只那个小三角）—— 树里最常按的就是目录名 */}
+            <button
+              type="button"
+              onClick={() => onToggleOpen(node.path)}
+              disabled={node.placeholder}
+              style={{
+                ...S.mono,
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                textAlign: 'left',
+                cursor: node.placeholder ? 'default' : 'pointer',
+                color: node.placeholder ? 'var(--dsw-alias-text-secondary)' : 'inherit',
+                font: 'inherit',
+                fontFamily: 'var(--dsw-alias-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
+              }}
+            >
+              {node.name}/
+            </button>
+            <span style={{ ...S.hint, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+              {node.placeholder
+                ? t('community.publish.skippedDir')
+                : `${node.count} · ${formatBytes(node.bytes)}`}
+            </span>
+          </div>,
+        ]
+        if (isOpen && node.children.length > 0) rows.push(...renderNodes(node.children, depth + 1))
+        return rows
+      }
+      return [
+        <label
+          key={`f:${node.path}`}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0', paddingLeft: pad + 33 }}
+        >
+          <input
+            type="checkbox"
+            checked={selection.has(node.path)}
+            onChange={(e) => onToggleFiles([node.path], e.target.checked)}
+          />
+          <span
+            style={{ ...S.mono, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
+            title={node.path}
+          >
+            {node.name}
+          </span>
+          <span style={{ ...S.hint, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+            {formatBytes(node.bytes)}
+            {node.bytes > maxFileBytes ? ` ⚠ ${t('community.publish.tooLarge')}` : ''}
+          </span>
+        </label>,
+      ]
+    })
+    if (hidden > 0) {
+      rows.push(
+        <div
+          key={`more:${depth}:${list.length}`}
+          style={{ ...S.hint, padding: '2px 0', paddingLeft: 8 + depth * 14 + 33 }}
+        >
+          {t('community.publish.moreItems', { count: hidden })}
+        </div>,
+      )
+    }
+    return rows
+  }
+
+  if (nodes.length === 0) return <div style={S.hint}>{t('community.exchange.noUploadFiles')}</div>
+  return (
+    <div>
+      {prefix ? (
+        <div style={{ ...S.hint, ...S.mono, padding: '2px 0 4px 8px', opacity: 0.75 }}>
+          {prefix}/
+        </div>
+      ) : null}
+      {renderNodes(nodes, 0)}
     </div>
   )
 }
@@ -2821,8 +3084,7 @@ function PublishDialog({
   expanded,
   busy,
   progress,
-  onToggleCategory,
-  onToggleFile,
+  onToggleFiles,
   onToggleExpand,
   onRemember,
   onCancel,
@@ -2836,8 +3098,7 @@ function PublishDialog({
   busy: boolean
   /** 上传进度（宿主按批上报）——附件大时这一行就是"慢 ≠ 死"的唯一判据。 */
   progress: HostUploadProgress | null
-  onToggleCategory: (categoryId: string, files: string[], next: boolean) => void
-  onToggleFile: (relPath: string, next: boolean) => void
+  onToggleFiles: (relPaths: string[], next: boolean) => void
   onToggleExpand: (categoryId: string) => void
   onRemember: (next: boolean) => void
   onCancel: () => void
@@ -2925,9 +3186,8 @@ function PublishDialog({
             maxFileBytes={data.plan.limits.maxFileBytes}
             selection={selection}
             expanded={expanded}
-            onToggleCategory={onToggleCategory}
-            onToggleFile={onToggleFile}
-            onToggleExpand={onToggleExpand}
+            onToggleFiles={onToggleFiles}
+                        onToggleExpand={onToggleExpand}
           />
 
           {oversizeSelected.length > 0 ? (
@@ -4390,8 +4650,7 @@ function UploadDialog({
   progress,
   notice,
   onSelectWorkspace,
-  onToggleCategory,
-  onToggleFile,
+  onToggleFiles,
   onToggleExpand,
   onUpload,
   onClose,
@@ -4412,8 +4671,7 @@ function UploadDialog({
   progress: HostUploadProgress | null
   notice: { tone: 'success' | 'error'; text: string } | null
   onSelectWorkspace: (id: string) => void
-  onToggleCategory: (categoryId: string, files: string[], next: boolean) => void
-  onToggleFile: (relPath: string, next: boolean) => void
+  onToggleFiles: (relPaths: string[], next: boolean) => void
   onToggleExpand: (categoryId: string) => void
   onUpload: () => void
   onClose: () => void
@@ -4504,9 +4762,8 @@ function UploadDialog({
               maxFileBytes={plan.plan.limits.maxFileBytes}
               selection={selection}
               expanded={expanded}
-              onToggleCategory={onToggleCategory}
-              onToggleFile={onToggleFile}
-              onToggleExpand={onToggleExpand}
+              onToggleFiles={onToggleFiles}
+                            onToggleExpand={onToggleExpand}
             />
           )}
           {/* 机器产物被剔掉了 —— 说一句，免得导师找不到 node_modules 里的东西以为漏了 */}
@@ -5584,22 +5841,14 @@ export function CommunityTab({
   }
 
   /** 分类级勾选（与发布对话框同一套语义）。 */
-  const toggleUploadCategory = (_categoryId: string, files: string[], next: boolean): void => {
+  /** 勾选 / 取消**一组**文件（分类整选、目录整枝切换都走它 —— 见 `upload-tree.ts`）。 */
+  const toggleUploadFiles = (relPaths: string[], next: boolean): void => {
     setUploadSelected((prev) => {
       const out = new Set(prev)
-      for (const rel of files) {
+      for (const rel of relPaths) {
         if (next) out.add(rel)
         else out.delete(rel)
       }
-      return out
-    })
-  }
-
-  const toggleUploadFile = (relPath: string, next: boolean): void => {
-    setUploadSelected((prev) => {
-      const out = new Set(prev)
-      if (next) out.add(relPath)
-      else out.delete(relPath)
       return out
     })
   }
@@ -7082,23 +7331,14 @@ export function CommunityTab({
           expanded={dialog.expanded}
           busy={publishing !== null}
           progress={publishProgress}
-          onToggleCategory={(categoryId, files, next) =>
+          onToggleFiles={(relPaths, next) =>
             setDialog((d) => {
               if (!d) return d
               const sel = new Set(d.selection)
-              for (const f of files) {
+              for (const f of relPaths) {
                 if (next) sel.add(f)
                 else sel.delete(f)
               }
-              return { ...d, selection: sel }
-            })
-          }
-          onToggleFile={(relPath, next) =>
-            setDialog((d) => {
-              if (!d) return d
-              const sel = new Set(d.selection)
-              if (next) sel.add(relPath)
-              else sel.delete(relPath)
               return { ...d, selection: sel }
             })
           }
@@ -7300,8 +7540,7 @@ export function CommunityTab({
           progress={uploadProgress}
           notice={exchangeNotice}
           onSelectWorkspace={(id) => void selectUploadWorkspace(id)}
-          onToggleCategory={toggleUploadCategory}
-          onToggleFile={toggleUploadFile}
+          onToggleFiles={toggleUploadFiles}
           onToggleExpand={toggleUploadExpand}
           onUpload={() => void runUpload()}
           onClose={() => setExchange(null)}
@@ -7577,31 +7816,29 @@ export function CommunityTab({
                         }}
                       >
                         {/*
-                          **哪份工作、和谁**（2026-10 用户要求）：两行都要有 ——
-                            · 该我接受的（别人申请我）→ 对方名（粗体）+ **研究工作名**；
-                            · 我发起的（我出价请人接受）→ 研究工作名（粗体）+ 对方名。
+                          **第一行永远是"哪份研究工作"，第二行才是"和谁"**（2026-10 用户定稿）。
 
-                          为什么两行都给：只给人名时，"同一个导师的多个研究工作"分不出来；
-                          只给工作名时，"**同名**工作分属两个学生"分不出来 —— 本机实测就有
-                          两份都叫「ConvFusion-dsh（run）」的提案（导师互换），光看名字根本分不清。
+                          ⚠️ **不要再按"谁该接受"翻行序**（v0.6.7 修的就是这个）：
+                          v0.6.0 曾写成"该我接受 → 粗体放对方名、工作名退到第二行"，理由是
+                          "别人申请我时我更关心是谁"。但真实数据里【指导中】的每一行来自
+                          **不同来源**（导师出题→学生选题、学生申请导师项目、导师邀请学生…），
+                          于是同一个列表里有的行粗体是工作名、有的行粗体是学生名 ——
+                          用户直接反馈"显示不一致"（2026-10-26）。列表是**按工作跟踪状态**的，
+                          工作名必须是那个恒定的第一行。
 
-                          ⚠️ 用 `view.iAmAcceptor` 而不是"我是不是学生"（v0.6.0）：
-                          方向 B 下该接受的是**导师**、粗体那行仍是对方（出价的学生）。
-                          ⚠️ 粗体那行是 `whiteSpace: nowrap + ellipsis`，所以区分用的那一半
-                          **必须另起一行**（`S.hint` 会换行）：挤进同一行会被省略号截掉，
-                          那就等于没显示。
+                          两行都保留：只给人名时"同一个导师的多个研究工作"分不出来；
+                          只给工作名时"**同名**工作分属两个学生"分不出来（本机实测就有两份
+                          都叫「ConvFusion-dsh（run）」的提案）。对方是谁放第二行，信息不丢。
+
+                          ⚠️ 粗体那行是 `whiteSpace: nowrap + ellipsis`，所以"和谁"**必须**
+                          另起一行（`S.hint` 会换行）：挤进同一行会被省略号截掉，等于没显示。
                         */}
                         <div style={S.listTitle}>
-                          {view.iAmAcceptor
-                            ? (view.counterparty?.displayName ?? t('community.mentor.unknownParty'))
-                            : (proposalWorkLabel(p) ?? t('community.mentor.untitledProject'))}
+                          {proposalWorkLabel(p) ?? t('community.mentor.untitledProject')}
                         </div>
-                        {(() => {
-                          const line = view.iAmAcceptor
-                            ? (proposalWorkLabel(p) ?? t('community.mentor.untitledProject'))
-                            : (view.counterparty?.displayName ?? '')
-                          return line ? <div style={S.hint}>{line}</div> : null
-                        })()}
+                        <div style={S.hint}>
+                          {view.counterparty?.displayName ?? t('community.mentor.unknownParty')}
+                        </div>
                         {/* 费用数字（不做解释性描述）—— 名称之下一行 */}
                         <div style={S.hint}>{feeText(p)}</div>
                         {/*

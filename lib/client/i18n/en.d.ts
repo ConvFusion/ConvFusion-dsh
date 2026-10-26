@@ -79,6 +79,8 @@ export declare const en: {
     readonly 'community.publish.unchanged': "no content changes";
     readonly 'community.publish.expand': "Expand";
     readonly 'community.publish.collapse': "Collapse";
+    readonly 'community.publish.moreItems': "{count} more item(s) — tick the folder to select them all";
+    readonly 'community.publish.skippedDir': "skipped";
     readonly 'community.publish.tooLarge': "over the per-file limit";
     readonly 'community.publish.oversizeWarning': "{count} file(s) exceed the server per-file limit (100 MB) and will not be uploaded.";
     readonly 'community.publish.summary': "{files} file(s) selected · {size} · {batches} batch(es)";

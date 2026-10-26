@@ -39,6 +39,8 @@
  * 路由带 Harness 的信任/鉴权栅栏，等价于 RPC 渠道的安全级别。
  */
 import { type Translate } from './i18n/index.js';
+import { type UploadTreeNode } from './upload-tree.js';
+import { type MentorshipView } from './mentorship-view.js';
 /**
  * settings scope 的快照。
  *
@@ -247,6 +249,74 @@ export declare function loadSettingsState(send?: SettingsSend, options?: {
     timeoutMs?: number;
 }, t?: Translate): Promise<SettingsLoad>;
 export declare function ConvFusionProjectSettings({ scope, t, send, }: ConvFusionSettingsProps): JSX.Element;
+/**
+ * 「指导中」那一行的**进展文案**。
+ *
+ * ⚠️ 提案状态（`PROPOSED`/`ACCEPTED`/…）是**提案**的生命周期，接受之后就不再变化 ——
+ * 于是列表会永远停在「已接受」，看不出指导到底有没有开始（2026-09 用户反馈）。
+ * 关系建立之后真正有意义的是：**导师传了指导结果没有**。
+ *
+ * 因此 ACCEPTED 拆成两个进展状态，并且**按角色换称呼**（导师看自己的行不该写
+ * "导师已指导"）：
+ *
+ * | 事实 | 学生看到 | 导师看到 |
+ * |---|---|---|
+ * | 对方那一侧还没有文件 | 等待指导意见 | 待我指导 |
+ * | 对方那一侧有文件 | 导师已指导 | 我已指导 |
+ */
+/**
+ * 一条指导提案**在我眼里**是什么（方向 + 当事人 id 推出的派生量）。
+ *
+ * ## 为什么要有这一层（v0.6.0 出题模式的核心）
+ *
+ * 早先界面用一个 `incoming = (我是 researcher)` 同时表达了四件事：我要不要动作、
+ * 我上传落在哪一侧、进展文案怎么称呼、谁的资料该给我看。**方向 B（导师出题）里
+ * 这四件事不再一致** —— 项目 owner 是导师、发起人是学生、接受人是导师，
+ * 继续用"我是不是 researcher"判断会在每一处都反过来。
+ *
+ * 所以统一在这里算清楚，其余地方只读这些派生量：
+ *
+ * | 派生量 | 方向 A（学生出题） | 方向 B（导师出题） |
+ * |---|---|---|
+ * | `iAmOwner`（服务器 `owner` 侧） | 我是学生 | 我是导师 |
+ * | `mySide` | 学生 → `owner` | 导师 → `owner` |
+ * | `iProposed` | 导师 | 学生 |
+ * | `iAmAcceptor`（该我接受/拒绝） | 学生 | 导师 |
+ */
+interface HostProposalView extends MentorshipView {
+    /** 我上传时要与自己比对的那一侧（服务器 `?source=`）。 */
+    mySide: HostFileSide;
+    /** 对方的侧（下载读它）。 */
+    otherSide: HostFileSide;
+    /** 要判断的那个人（对方）。 */
+    counterparty: HostProposalParty | null;
+    /** 对方是导师吗（决定资料框的标题与措辞）。 */
+    counterpartyIsMentor: boolean;
+}
+/**
+ * **我要下载的那一侧**的文件数（三态：`number` / `null` = 服务器说不知道 / `undefined` = 旧服务器）。
+ *
+ * 【下载】按钮与"先下载一次"提示**必须**共用这一个判据 —— v0.6.7 之前的 bug 就是没共用：
+ * 提示按 `view.otherSide` 取数（学生下载 owner 侧 → 数导师的工作区），按钮却一律看
+ * `reviewFiles`（= **非 owner 那一侧**，方向 B 下是**学生自己的交付**）。于是"导师出题 →
+ * 学生选题"的关系里，导师的工作区有内容（提示让先下载）、学生自己的交付是 0 份（按钮判为
+ * 没意义 → 隐藏），学生既被要求下载又没有下载按钮（2026-10-26 用户反馈）。
+ *
+ * 取数规则（与 `sideSyncHint` 完全一致）：
+ *   · 下载 `owner` 侧 → `workspaceFiles`（owner 那一侧的工作区文件数）
+ *   · 下载 `mentor` 侧（= 非 owner 侧 / review 侧）→ `reviewFiles`
+ */
+export declare function downloadSideCount(p: HostProposal, view: HostProposalView): number | null | undefined;
+/**
+ * 【下载】能不能点：关系已建立，且**我要下载的那一侧**确实有东西。
+ *
+ * 下载回来的是"对方那一侧的快照"；那一侧空着时点了也没用，所以隐藏
+ * （2026-09 用户反馈：还没有人上传，按钮却可点）。
+ *
+ * 三态纪律：`null`（查不到）/ `undefined`（旧服务器）→ **保留按钮** ——
+ * 拿不到 ≠ 没有，不能因为一次探测失败就把一个可能可用的动作藏起来。
+ */
+export declare function canDownloadProposal(p: HostProposal, view: HostProposalView): boolean;
 /** **本机**研究工作（宿主 `LocalWorkItem` 的镜像）—— 数据来自磁盘，不需要登录。 */
 /**
  * 一项研究工作的**方向**（宿主 `ProjectDirection` 的镜像）。
@@ -287,6 +357,11 @@ interface HostDownloadTarget {
     /** 工作区内标记与本地记录冲突（读到了但值不同）。 */
     identityConflict: boolean;
 }
+/**
+ * 项目文件空间的**两侧**（宿主 `FileSource` 的镜像）：`owner` = 学生自己那份，
+ * `mentor` = 导师回传的那份。同一路径两侧并存、互不覆盖。
+ */
+type HostFileSide = 'owner' | 'mentor';
 /** 导师简介（`research_profiles` 投影；后端 enrich 后才有）。 */
 interface HostMentorProfile {
     institution: string | null;
@@ -411,6 +486,19 @@ type HostSyncCheck = {
  * 无论哪条路失败都**只返回 false、不抛** —— 复制失败不该让界面崩，也不该打断下载。
  */
 export declare function copyText(text: string): Promise<boolean>;
+export declare function CategoryFileTreeView({ t, nodes, prefix, open, categoryId, selection, maxFileBytes, onToggleFiles, onToggleOpen, }: {
+    t: Translate;
+    nodes: readonly UploadTreeNode[];
+    /** 被剥掉的顶层前缀（如 `research/literature`）：渲染成一行灰色面包屑，没有则为空串。 */
+    prefix?: string;
+    /** 展开中的目录（键 = `${categoryId}::${path}`）。 */
+    open: ReadonlySet<string>;
+    categoryId: string;
+    selection: ReadonlySet<string>;
+    maxFileBytes: number;
+    onToggleFiles: (relPaths: string[], next: boolean) => void;
+    onToggleOpen: (path: string) => void;
+}): JSX.Element;
 /**
  * 接受指导的**确认对话框**。
  *

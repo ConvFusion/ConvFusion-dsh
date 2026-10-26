@@ -84,6 +84,8 @@ export const zh = {
   'community.publish.unchanged': '内容无变化',
   'community.publish.expand': '展开',
   'community.publish.collapse': '收起',
+  'community.publish.moreItems': '还有 {count} 项（勾选本目录即可整枝选择）',
+  'community.publish.skippedDir': '整枝已跳过',
   'community.publish.tooLarge': '超过单文件上限',
   'community.publish.oversizeWarning': '有 {count} 个文件超过服务器单文件上限（100 MB），不会上传。',
   'community.publish.summary': '已选 {files} 个文件 · {size} · {batches} 批上传',

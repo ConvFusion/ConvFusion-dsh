@@ -57,6 +57,17 @@ export { CommunityTab, DownloadDialog } from './settings.js'
  * 一遍：资金池不够时按钮是否禁用、余额弹窗是否真的分列两池，这些只有遍历产出的树才算数。
  */
 export { AcceptConfirmDialog, TokenDialog } from './settings.js'
+/**
+ * 上传清单的**目录树**：纯逻辑 + 纯渲染，导出给离线自检（`verify-settings-page.mjs`
+ * 直接构建树、并渲染第一层/展开后的行 —— "目录整枝勾选"这条交互只有遍历产出的树才算数）。
+ */
+/**
+ * 【指导中】的"能不能下载"与"下载哪一侧"：**同一份**判据，导出给离线自检跑真值表
+ * （v0.6.7 的 bug 就是提示与按钮各算一套 —— 现在两者必须指向同一个函数）。
+ */
+export { canDownloadProposal, downloadSideCount } from './settings.js'
+export { CategoryFileTreeView } from './settings.js'
+export { buildUploadTree, folderState, nodeFilePaths, treeFilePaths } from './upload-tree.js'
 export { readProgressValue, shortenPath }
 /** 顶部品牌入口（本体单独导出：离线验证直接渲染它，不必穿透整页容器）。 */
 export { COMMUNITY_BUTTON_ORDER, ConvFusionComButton }
