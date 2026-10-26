@@ -85,6 +85,16 @@ export const en = {
   'community.publish.collapse': 'Collapse',
   'community.publish.moreItems': '{count} more item(s) — tick the folder to select them all',
   'community.publish.skippedDir': 'skipped',
+  'community.publish.price': 'Listing price',
+  'community.publish.priceMentor': 'Asking price (mentor)',
+  'community.publish.priceResearcher': 'Budget (your offer)',
+  'community.publish.priceHintMentor': 'A listed price, not the deal price: students may still offer any amount and the two sides negotiate in the proposal; the platform suggests {min}–{max} Tokens',
+  'community.publish.priceHintResearcher': 'Your budget, not the deal price: the mentor may counter in the proposal; the platform suggests {min}–{max} Tokens',
+  'community.publish.priceCustom': 'Custom…',
+  'community.publish.priceHint': 'A listing price only (the deal still uses the proposal amount); the platform suggests {min}–{max} Tokens',
+  'community.publish.priceUnknown': 'No price guide from the server — enter a price (whole Tokens ≥ 1, leave empty to list none)',
+  'community.publish.priceInvalid': 'Enter a whole number of Tokens ≥ {min} (free is not supported)',
+  'community.publish.priceTooHigh': 'Price exceeds the server limit',
   'community.publish.tooLarge': 'over the per-file limit',
   'community.publish.oversizeWarning': '{count} file(s) exceed the server per-file limit (100 MB) and will not be uploaded.',
   'community.publish.summary': '{files} file(s) selected · {size} · {batches} batch(es)',
@@ -270,6 +280,9 @@ export const en = {
   'community.mentor.mentorIs': 'Mentor: {name}',
   'community.mentor.researcherIs': 'Student: {name}',
   // The Mentorship tab keeps only status + fee numbers
+  'community.work.askingPrice': 'Asking {tokens}',
+  'community.work.budget': 'Budget {tokens}',
+  'community.mentor.askingVsOffer': 'Asking {asking} / offer {offer} Tokens',
   'community.mentor.feeText': '{total} Token (deposit {deposit} · success {success})',
   // Progress after the relationship exists. `review_files` counts the **non-owner**
   // side: in direction A that is the mentor's guidance, in direction B the student's

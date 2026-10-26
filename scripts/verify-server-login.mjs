@@ -4126,6 +4126,128 @@ section('[9] 指导关系（mentor/*）')
   keyLeak(acceptRes.value, 'mentor/accept')
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+ * [挂牌价] `fetchPriceGuide` / `createProject` / `updateProject` 的线上形状
+ *
+ * 服务器已经落地 `research_projects.asking_fee` 与 `GET /mentorship/price-guide`。
+ * 这里只钉**宿主与服务器之间的约定**（字段名、三态、什么时候不发字段）——
+ * 价格是否合理是服务器的事，界面只负责把服务器的档位照抄下来。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[挂牌价] price-guide 解析、建项目/改项目带上 asking_fee')
+{
+  const { fetchImpl, calls } = makeFetch(async (call) => {
+    if (call.url.endsWith('/mentorship/price-guide')) {
+      return {
+        status: 200,
+        body: {
+          min_allowed: 1,
+          recommended_min: 500,
+          recommended_max: 1000,
+          token_value_fen: 1000,
+          tiers: [
+            { jcr_level: 1, ccf_level: 'A', label: 'JCR 1区 / CCF-A', tokens: 1000 },
+            { jcr_level: 2, ccf_level: null, label: 'JCR 2区', tokens: 800 },
+            { jcr_level: 3, ccf_level: 'B', label: 'JCR 3区 / CCF-B', tokens: 600 },
+            { jcr_level: 4, ccf_level: 'C', label: 'JCR 4区 / CCF-C', tokens: 500 },
+          ],
+        },
+      }
+    }
+    if (call.method === 'POST' && call.url.endsWith('/projects')) {
+      return { status: 201, body: { id: 'p1', title: 'T', status: 'ACTIVE', direction: 'SEEK_STUDENT', asking_fee: 800, updated_at: '2026-10-26T00:00:00Z' } }
+    }
+    if (call.method === 'PUT') {
+      return { status: 200, body: { id: 'p1', title: 'T', status: 'ACTIVE', direction: 'SEEK_STUDENT', asking_fee: 950, updated_at: '2026-10-26T00:00:00Z' } }
+    }
+    return { status: 404, body: { detail: 'not found' } }
+  })
+  const opts = { fetchImpl }
+  const base = 'http://127.0.0.1:9'
+
+  const guide = await SC.fetchPriceGuide(base, 'cf_test_key', opts)
+  assert(guide !== null, 'price-guide 取到')
+  assertEq(guide.minAllowed, 1, '硬下限来自服务器（min_allowed）')
+  assertEq(guide.recommendedMin, 500, '推荐下限')
+  assertEq(guide.recommendedMax, 1000, '推荐上限')
+  assertEq(guide.tokenValueFen, 1000, 'Token 汇率（分）')
+  assertEq(guide.tiers.length, 4, '四档全价目')
+  assertEq(guide.tiers[3].label, 'JCR 4区 / CCF-C', '档位名照抄服务器（客户端不自己编）')
+
+  // 建项目：要带 asking_fee；没有价就不发这个字段（服务器 NULL = 没挂牌价）
+  const created = await SC.createProject(base, 'cf_test_key', { title: 'T', direction: 'SEEK_STUDENT', askingFee: 800 }, opts)
+  const post = calls.filter((c) => c.method === 'POST' && c.url.endsWith('/projects')).at(-1)
+  const postBody = JSON.parse(post.body)
+  assertEq(postBody.asking_fee, 800, '建项目时 asking_fee 写进请求体')
+  assertEq(postBody.direction, 'SEEK_STUDENT', '方向仍在')
+  assertEq(created.askingFee, 800, '响应里的 asking_fee 解析成 askingFee')
+  await SC.createProject(base, 'cf_test_key', { title: 'T2', direction: 'SEEK_STUDENT' }, opts)
+  const post2 = JSON.parse(calls.filter((c) => c.method === 'POST').at(-1).body)
+  assert(!('asking_fee' in post2), '没给价格 → 不发 asking_fee（服务器 NULL = 没挂牌价）')
+
+  // 改项目：要能单独传价；不传价时请求体里没有这个字段（服务器跳过 None，不会清空）
+  const updated = await SC.updateProject(base, 'cf_test_key', 'p1', { title: 'T', askingFee: 950 }, opts)
+  const put = JSON.parse(calls.filter((c) => c.method === 'PUT').at(-1).body)
+  assertEq(put.asking_fee, 950, '改价写进 PUT 的请求体')
+  assertEq(updated.askingFee, 950, '改价后的新价解析回来')
+  await SC.updateProject(base, 'cf_test_key', 'p1', { title: 'T' }, opts)
+  const put2 = JSON.parse(calls.filter((c) => c.method === 'PUT').at(-1).body)
+  assert(!('asking_fee' in put2), '只改名时不发 asking_fee（不会把已有挂牌价悄悄抹掉）')
+
+  // 旧服务器：404 → null（界面退化成手填价格，不挡发布）
+  const oldServer = makeFetch(async () => ({ status: 404, body: { detail: 'Not Found' } }))
+  const none = await SC.fetchPriceGuide(base, 'cf_test_key', { fetchImpl: oldServer.fetchImpl })
+  assertEq(none, null, '旧服务器没有这个端点 → null（界面退化成手填）')
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * [挂牌价·读] `asking_fee` 在**发现列表**与**提案响应**里的三态解析
+ *
+ * 服务器（2026-10）已把 `asking_fee` 加进 Summary 投影与提案响应 —— 挂牌价第一次
+ * 能被**对方**看见。三态：数字 = 有价；`null` = 没挂牌价（不是 0）；**缺字段** = 旧服务器
+ * → 客户端不显示（`undefined` 与被抹成同一种处理，但**都不许**当成 0）。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[挂牌价·读] 发现列表 / 提案响应的 asking_fee 三态')
+{
+  const mkFetch = (body) => makeFetch(async () => ({ status: 200, body }))
+  const base = 'http://127.0.0.1:9'
+
+  // 发现列表：800 / null / 缺字段
+  const withFee = mkFetch({ items: [{ project_id: 'p1', title: 'T', direction: 'SEEK_STUDENT', asking_fee: 800, updated_at: '2026-10-26T00:00:00Z' }] })
+  const listed = await SC.fetchWorkList(base, 'cf_test_key', { fetchImpl: withFee.fetchImpl }, 'SEEK_STUDENT')
+  assertEq(listed[0].askingFee, 800, '发现列表带 asking_fee → 卡片能显示「导师开价 800」')
+
+  const noFee = mkFetch({ items: [{ project_id: 'p2', title: 'T', direction: 'SEEK_STUDENT', asking_fee: null, updated_at: '2026-10-26T00:00:00Z' }] })
+  const listedNull = await SC.fetchWorkList(base, 'cf_test_key', { fetchImpl: noFee.fetchImpl }, 'SEEK_STUDENT')
+  assertEq(listedNull[0].askingFee, null, 'asking_fee: null（没挂牌价）→ 保留 null，界面不显示')
+
+  const oldSrv = mkFetch({ items: [{ project_id: 'p3', title: 'T', direction: 'SEEK_STUDENT', updated_at: '2026-10-26T00:00:00Z' }] })
+  const listedOld = await SC.fetchWorkList(base, 'cf_test_key', { fetchImpl: oldSrv.fetchImpl }, 'SEEK_STUDENT')
+  assert(!('askingFee' in listedOld[0]), '旧服务器没有这个字段 → 不带这个键（界面不显示）')
+
+  // 提案响应：与 total_fee 并排
+  const proposals = mkFetch([
+    {
+      id: 'pr1', project_id: 'p1', direction: 'SEEK_STUDENT', proposed_by_id: 'me',
+      total_fee: 100, deposit_amount: 20, success_payment_amount: 80,
+      asking_fee: 800, status: 'PROPOSED',
+      success_condition: { type: 'MUTUAL_COMPLETION' },
+    },
+  ])
+  const list = await SC.fetchProposals(base, 'cf_test_key', { fetchImpl: proposals.fetchImpl })
+  assertEq(list[0].askingFee, 800, '提案带 asking_fee → 界面能并排「开价 800 / 出价 100」')
+  assertEq(list[0].totalFee, 100, '提案自己的 total_fee 不受影响（成交价仍以它为准）')
+
+  const oldProp = mkFetch([
+    {
+      id: 'pr2', project_id: 'p1', direction: 'SEEK_STUDENT', proposed_by_id: 'me',
+      total_fee: 100, deposit_amount: 20, success_payment_amount: 80,
+      status: 'PROPOSED', success_condition: { type: 'MUTUAL_COMPLETION' },
+    },
+  ])
+  const oldList = await SC.fetchProposals(base, 'cf_test_key', { fetchImpl: oldProp.fetchImpl })
+  assert(!('askingFee' in oldList[0]), '旧服务器的提案没有 asking_fee → 不带这个键')
+}
+
 console.log(`\n${failed === 0 ? '✅' : '❌'} server-login: ${passed} passed, ${failed} failed`)
 if (failed > 0) {
   console.log('failures:\n' + failures.map((f) => `  - ${f}`).join('\n'))

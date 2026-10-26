@@ -47,6 +47,12 @@ export { AcceptConfirmDialog, TokenDialog } from './settings.js';
  * 【指导中】的"能不能下载"与"下载哪一侧"：**同一份**判据，导出给离线自检跑真值表
  * （v0.6.7 的 bug 就是提示与按钮各算一套 —— 现在两者必须指向同一个函数）。
  */
+/**
+ * 导师出题的**挂牌价**行（纯视图）：离线自检直接渲染，断言"档位来自服务器 / 默认入门档 /
+ * 自定义可填 / 非法时把原因说清"这些只有遍历产出的树才算数。
+ */
+export { PriceGuideRow, askingFeeText } from './settings.js';
+export { defaultPriceOf, priceOptionsOf, normalizePrice, validatePrice, formatTokenYuan } from './price-guide.js';
 export { canDownloadProposal, downloadSideCount } from './settings.js';
 export { CategoryFileTreeView } from './settings.js';
 export { buildUploadTree, folderState, nodeFilePaths, treeFilePaths } from './upload-tree.js';

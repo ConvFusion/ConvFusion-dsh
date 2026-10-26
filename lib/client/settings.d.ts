@@ -39,6 +39,7 @@
  * 路由带 Harness 的信任/鉴权栅栏，等价于 RPC 渠道的安全级别。
  */
 import { type Translate } from './i18n/index.js';
+import { type PriceGuideLike, type PriceOption } from './price-guide.js';
 import { type UploadTreeNode } from './upload-tree.js';
 import { type MentorshipView } from './mentorship-view.js';
 /**
@@ -327,6 +328,16 @@ export declare function canDownloadProposal(p: HostProposal, view: HostProposalV
  */
 type HostProjectDirection = 'SEEK_MENTOR' | 'SEEK_STUDENT';
 /**
+ * **挂牌价**要显示的那句话（三态；`null` = 不显示）。
+ *
+ * 服务器同一个 `asking_fee` 两种含义，措辞按**卡片自己的方向**选：
+ *   · `SEEK_STUDENT`（导师出题）→「导师开价 800」；
+ *   · `SEEK_MENTOR`（学生发题）→「预算 800」。
+ *
+ * 三态纪律：`null`（没挂牌价，不是 0）/ `undefined`（旧服务器）→ 不显示，也不写"未知"。
+ */
+export declare function askingFeeText(t: Translate, direction: HostProjectDirection, askingFee: number | null | undefined): string | null;
+/**
  * 一个**候选下载目标工作区**的校验结果（宿主 `mentor/downloadState` 的 `items[]` 镜像）。
  *
  * 判据是服务器给的研究工作标识 `workspace_id`（全局唯一、跨项目生命周期不变）：
@@ -400,6 +411,13 @@ interface HostProposal {
     projectTitle: string | null;
     /** **这项研究工作的名字**（服务器的 `work_name`）：列表该显示的就是它。 */
     workName?: string | null;
+    /**
+     * **发布方的挂牌价**（服务器 `asking_fee`）：与这份提案的 `totalFee` **并排显示** ——
+     * "开价 800 / 出价 100" 的差距就是议价信息。
+     *
+     * 三态：数字 = 有价；`null` = 没挂牌价（不是 0）；`undefined` = 旧服务器 → 不显示。
+     */
+    askingFee?: number | null;
     mentor: HostProposalParty | null;
     researcher: HostProposalParty | null;
     guidanceScope: string;
@@ -498,6 +516,41 @@ export declare function CategoryFileTreeView({ t, nodes, prefix, open, categoryI
     maxFileBytes: number;
     onToggleFiles: (relPaths: string[], next: boolean) => void;
     onToggleOpen: (path: string) => void;
+}): JSX.Element;
+/**
+ * 导师「出题」时的**挂牌价**这一行（发布 / 更新对话框里）。
+ *
+ * ```text
+ * 挂牌价  [500 Token · JCR 4区 / CCF-C ▾]   ≈ ¥5,000
+ *         挂牌价只是标价：成交价仍按提案金额结算
+ * ```
+ *
+ * ## 三个决定
+ *
+ * 1. **档位来自服务器**（`GET /mentorship/price-guide`），客户端不自带价目表 ——
+ *    写死的价目在平台调价那天会撒谎（服务器文档明确要求）。取不到参考时退化成
+ *    "直接填价格"，不挡发布。
+ * 2. **按价格升序**（入门档 500 在最上面）：用户的直觉是"从便宜看到贵"，
+ *    而服务器的 `tiers` 是等级降序（1区首）。
+ * 3. **允许自定义**：下拉最后一项是「自定义…」→ 出现数字输入框（整数、≥ 服务器下限）。
+ *    导师有自己的议价，界面不该只给四档。
+ *
+ * 纯视图（无 hook）：状态在 `CommunityTab` 的对话框状态里，便于离线自检直接渲染。
+ */
+export declare function PriceGuideRow({ t, direction, guide, options, mode, tokens, text, onSelectPreset, onSelectCustom, onText, }: {
+    t: Translate;
+    /** 哪个方向：导师出题 = 开价；学生发题 = 预算 / 出价。 */
+    direction: HostProjectDirection;
+    guide: PriceGuideLike | null;
+    options: PriceOption[];
+    mode: 'preset' | 'custom';
+    /** 当前生效的价格（`null` = 用户填的还不合法）。 */
+    tokens: number | null;
+    /** 自定义输入框里的原文（切回档位时保留，用户改主意不用重打）。 */
+    text: string;
+    onSelectPreset: (tokens: number) => void;
+    onSelectCustom: () => void;
+    onText: (next: string) => void;
 }): JSX.Element;
 /**
  * 接受指导的**确认对话框**。

@@ -86,6 +86,16 @@ export const zh = {
   'community.publish.collapse': '收起',
   'community.publish.moreItems': '还有 {count} 项（勾选本目录即可整枝选择）',
   'community.publish.skippedDir': '整枝已跳过',
+  'community.publish.price': '挂牌价',
+  'community.publish.priceMentor': '导师开价',
+  'community.publish.priceResearcher': '预算（你的出价）',
+  'community.publish.priceHintMentor': '这是挂牌价，不是成交价：学生仍可按任意金额出价，双方在提案里议价；平台建议 {min}–{max} Token',
+  'community.publish.priceHintResearcher': '这是你的预算，不是成交价：导师可按你的提案议价；平台建议 {min}–{max} Token',
+  'community.publish.priceCustom': '自定义…',
+  'community.publish.priceHint': '挂牌价只是标价（不是成交价，成交仍按提案金额）；平台建议 {min}–{max} Token',
+  'community.publish.priceUnknown': '服务器未提供价目参考；可填价格（≥1 的整数 Token，留空 = 不标价）',
+  'community.publish.priceInvalid': '请填 ≥ {min} 的整数 Token（不支持免费）',
+  'community.publish.priceTooHigh': '价格超出服务器允许的上限',
   'community.publish.tooLarge': '超过单文件上限',
   'community.publish.oversizeWarning': '有 {count} 个文件超过服务器单文件上限（100 MB），不会上传。',
   'community.publish.summary': '已选 {files} 个文件 · {size} · {batches} 批上传',
@@ -279,6 +289,9 @@ export const zh = {
   // 方向 B 里要判断/确认的对象是出价的学生
   'community.mentor.researcherIs': '学生：{name}',
   // 「指导中」只留状态 + 费用数字：描述性文字（指导范围 / 成功条件 / 简介 / 机构）全部去掉
+  'community.work.askingPrice': '导师开价 {tokens}',
+  'community.work.budget': '预算 {tokens}',
+  'community.mentor.askingVsOffer': '开价 {asking} / 出价 {offer} Token',
   'community.mentor.feeText': '{total} Token（押金 {deposit} · 成功 {success}）',
   // 关系建立之后的**进展**（提案状态接受后就不再变了，光看它永远是"已接受"）。
   //

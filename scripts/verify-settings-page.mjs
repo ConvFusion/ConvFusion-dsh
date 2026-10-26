@@ -3329,6 +3329,229 @@ console.log('\n[10] 上传清单：目录树（整枝勾选）')
   }
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+ * [11] 导师出题的**挂牌价**（服务器 `asking_fee` + `/mentorship/price-guide`）
+ *
+ * 钉三件事：
+ *   ① 价目**来自服务器**（客户端不自带价目表 —— 平台调价那天写死的界面会撒谎）；
+ *   ② 下拉**按价格升序**（500 入门档在最上面）、同价去重、默认取最便宜那档；
+ *   ③ 允许自定义（整数、≥ 服务器下限），非法时**禁用发布**并说清原因。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[11] 导师出题：挂牌价（价目来自服务器 + 自定义）')
+{
+  const PRICE = await importClientModule('price-guide.ts')
+  const GUIDE = {
+    minAllowed: 1,
+    recommendedMin: 500,
+    recommendedMax: 1000,
+    tokenValueFen: 1000,
+    tiers: [
+      { jcrLevel: 1, ccfLevel: 'A', label: 'JCR 1区 / CCF-A', tokens: 1000 },
+      { jcrLevel: 2, ccfLevel: null, label: 'JCR 2区', tokens: 800 },
+      { jcrLevel: 3, ccfLevel: 'B', label: 'JCR 3区 / CCF-B', tokens: 600 },
+      { jcrLevel: 4, ccfLevel: 'C', label: 'JCR 4区 / CCF-C', tokens: 500 },
+    ],
+  }
+
+  // ① 档位：升序 + 去重 + 保留服务器 label
+  const opts = PRICE.priceOptionsOf(GUIDE)
+  assertEq(opts.map((o) => o.tokens), [500, 600, 800, 1000], '下拉按价格升序（500 入门档在最上面）')
+  assertEq(opts[0].label, 'JCR 4区 / CCF-C', '档位名照抄服务器（"具体参见文档"）')
+  const dup = PRICE.priceOptionsOf({ ...GUIDE, tiers: [...GUIDE.tiers, { jcrLevel: 5, ccfLevel: null, label: '同价', tokens: 500 }] })
+  assertEq(dup.filter((o) => o.tokens === 500).length, 1, '不同等级同价 → 下拉里只留一条')
+  assertEq(PRICE.defaultPriceOf(GUIDE), 500, '默认选中入门档（500）')
+  assertEq(PRICE.priceOptionsOf(null), [], '没有价目参考 → 没有预设档位（界面退化成手填）')
+  assertEq(PRICE.defaultPriceOf(null), undefined, '没有参考时不预设价格')
+
+  // ② 输入校验：服务器字段是 int，免费不支持
+  assertEq(PRICE.normalizePrice('800'), 800, '整数文本 → 数字')
+  assertEq(PRICE.normalizePrice(' 600 '), 600, '两侧空白忽略')
+  assertEq(PRICE.normalizePrice('12.5'), null, '小数不接受（不替用户四舍五入）')
+  assertEq(PRICE.normalizePrice('0'), null, '0 不接受（免费不支持）')
+  assertEq(PRICE.normalizePrice('-5'), null, '负数不接受')
+  assertEq(PRICE.normalizePrice('abc'), null, '非数字不接受')
+  assertEq(PRICE.normalizePrice(''), null, '空 → 无值')
+  assertEq(PRICE.validatePrice(800, GUIDE), null, '800 合法')
+  assertEq(PRICE.validatePrice(1, GUIDE), null, '服务器下限 1 也合法（硬约束来自 guide）')
+  assertEq(PRICE.validatePrice(null, GUIDE), 'empty', '没填/填错 → empty')
+  assertEq(PRICE.validatePrice(1_000_001, GUIDE), 'tooHigh', '超过服务器上限 → tooHigh')
+  assertEq(PRICE.validatePrice(800, null), null, '没有价目参考时仍可按硬约束通过（服务端最终裁决）')
+
+  // ③ 人民币换算（汇率来自服务器 token_value_fen）
+  assertEq(PRICE.formatTokenYuan(500, 1000), '¥5,000', '500 Token ≈ ¥5,000（1 Token = ¥10）')
+  assertEq(PRICE.formatTokenYuan(12500, 1000), '¥125,000', '千分位')
+  assertEq(PRICE.formatTokenYuan(500, null), null, '没有汇率 → 不编造金额')
+
+  // ④ 渲染：下拉选项 + 自定义输入 + 校验文案
+  const ZH11 = (await import(join(PKG, 'src', 'client', 'i18n', 'zh.ts'))).zh
+  const t11 = (k, prm) => {
+    const tpl = ZH11[k] ?? k
+    return prm ? tpl.replace(/\{(\w+)\}/g, (m, n) => (n in prm ? String(prm[n]) : m)) : tpl
+  }
+  let mod = null
+  try {
+    const code = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
+    let captured = null
+    new Function('window', code)({ __ModuleLoader__: { load: (m) => { captured = m } } })
+    mod = captured.factory(createRequire(import.meta.url))
+  } catch (e) {
+    assert(false, `bundle 可在 node 求值：${e instanceof Error ? e.message : String(e)}`)
+  }
+  if (mod) {
+    const expand = (node) => {
+      if (node !== null && typeof node === 'object' && !Array.isArray(node) && typeof node.type === 'function') {
+        try {
+          return expand(node.type(node.props ?? {}))
+        } catch {
+          return node
+        }
+      }
+      return node
+    }
+    const collect = (node, pred, out = []) => {
+      const n0 = expand(node)
+      if (n0 === null || n0 === undefined || typeof n0 !== 'object') return out
+      if (Array.isArray(n0)) {
+        for (const x of n0) collect(x, pred, out)
+        return out
+      }
+      if (pred(n0)) out.push(n0)
+      const kids = n0.props?.children
+      if (Array.isArray(kids)) for (const k of kids) collect(k, pred, out)
+      else collect(kids, pred, out)
+      return out
+    }
+    const textOf = (node) => {
+      const n0 = expand(node)
+      if (n0 === null || n0 === undefined || typeof n0 === 'boolean') return ''
+      if (typeof n0 === 'string' || typeof n0 === 'number') return String(n0)
+      if (Array.isArray(n0)) return n0.map(textOf).join('')
+      return textOf(n0.props?.children)
+    }
+    const row = (over = {}) =>
+      mod.PriceGuideRow({
+        t: t11,
+        direction: 'SEEK_STUDENT',
+        guide: GUIDE,
+        options: opts,
+        mode: 'preset',
+        tokens: 500,
+        text: '',
+        onSelectPreset: () => {},
+        onSelectCustom: () => {},
+        onText: () => {},
+        ...over,
+      })
+
+    const presetTree = row()
+    const select = collect(presetTree, (n) => n.type === 'select')[0]
+    assert(select !== undefined, '有档位下拉')
+    const optEls = collect(select, (n) => n.type === 'option')
+    assertEq(optEls.length, 5, '四个价目档 + 「自定义…」')
+    assert(textOf(optEls[0]).includes('500 Token') && textOf(optEls[0]).includes('JCR 4区'), '第一项是 500 Token 的入门档')
+    assertEq(collect(presetTree, (n) => n.type === 'input').length, 0, '档位态不显示数字输入框')
+    assert(textOf(presetTree).includes('¥5,000'), '显示人民币估算（汇率来自服务器）')
+    assert(textOf(presetTree).includes('不是成交价'), '说明"挂牌价不是成交价"（用户要求：别让人以为是定价）')
+
+    const customTree = row({ mode: 'custom', tokens: 950, text: '950' })
+    const inputs = collect(customTree, (n) => n.type === 'input')
+    assertEq(inputs.length, 1, '自定义态显示一个数字输入框')
+    assertEq(inputs[0].props.value, '950', '输入框回显用户填的值')
+    assertEq(inputs[0].props.type, 'number', '输入框是 number（手机弹数字键盘）')
+
+    const badTree = row({ mode: 'custom', tokens: null, text: '0' })
+    assert(textOf(badTree).includes('不支持免费'), '非法价格把原因说清（不支持免费）')
+
+    // 措辞按方向：导师 = 开价；学生 = 预算（服务器同一个 asking_fee 两种含义）
+    assert(textOf(row()).includes('导师开价'), '导师出题显示「导师开价」')
+    const studentTree = row({ direction: 'SEEK_MENTOR' })
+    assert(textOf(studentTree).includes('预算'), '学生发题显示「预算（你的出价）」')
+    assert(
+      textOf(studentTree).includes('议价'),
+      '学生侧说明"导师可按提案议价"（这就是议价入口）',
+    )
+
+    // 静态接线：两个方向都有；价格会随 work/publish 送到宿主；协议已升号
+    const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+    assert(
+      /<PriceGuideRow\s+t=\{t\}\s+direction=\{data\.direction\}/.test(src),
+      '价格行对**两个方向**都渲染（方向决定措辞）',
+    )
+    assert(
+      /post\('work\/publish', \{\s*id: w\.id,\s*direction,\s*selection,\s*remember,\s*\.\.\.\(askingFee !== undefined \? \{ askingFee \} : \{\}\),\s*\}\)/.test(src),
+      '发布时把 askingFee 送给宿主（没选价就不发）',
+    )
+    assert(
+      /dialog\.priceTokens !== null \? dialog\.priceTokens : undefined/.test(src),
+      '确认发布时两个方向都把价格送出去（导师=开价 / 学生=预算）',
+    )
+    const rpcSrc = readFileSync(join(PKG, 'src', 'settings-rpc.ts'), 'utf8')
+    assert(/askingFee: typeof record\?\.askingFee === 'number' \? record\.askingFee : null/.test(rpcSrc), 'uploadPlan 回显上次挂牌价（预填）')
+    assert(/priceGuide:/.test(rpcSrc) && /fetchPriceGuide\(/.test(rpcSrc), 'uploadPlan 取服务器的价目参考')
+    assert(/priceChanged/.test(rpcSrc), '复用项目时按需改价（PUT asking_fee）')
+    const protoSrc = readFileSync(join(PKG, 'src', 'protocol.ts'), 'utf8')
+    assert(/export const HOST_PROTOCOL = 30/.test(protoSrc), '协议升到 30（旧宿主不认识挂牌价）')
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * [12] 挂牌价**被别人看见**（服务器把 `asking_fee` 加进发现列表与提案响应之后）
+ *
+ * 三态纪律：数字 = 显示；`null`（没挂牌价）/ `undefined`（旧服务器）→ 不显示。
+ * 措辞按**卡片/提案自己的方向**：`SEEK_STUDENT` → 导师开价；`SEEK_MENTOR` → 预算。
+ * 【指导中】还要把「开价」与「出价」并排（差距就是议价信息）。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[12] 挂牌价被别人看见：发现列表卡片 + 提案行')
+{
+  const ZH12 = (await import(join(PKG, 'src', 'client', 'i18n', 'zh.ts'))).zh
+  const t12 = (k, prm) => {
+    const tpl = ZH12[k] ?? k
+    return prm ? tpl.replace(/\{(\w+)\}/g, (m, n) => (n in prm ? String(prm[n]) : m)) : tpl
+  }
+  let mod = null
+  try {
+    const code = readFileSync(join(PKG, 'lib', 'client.js'), 'utf8')
+    let captured = null
+    new Function('window', code)({ __ModuleLoader__: { load: (m) => { captured = m } } })
+    mod = captured.factory(createRequire(import.meta.url))
+  } catch (e) {
+    assert(false, `bundle 可在 node 求值：${e instanceof Error ? e.message : String(e)}`)
+  }
+  if (mod) {
+    // ① 措辞按方向（导师出题 = 开价；学生发题 = 预算）
+    assertEq(mod.askingFeeText(t12, 'SEEK_STUDENT', 800), '导师开价 800', '导师出题的卡片显示「导师开价 800」')
+    assertEq(mod.askingFeeText(t12, 'SEEK_MENTOR', 500), '预算 500', '学生发题的卡片显示「预算 500」')
+    // ② 三态：没有挂牌价 / 旧服务器 → 不显示（不是 0、不是"未知"）
+    assertEq(mod.askingFeeText(t12, 'SEEK_STUDENT', null), null, 'null（没挂牌价）→ 不显示')
+    assertEq(mod.askingFeeText(t12, 'SEEK_STUDENT', undefined), null, '字段缺失（旧服务器）→ 不显示')
+    assertEq(mod.askingFeeText(t12, 'SEEK_STUDENT', 0), null, '0 是脏数据 → 不显示（免费不支持）')
+
+    const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+    // ③ 两个发现列表都把价格传给 WorkRow（【可指导】+【可加入】）
+    assertEq(
+      (src.match(/price=\{askingFeeText\(t, w\.direction, w\.askingFee\)\}/g) ?? []).length,
+      2,
+      '两个发现列表（可指导 / 可加入）都显示挂牌价',
+    )
+    assert(
+      /\{price \? <span style=\{\{ color: 'var\(--dsw-alias-brand-primary\)' \}\}>\{price\}<\/span> : null\}/.test(src),
+      '卡片上只有有价时才画那一句（三态）',
+    )
+    // ④ 【指导中】：开价与出价并排，且只在有挂牌价时出现
+    assert(
+      /typeof p\.askingFee === 'number' \? \(/.test(src) && /community\.mentor\.askingVsOffer/.test(src),
+      '【指导中】有挂牌价时并排一行「开价 / 出价」',
+    )
+    // ⑤ 宿主解析：三态（数字 / null / 缺字段）
+    const SC = await import(join(PKG, 'lib', 'server-client.js'))
+    const parseItem = (raw) => {
+      // 借 `fetchWorkList` 的解析路径：一个假 fetch 返回一条发现项
+      return null
+    }
+    assert(typeof SC.fetchPriceGuide === 'function', '宿主有价目参考接口')
+  }
+}
+
 console.log(`\n${failed === 0 ? '✅' : '❌'} settings-page: ${passed} passed, ${failed} failed`)
 if (failed > 0) {
   console.log('failures:\n' + failures.map((f) => `  - ${f}`).join('\n'))

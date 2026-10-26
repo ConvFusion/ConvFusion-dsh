@@ -83,6 +83,14 @@ export interface PublishedRecord {
    * （新占用者还没发布过 → 没有标记，只有指纹能说明住在这里的不是当初那项研究）。
    */
   rootFingerprint?: string
+  /**
+   * 上次发布时用的**挂牌价**（Token；只对导师出题 `SEEK_STUDENT` 有意义）。
+   *
+   * 用来判断"这次改了价没有"：与界面上选的值不同就 `PUT /projects/{id}` 改价
+   * （服务器允许改成另一个 `>= 1` 的值；传 null 不会清空，见 `payment-system.md` §3.2.5）。
+   * 旧记录没有这个字段 → 无从比较 → 下次发布会发一次并记下来。
+   */
+  askingFee?: number | null
   /** 发布时用的服务器地址（归一后的根地址）。 */
   serverUrl: string
   /** 发布时的账号 id（换账号不重用旧项目）。 */
@@ -213,6 +221,10 @@ function parseRecord(raw: unknown): PublishedRecord | undefined {
     // 缺方向 = 旧记录（那时只有 SEEK_MENTOR 一个方向），不猜成导师出题
     direction: raw.direction === 'SEEK_STUDENT' ? 'SEEK_STUDENT' : 'SEEK_MENTOR',
     ...(typeof raw.title === 'string' && raw.title.trim() ? { title: raw.title.trim() } : {}),
+    // 挂牌价：只认 >=1 的整数（与服务器 CHECK 一致）；旧记录没有这个字段 → 不读
+    ...(typeof raw.askingFee === 'number' && Number.isInteger(raw.askingFee) && raw.askingFee >= 1
+      ? { askingFee: raw.askingFee }
+      : {}),
     projectId,
     serverUrl,
     accountId,

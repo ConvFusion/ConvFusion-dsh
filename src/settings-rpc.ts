@@ -149,6 +149,7 @@ import {
   probeServerHealth,
   publishProject,
   readStateVersion,
+  fetchPriceGuide,
   updateProject,
   submitRechargeRequest,
   fetchRechargeRequests,
@@ -2421,6 +2422,25 @@ export function createSettingsRpcHandler(
               changed: changedAll,
               unchangedCount: diff.unchanged.filter((r) => effective.includes(r)).length,
               usage,
+              /*
+               * **挂牌价**（只对导师出题 `SEEK_STUDENT` 有意义）：数值取自本机发布记录
+               * （上次发布时用的价格），用于把对话框预填成"现在网络上挂的那个价"。
+               * `null` = 还没挂过价。旧记录没有这个字段 → 也是 `null`，界面用价目参考的默认档。
+               */
+              askingFee: typeof record?.askingFee === 'number' ? record.askingFee : null,
+              /**
+               * **价目参考**（服务器 `/mentorship/price-guide`）：下拉列表的档位来源。
+               *
+               * ⚠️ 客户端**不自带价目表**（服务器文档明确要求）：平台调价那天，写死价目的
+               * 界面会撒谎且没人立刻发现。取不到（旧服务器 / 网络抖动）→ `null`，
+               * 界面退化成"直接填价格"，不挡发布。
+               *
+               * **两个方向都取**：导师出题看的是"开价"，学生发题看的是"预算 / 出价" ——
+               * 服务器同一份价目参考对两者都适用（同一个 `asking_fee` 字段、同一套档位）。
+               */
+               priceGuide: apiKey
+                 ? await fetchPriceGuide(resolveServerUrl(config, env()).url, apiKey, netOptions())
+                 : null,
             },
           }
         }
@@ -2438,6 +2458,26 @@ export function createSettingsRpcHandler(
            * 指纹），所以 `direction` 从查记录、建项目到回写记录**全程都要带上**。
            */
           const direction = asDirection(p.direction)
+          /*
+          * **挂牌价**（导师出题时界面选的 `asking_fee`）。
+          *
+          * 规则（与服务器一致，且**在宿主这里先挡一次**，让用户看到人话而不是 422）：
+          *   · 只有 `SEEK_STUDENT`（导师出题）才认这个字段 —— 学生发题这次没做挂牌价输入，
+          *     误传一个数字会被静默当成"预算"，那是界面没说过的语义；
+          *   · 必须 `>= 1` 的整数（**免费不支持**：押金为 0 时结算链会断，服务器已有 CHECK）；
+          *   · 上限 1_000_000，与服务器 `Field(maximum=…)` 对齐，早一步拒绝而不是吃 422；
+          *   · 没传 / `null` → **不改**（服务器 `null` 也不会清空，见 `payment-system.md` §3.2.5）。
+          */
+          const askingFeeRaw = (p as { askingFee?: unknown }).askingFee
+          let askingFee: number | undefined
+          if (direction === 'SEEK_STUDENT' && askingFeeRaw !== undefined && askingFeeRaw !== null) {
+            const n = typeof askingFeeRaw === 'number' ? askingFeeRaw : Number(askingFeeRaw)
+            if (!Number.isInteger(n) || n < 1) {
+              return fail('bad-request', '挂牌价必须是 ≥ 1 的整数 Token（不支持免费）。')
+            }
+            if (n > 1_000_000) return fail('bad-request', '挂牌价超出了服务器允许的上限。')
+            askingFee = n
+          }
           const listed = await collectLocalWorks()
           const source = listed.sources.get(id)
           if (!source) return fail('not-found', '找不到这个本机研究项目（或其研究状态读不出来）。')
@@ -2545,6 +2585,8 @@ export function createSettingsRpcHandler(
                   ...(direction === 'SEEK_STUDENT' ? { direction } : {}),
                   // 已有身份 → 沿用（服务器保证同一 id 跨项目生命周期不变）
                   ...(localIdentity.workspaceId ? { workspaceId: localIdentity.workspaceId } : {}),
+                  // 挂牌价（只在导师出题且界面给了值时）
+                  ...(askingFee !== undefined ? { askingFee } : {}),
                 },
                 netOptions(),
               )
@@ -2688,17 +2730,30 @@ export function createSettingsRpcHandler(
               ...netOptions(workIdForWrite),
             })
             /*
-             * 名字会在**论文起名 / 主题演进**之后变化，而项目标题只在建项目时写过一次。
-             * 复用时按需改名：不改的话网络里那个名字永远停在第一次发布的样子。
+             * 复用时按需 `PUT`：**改名**（名字会随论文 / 主题演进变化）或**改价**（导师调整挂牌价）。
              *
-             * ⚠️ 判据用**上次存下的标题**（`previous.title`），不是先 GET 一次项目：
-             * 一次额外往返换一个几乎总是"没变"的结论不划算；代价是"别的客户端改了名字"
-             * 时我们会把它改回来（这本来也是我们要的语义 —— 本机是这项工作的发布方）。
-             * 老记录没有 `title`（v0.6.0 之前）→ 无从比较，改一次并记下来。
+             * ⚠️ 判据用**上次存下的记录**（`previous.title` / `previous.askingFee`），不是先 GET
+             * 一次项目：一次额外往返换一个几乎总是"没变"的结论不划算；代价是"别的客户端改了名
+             * 或改了价"时我们会把它改回来（这本来也是我们要的语义 —— 本机是这项工作的发布方）。
+             * 老记录没有对应字段（`title` 是 v0.6.0 之前、`askingFee` 是这次之前）→ 无从比较，
+             * 发一次并记下来。
+             *
+             * 两者合并成一次请求：服务器同一个端点收 `title` + `asking_fee`，分两次发只是
+             * 多一次往返，而且中间那一瞬会出现"新名字 + 旧价格"的中间态。
              */
-            if (reusable && previous?.title !== workName) {
+            const priceChanged = reusable && askingFee !== undefined && previous?.askingFee !== askingFee
+            if (reusable && (previous?.title !== workName || priceChanged)) {
               try {
-                await updateProject(base, apiKey, projectId, { title: workName }, netOptions())
+                await updateProject(
+                  base,
+                  apiKey,
+                  projectId,
+                  {
+                    title: workName,
+                    ...(priceChanged && askingFee !== undefined ? { askingFee } : {}),
+                  },
+                  netOptions(),
+                )
               } catch (e) {
                 /*
                  * ⚠️ 改名**不是发布的前提**：它失败不该让整次发布失败（状态与附件都还没传）。

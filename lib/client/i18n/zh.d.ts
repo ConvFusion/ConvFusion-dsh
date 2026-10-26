@@ -81,6 +81,16 @@ export declare const zh: {
     'community.publish.collapse': string;
     'community.publish.moreItems': string;
     'community.publish.skippedDir': string;
+    'community.publish.price': string;
+    'community.publish.priceMentor': string;
+    'community.publish.priceResearcher': string;
+    'community.publish.priceHintMentor': string;
+    'community.publish.priceHintResearcher': string;
+    'community.publish.priceCustom': string;
+    'community.publish.priceHint': string;
+    'community.publish.priceUnknown': string;
+    'community.publish.priceInvalid': string;
+    'community.publish.priceTooHigh': string;
     'community.publish.tooLarge': string;
     'community.publish.oversizeWarning': string;
     'community.publish.summary': string;
@@ -233,6 +243,9 @@ export declare const zh: {
     'community.mentor.untitledProject': string;
     'community.mentor.mentorIs': string;
     'community.mentor.researcherIs': string;
+    'community.work.askingPrice': string;
+    'community.work.budget': string;
+    'community.mentor.askingVsOffer': string;
     'community.mentor.feeText': string;
     'community.mentor.progress.awaitingMentor': string;
     'community.mentor.progress.mentorGuided': string;
