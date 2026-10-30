@@ -201,8 +201,17 @@
  *   旧宿主的两种错法都是**安静的**：不认识 `askingFee` → 用户选了 800，网络里却没有挂牌价
  *   （卡片上什么都不显示）；不返回 `priceGuide` → 界面只能退化成手填价格（没有 500/600/800/1000
  *   的下拉）。所以照旧升号，让设置页把"宿主需重启"说出来。
+ *
+ * - `31`：**下载读"对方那一侧"改用服务器的 `counterpart`**（服务器 `API.md` §13.7）。
+ *   `mentor/downloadState` / `mentor/download` 的入参 `source` 多一个取值 **`counterpart`**
+ *   （= 相对调用者的对方那一侧；服务器解析成 `owner` / `mentor`，响应头 `X-Source` 报回实际侧）。
+ *   起因是一个实测报障：**下载到的总是老文件** —— `owner`/`mentor` 是按**位置**命名的，
+ *   界面却按**角色**换算；方向 B（导师出题、owner 就是导师）里两者正好相反，于是下到了
+ *   **自己写的那一侧**（一个完全正常的 200，看起来就像"老文件"）。
+ *   旧宿主会把 `counterpart` 归一成 `owner`（`asSource` 只认 `mentor`）—— 那正是要修的错，
+ *   且**没有任何报错**，所以必须升号让设置页把"宿主需重启"说出来。
  */
-export const HOST_PROTOCOL = 30
+export const HOST_PROTOCOL = 31
 
 /** 状态响应里的协议字段名（两边共用，避免拼错）。 */
 export const HOST_PROTOCOL_FIELD = 'protocol'

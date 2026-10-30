@@ -379,7 +379,7 @@ export interface ServerRequestOptions {
  * ⚠️ 省略 `source` = 服务器默认读 `owner`（"同步我的 workspace"口径）——
  * 这正是旧客户端（v0.5.3）在新服务器上不会出错、但也**看不到**导师那份的原因。
  */
-export type FileSource = 'owner' | 'mentor';
+export type FileSource = 'owner' | 'mentor' | 'counterpart';
 /**
  * 正文"卡死"判据：连续这么久**一个字节都没有**才算断，而不是给整段设总时长。
  *
@@ -645,7 +645,8 @@ export declare function fetchProjectFilesWithIdentity(base: string, apiKey: stri
  *
  * @param sink 写盘目标（宿主侧是 {@link openDownloadPart} 的 `.part` 文件）
  * @returns `received` 实际字节数、`filename` 服务器给的文件名、`fileCount` 服务器声明的条目数、
- *   `sourceUpdatedAt` 这一版的**水位**（`X-Source-Updated-At`，老服务器为 `null`）
+ *   `sourceUpdatedAt` 这一版的**水位**（`X-Source-Updated-At`，老服务器为 `null`）、
+ *   `sourceSide` **实际交付的那一侧**（`X-Source`；请求 `counterpart` 时由服务器解析）
  */
 export declare function fetchProjectArchive(base: string, apiKey: string, projectId: string, sink: {
     write(chunk: Uint8Array): void;
@@ -657,6 +658,8 @@ export declare function fetchProjectArchive(base: string, apiKey: string, projec
     fileCount: number | null;
     sourceUpdatedAt: string | null;
     workspaceId: string | null;
+    /** 实际交付的那一侧（`X-Source`）——水位按它落盘，**不是**按请求里的 `counterpart`。 */
+    sourceSide: 'owner' | 'mentor' | null;
 }>;
 /**
  * 下载一个文件的**原始字节**（不是 JSON，所以不能走 `requestJson`）。

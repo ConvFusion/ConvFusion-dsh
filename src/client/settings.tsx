@@ -2102,10 +2102,22 @@ interface HostDownloadTarget {
 }
 
 /**
- * 项目文件空间的**两侧**（宿主 `FileSource` 的镜像）：`owner` = 学生自己那份，
- * `mentor` = 导师回传的那份。同一路径两侧并存、互不覆盖。
+ * 项目文件空间的**两侧**（宿主 `FileSource` 的具体侧）：`owner` = 项目所有者那份，
+ * `mentor` = 另一方回传的那份。同一路径两侧并存、互不覆盖。
+ *
+ * 水位键（`syncBySide[owner|mentor]`）与文案都用这两个值 —— **不随请求口径变**。
  */
 type HostFileSide = 'owner' | 'mentor'
+
+/**
+ * **发给宿主的** `source`（服务器 `?source=`）：在具体两侧之外多一个 `counterpart`
+ * —— **相对调用者**的"对方那一侧"（服务器 `API.md` §13.7），由服务器解析成具体侧，
+ * 并用响应头 `X-Source` 报回实际交付的是哪一侧。
+ *
+ * 为什么下载用它可以少一类 bug：`owner`/`mentor` 是按**位置**命名的，客户端很容易按
+ * **角色**理解，方向 B（导师出题、owner 就是导师）里两者正好相反 —— 结果"下载到老文件"。
+ */
+type HostFileSource = HostFileSide | 'counterpart'
 
 /**
  * 发布按钮的**固定宽度**（px）。
@@ -5470,9 +5482,12 @@ export function CommunityTab({
     proposal: HostProposal
     /**
      * 读**哪一侧**的快照（服务器 `?source=`）：预检与真正的下载必须同一侧，
-     * 所以在这里记下来（侧由 {@link mySide} / {@link otherSide} 按角色定）。
+     * 所以在这里记下来。
+     *
+     * 现在是 `counterpart`（"相对我"的对方那一侧，由服务器解析）——不再按方向/角色
+     * 自己换算成 `owner` / `mentor`（那样在方向 B 下会下到自己写的那份，见 `requestDownload`）。
      */
-    source: HostFileSide
+    source: HostFileSource
     workspaces: Array<{ id: string; title: string; path: string }> | null
     available: boolean
     reason: string | null
@@ -6166,9 +6181,21 @@ export function CommunityTab({
    */
   const requestDownload = async (p: HostProposal): Promise<void> => {
     const prefix = downloadPrefix(p)
-    // 下载的是**对方那一侧**：方向 A 导师下学生的工作区（owner 侧）、学生取导师的交付
-    // （mentor 侧）；方向 B 反过来（学生下导师的选题、导师取学生的进展）。
-    const source = viewOf(p).otherSide
+    /*
+     * 下载的是**对方那一侧** —— 但**别再自己按方向换算**（v0.6.8 的 bug）：
+     *
+     * `owner` / `mentor` 是按**位置**命名的（owner = 项目所有者那一侧），而客户端很容易按
+     * **角色**理解（owner = 学生）。方向 B（导师出题，owner 就是导师）里两者正好相反，
+     * 于是这边算出"mentor"、服务器却交付了**自己写的那一侧** —— 一个正常的 200，
+     * 表现为"下载到的还是老文件"。
+     *
+     * 现在把这一步交给服务器：`counterpart` = **相对调用者**的对方那一侧
+     * （服务器 `API.md` §13.7；响应头 `X-Source` 报出实际交付的是哪一侧）。
+     *
+     * ⚠️ 内部**仍用 `viewOf(p).otherSide`** 算水位键（`syncBySide[otherSide]`）与文案 ——
+     * 那是"我刚下载的是哪一侧"的**具体**侧，已存的水位不用迁移；只有发出去的值变了。
+     */
+    const source = 'counterpart'
     const res = await post('mentor/downloadState', {
       projectId: p.projectId,
       prefix,

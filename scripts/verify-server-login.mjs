@@ -4248,6 +4248,33 @@ console.log('\n[挂牌价·读] 发现列表 / 提案响应的 asking_fee 三态
   assert(!('askingFee' in oldList[0]), '旧服务器的提案没有 asking_fee → 不带这个键')
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+ * [下载侧] `?source=` 的三种取值：owner 省略、mentor / counterpart 必须显式发
+ *
+ * v0.6.8 的报障："下载到的总是老文件"。根因是 `counterpart` 被 `sourceQuery()` 静默吞掉
+ * （只认 `mentor`），于是服务器按默认回 `owner` —— 而 `owner` 是**按位置**命名的那一侧，
+ * 方向 B（导师出题、owner 就是导师）里正好是**自己写的那份**，一个完全正常的 200。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[下载侧] ?source=：owner 省略 / mentor 与 counterpart 显式发')
+{
+  const urlFor = async (source) => {
+    let seen = null
+    const fake = makeFetch(async (call) => {
+      seen = call.url
+      return { status: 200, body: { items: [], total_bytes: 0 } }
+    })
+    await SC.fetchProjectFiles('http://127.0.0.1:9', 'cf_test_key', 'p1', { fetchImpl: fake.fetchImpl, source })
+    return seen
+  }
+  assert(!(await urlFor('owner')).includes('source='), 'owner 侧**省略**参数（服务器默认）')
+  assert(!(await urlFor(undefined)).includes('source='), '不给 source 也省略（= owner）')
+  assert((await urlFor('mentor')).endsWith('?source=mentor'), 'mentor 侧显式发（旧服务器上也对）')
+  assert(
+    (await urlFor('counterpart')).endsWith('?source=counterpart'),
+    'counterpart **必须真的发出去**（被吞掉 = 静默读 owner 侧 = 下到老文件）',
+  )
+}
+
 console.log(`\n${failed === 0 ? '✅' : '❌'} server-login: ${passed} passed, ${failed} failed`)
 if (failed > 0) {
   console.log('failures:\n' + failures.map((f) => `  - ${f}`).join('\n'))

@@ -1,5 +1,60 @@
 # 版本记录
 
+## v0.6.8
+
+**下载总是拿到"老文件"**的根因修复：读"对方那一侧"改用服务器的 `counterpart`；
+水位改按响应头 `X-Source`（实际交付侧）落盘，已存水位不用迁移。
+
+### 修：下载总是拿到"老文件" —— 读"对方那一侧"改用服务器的 `counterpart`
+
+**症状**：点【下载】，存下来的 ZIP 里是**自己写的那一侧**（旧内容），而且请求完全正常（200）。
+
+**根因**：服务器的 `?source=` 里 `owner` / `mentor` 是按**位置**命名的（`owner` = 项目所有者
+那一侧），而客户端一直按**角色**换算（"owner = 学生"）。方向 B（导师出题，**owner 就是导师**）
+里两者正好相反 ⇒ 导师/学生点下载，服务器交付的是**自己写的那份**。旧实现还把 `source` 的
+三种取值里只有 `mentor` 当真，别的统统当 `owner`（省略 = 服务器默认 = owner），于是这个错
+**没有任何报错**。
+
+**改法**（四处，全部是"把相对调用者的解析交给服务器"，服务器 `API.md` §13.7）：
+
+1. `server-client.ts`：`FileSource` 增加 **`'counterpart'`**（= 相对调用者的对方那一侧）；
+2. 同文件 `sourceQuery()`：**只有 `owner` 省略**，`mentor` / `counterpart` 都显式发
+   （不改这条，`counterpart` 会被静默吞掉、服务器按默认回 `owner` —— 等于白改）；
+3. `settings-rpc.ts` 的 `asSource()`：**透传 `counterpart`**（旧实现只认 `mentor`，其余归 `owner`）；
+4. `client/settings.tsx` 的 `requestDownload`：`source` 直接取 **`'counterpart'`**
+   （预检 `mentor/downloadState` 与真正的 `mentor/download` 共用这一个值，一处改两处生效）。
+
+**刻意没改**：上传前的增量比对仍是 `source: mySide`（比的是"我这一侧已经有什么"）；
+内部命名也不动 —— 水位键（`syncBySide[otherSide]`）与文案仍用具体两侧，**已存的水位不用迁移**。
+
+**顺带把水位钉在"实际交付的那一侧"**：服务器归档响应头 **`X-Source`** 报出 `counterpart`
+解析后的具体侧。宿主 `fetchProjectArchive()` 读它，**按它落盘水位**（不是按请求值）——
+否则水位的键会变成 `counterpart`，与已存的 `owner` / `mentor` 全部失配，所有人都会被提示
+"还没下载过，先下载一次"。同理，落身份时的 `role` 也按实际侧算；拿不到 `X-Source`
+（老服务器）时 `counterpart` 请求**不写水位、不写身份**（宁可"未知"，不写错）。
+
+**协议** `HOST_PROTOCOL` 30 → **31**：旧宿主的 `asSource` 会把 `counterpart` 归成 `owner`
+（正是要修的那个错，且没有报错），所以升号让设置页把"宿主需重启"说出来。
+
+**自检**
+- `verify-mentorship-files`（197/0）：`counterpart` 请求确实带 `?source=counterpart`；
+  水位落在 `X-Source` 报的具体侧；键里**不出现** `counterpart`；老服务器（无 `X-Source`）
+  时不写水位。
+- `verify-server-login`（898/0，新增 [下载侧] 段）：`owner` 省略、`mentor` / `counterpart` 显式发。
+- `verify-settings-page`（1179/0，新增 [13] 段）：客户端请求 `counterpart`、**上传侧仍是 `mySide`**、
+  水位仍按 `otherSide`、宿主按 `servedSide` 落盘、`X-Source` 解析只认具体两侧。
+- `verify-workspace-identity`（184/0）：协议号 tripwire 更新到 31（原来钉在 29，v0.6.7 升到 30 时
+  就该同步 —— 这次一并修好）。
+
+**与真实服务器比对过**（只读 `GET /files`）：同一个项目
+`owner` → 3775 个文件、`mentor` → 0、`counterpart` → 0（该项目的 owner 是我，counterpart 解析成
+mentor 侧），与 `X-Source` 的语义一致。
+
+### 已知的既有失败（与本改动无关，HEAD 上就存在）
+
+- `verify-stage1-runtime` 1 条、`verify-stage3-plan-system` 2 条、`verify-sync-command` 1 条
+  （"注册表里的标识也算数"）——在 `HEAD`（v0.6.7）的独立 worktree 上跑同样失败，不是本次引入。
+
 ## v0.6.7
 
 **挂牌价（`asking_fee`）两端打通**：发布方（导师出题 / 学生发题）在对话框里设价 —— 档位取自服务器的

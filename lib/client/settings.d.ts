@@ -369,8 +369,10 @@ interface HostDownloadTarget {
     identityConflict: boolean;
 }
 /**
- * 项目文件空间的**两侧**（宿主 `FileSource` 的镜像）：`owner` = 学生自己那份，
- * `mentor` = 导师回传的那份。同一路径两侧并存、互不覆盖。
+ * 项目文件空间的**两侧**（宿主 `FileSource` 的具体侧）：`owner` = 项目所有者那份，
+ * `mentor` = 另一方回传的那份。同一路径两侧并存、互不覆盖。
+ *
+ * 水位键（`syncBySide[owner|mentor]`）与文案都用这两个值 —— **不随请求口径变**。
  */
 type HostFileSide = 'owner' | 'mentor';
 /** 导师简介（`research_profiles` 投影；后端 enrich 后才有）。 */

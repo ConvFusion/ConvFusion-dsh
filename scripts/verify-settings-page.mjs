@@ -2443,7 +2443,7 @@ console.log('\n[13] 指导闭环：下载 / 上传')
 
   // ② 点【下载】= 让用户**选一个 DSH 工作区**，把 ZIP 存下来（不走浏览器默认下载）
   assert(
-    /const requestDownload = async \(p: HostProposal\)[\s\S]{0,300}?post\('mentor\/downloadState'/.test(src),
+    /const requestDownload = async \(p: HostProposal\)[\s\S]{0,900}?post\('mentor\/downloadState'/.test(src),
     '【下载】一次拿齐：预检 + 可选工作区列表',
   )
   assert(src.includes('function DownloadDialog('), '有工作区选择器对话框')
@@ -2870,8 +2870,8 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     '上传侧按**方向**选（owner 侧 = 项目所有者，不是"我是不是导师"）',
   )
   assert(
-    /const source = viewOf\(p\)\.otherSide/.test(src) && /source: target\.source/.test(src),
-    '下载读**对方那一侧**，且预检与下载同一侧（否则"预检有 3 个、点下去 404"）',
+    /const source = 'counterpart'/.test(src) && /source: target\.source/.test(src),
+    '下载读**对方那一侧**（`counterpart`，由服务器解析），且预检与下载同一侧（否则"预检有 3 个、点下去 404"）',
   )
   assert(/uploadTimeoutForBytes\(/.test(rpc), '按批次体积估超时（慢 ≠ 死）')
   assert(
@@ -3490,7 +3490,10 @@ console.log('\n[11] 导师出题：挂牌价（价目来自服务器 + 自定义
     assert(/priceGuide:/.test(rpcSrc) && /fetchPriceGuide\(/.test(rpcSrc), 'uploadPlan 取服务器的价目参考')
     assert(/priceChanged/.test(rpcSrc), '复用项目时按需改价（PUT asking_fee）')
     const protoSrc = readFileSync(join(PKG, 'src', 'protocol.ts'), 'utf8')
-    assert(/export const HOST_PROTOCOL = 30/.test(protoSrc), '协议升到 30（旧宿主不认识挂牌价）')
+    assert(
+      /export const HOST_PROTOCOL = 31/.test(protoSrc),
+      '协议升到 31（30 加挂牌价；31 加下载侧 counterpart —— 旧宿主会把它静默归成 owner）',
+    )
   }
 }
 
@@ -3550,6 +3553,69 @@ console.log('\n[12] 挂牌价被别人看见：发现列表卡片 + 提案行')
     }
     assert(typeof SC.fetchPriceGuide === 'function', '宿主有价目参考接口')
   }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * [13] 下载读"对方那一侧"用 `counterpart`（服务器解析），但**水位键仍用具体侧**
+ *
+ * 用户 2026-10 的报障："客户端下载总是拿到老文件"。根因：`owner`/`mentor` 按**位置**命名，
+ * 界面按**角色**换算，方向 B（导师出题、owner 就是导师）里正好相反 ⇒ 下到**自己写的那份**。
+ * 修法只改**发出去的值**，不动内部命名：水位（`syncBySide[otherSide]`）与文案照旧。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[13] 下载 side：请求用 counterpart，水位键留在具体侧')
+{
+  const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+
+  // ① 请求值：counterpart（预检与真正下载共用同一个 `source`）
+  assert(
+    /const source = 'counterpart'/.test(src),
+    '【下载】按 counterpart 请求（不再自己按方向换算 owner / mentor）',
+  )
+  assert(
+    !/const source = viewOf\(p\)\.otherSide/.test(src),
+    '不再用 otherSide 直接当 source（那正是"下到老文件"的来源）',
+  )
+  assert(
+    /post\('mentor\/downloadState', \{\s*projectId: p\.projectId,\s*prefix,\s*source,/.test(src),
+    '预检 mentor/downloadState 用它',
+  )
+  assert(/source: target\.source,/.test(src), '真正的 mentor/download 也用它（同一个值，一处改两处生效）')
+
+  // ② 上传前的增量比对**必须留在自己那侧**（改错会让"我这一侧已有什么"失效）
+  assert(
+    /source: viewOf\(target\)\.mySide,/.test(src),
+    '【上传】增量比对仍在 mySide（不能跟着改成 counterpart）',
+  )
+
+  // ③ 内部命名不动：水位键与文案仍按 otherSide
+  assert(
+    /syncBySide\[view\.otherSide\]/.test(src),
+    '水位仍按 otherSide 取（已存的水位不用迁移）',
+  )
+  // 宿主侧：水位按 **X-Source 报的实际侧** 落盘，绝不把 counterpart 当键
+  const rpcSrc = readFileSync(join(PKG, 'src', 'settings-rpc.ts'), 'utf8')
+  assert(
+    /const servedSide: 'owner' \| 'mentor' \| null =\s*sourceSide \?\? \(source === 'counterpart' \? null : source\)/.test(rpcSrc),
+    '宿主把"实际交付的那一侧"（X-Source）当水位键',
+  )
+  assert(
+    /deps\.syncStore\?\.set\(base, projectId, servedSide,/.test(rpcSrc),
+    '水位写入用具体侧（servedSide），不是请求值',
+  )
+  // 服务端客户端：counterpart 不能被 sourceQuery 吞掉
+  const scSrc = readFileSync(join(PKG, 'src', 'server-client.ts'), 'utf8')
+  assert(
+    /export type FileSource = 'owner' \| 'mentor' \| 'counterpart'/.test(scSrc),
+    'FileSource 含 counterpart',
+  )
+  assert(
+    /source === undefined \|\| source === 'owner' \? '' : `\?source=\$\{source\}`/.test(scSrc),
+    '只有 owner 省略；counterpart 显式发',
+  )
+  assert(
+    /const sourceSide = sourceSideRaw === 'owner' \|\| sourceSideRaw === 'mentor' \? sourceSideRaw : null/.test(scSrc),
+    '读 X-Source（实际交付侧），不把 counterpart 当水位键',
+  )
 }
 
 console.log(`\n${failed === 0 ? '✅' : '❌'} settings-page: ${passed} passed, ${failed} failed`)

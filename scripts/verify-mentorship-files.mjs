@@ -677,6 +677,8 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
     chunkDelayMs,
     /** 归档水位头（`X-Source-Updated-At`；不给 = 老服务器没这个头）。 */
     watermark = null,
+    /** 服务器报的**实际交付侧**（`X-Source`；`counterpart` 已解析成 owner/mentor）。 */
+    xSource = null,
   } = {}) => ({
     status: 200,
     bytes: zip,
@@ -688,6 +690,7 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
         if (key === 'content-disposition') return DISPOSITION
         if (key === 'x-file-count') return String(entries)
         if (key === 'x-source-updated-at') return watermark
+        if (key === 'x-source') return xSource
         return null
       },
     },
@@ -714,7 +717,8 @@ section('[7] 【下载】把 ZIP 存进选定的 DSH 工作区')
    *   （学生取导师的交付）—— 预检与归档**必须是同一侧**，测试替服务器把这件事断言住。
    */
   const hostFor = (dirs, { filename = true, archive = archiveReply(), side = 'owner' } = {}) => {
-    const want = side === 'mentor' ? '?source=mentor' : ''
+    // ⚠️ **只有 owner 省略**：counterpart 必须真的发出去（被吞掉 = 静默读 owner 侧 = 下到老文件）
+    const want = side === 'owner' ? '' : `?source=${side}`
     return makeHost({
       handler: async (call) => {
         if (call.url.endsWith(`/files${want}`)) {
@@ -1202,18 +1206,20 @@ section('[9] 对方更新工作区的检测（按侧的水位 → 比对 → 提
     eocd.writeUInt16LE(entries, 10)
     return Buffer.concat([local, eocd])
   }
-  const archiveHeaders = (watermark, entries = 3) => ({
+  const archiveHeaders = (watermark, entries = 3, xSource = null) => ({
     get: (k) => {
       const key = String(k).toLowerCase()
       if (key === 'content-disposition') return "attachment; filename*=UTF-8''w.zip"
       if (key === 'x-file-count') return String(entries)
       if (key === 'x-source-updated-at') return watermark
+      // 服务器报**实际交付的那一侧**（`counterpart` 已解析成 owner / mentor）
+      if (key === 'x-source') return xSource
       return null
     },
   })
   const dlDir = join(work, 'wm-dl')
   const store = SW.createMemorySyncWatermarkStore()
-  const dlHost = (watermark, entries = 3) =>
+  const dlHost = (watermark, entries = 3, xSource = null) =>
     makeHost({
       syncStore: store,
       handler: async (call) => {
@@ -1225,7 +1231,7 @@ section('[9] 对方更新工作区的检测（按侧的水位 → 比对 → 提
             status: 200,
             bytes: zipBytes(entries),
             chunks: [zipBytes(entries)],
-            headers: archiveHeaders(watermark, entries),
+            headers: archiveHeaders(watermark, entries, xSource),
           }
         }
         return { status: 200, body: { items: [], total_bytes: 0 } }
@@ -1280,6 +1286,70 @@ section('[9] 对方更新工作区的检测（按侧的水位 → 比对 → 提
     '2026-10-05T00:00:00Z',
     'mentor 侧另记一条（方向 B 的导师靠它发现自己那一侧变没变）',
   )
+  /*
+   * ── `counterpart`（v0.6.8）：请求的是"相对我"的对方那一侧，服务器才解析成具体侧 ──
+   *
+   * 水位必须按 **`X-Source` 报的实际侧**落盘，不能按请求值 —— 否则已存的水位
+   * （`owner` / `mentor`）全部失配，所有人都会被提示"还没下载过，先下载一次"。
+   */
+  const cpStore = SW.createMemorySyncWatermarkStore()
+  const cpDl = await makeHost({
+    syncStore: cpStore,
+    handler: async (call) => {
+      assert(
+        call.url.includes('/files/archive?source=counterpart'),
+        `下载按 counterpart 请求（实际 ${call.url}）`,
+      )
+      return {
+        status: 200,
+        bytes: zipBytes(3),
+        chunks: [zipBytes(3)],
+        headers: archiveHeaders('2026-10-10T00:00:00Z', 3, 'mentor'),
+      }
+    },
+    listLocalWorkspaces: async () => ({
+      available: true,
+      items: [{ id: 'ws-0', title: 'w', path: dlDir, updatedAt: '' }],
+    }),
+  }).handler('mentor/download', {
+    projectId: PROJECT_ID, workspaceId: 'ws-0', prefix: 'x', source: 'counterpart',
+  })
+  assertEq(cpDl.ok, true, 'counterpart 下载成功')
+  assertEq(
+    cpStore.get('http://localhost:8000', PROJECT_ID, 'mentor')?.updatedAt,
+    '2026-10-10T00:00:00Z',
+    'counterpart 的水位落在 **X-Source 报的具体侧**（mentor）上',
+  )
+  assertEq(
+    cpStore.get('http://localhost:8000', PROJECT_ID, 'owner'),
+    undefined,
+    'counterpart 不会写 owner 侧（那是另一侧的水位）',
+  )
+  assert(
+    Object.keys(cpStore.all()).every((k) => !k.includes('counterpart')),
+    '水位键里**不出现** counterpart（它是相对值，不能当键）',
+  )
+
+  // 老服务器：没有 X-Source → counterpart 不写任何水位（宁可"未知"，不写错键）
+  const cpOldStore = SW.createMemorySyncWatermarkStore()
+  const cpOld = await makeHost({
+    syncStore: cpOldStore,
+    handler: async () => ({
+      status: 200,
+      bytes: zipBytes(3),
+      chunks: [zipBytes(3)],
+      headers: archiveHeaders('2026-10-11T00:00:00Z', 3, null),
+    }),
+    listLocalWorkspaces: async () => ({
+      available: true,
+      items: [{ id: 'ws-0', title: 'w', path: dlDir, updatedAt: '' }],
+    }),
+  }).handler('mentor/download', {
+    projectId: PROJECT_ID, workspaceId: 'ws-0', prefix: 'x', source: 'counterpart',
+  })
+  assertEq(cpOld.ok, true, '老服务器（无 X-Source）下载仍成功')
+  assertEq(Object.keys(cpOldStore.all()).length, 0, '没有 X-Source → counterpart 不写水位（保持未知）')
+
   // 老文件（键里没有侧）读作 owner 侧：不丢历史、也不误判成另一侧
   const legacy = SW.createMemorySyncWatermarkStore({
     [`${'http://localhost:8000'}|${PROJECT_ID}`]: wm,

@@ -464,18 +464,29 @@ export interface ServerRequestOptions {
  * ⚠️ 省略 `source` = 服务器默认读 `owner`（"同步我的 workspace"口径）——
  * 这正是旧客户端（v0.5.3）在新服务器上不会出错、但也**看不到**导师那份的原因。
  */
-export type FileSource = 'owner' | 'mentor'
+export type FileSource = 'owner' | 'mentor' | 'counterpart'
 
 /**
- * `?source=` 查询串：**只在读导师那一侧时显式加**（`owner` 是服务器默认，省略即可）。
+ * `?source=` 查询串：**只有 `owner` 省略**（那是服务器的默认），其余显式发。
  *
- * 为什么不写 `?source=owner`：旧服务器（v0.5.3 时代）还没有这个参数。多带一个它不认识的
+ * ⚠️ **`counterpart` 必须真的发出去**（v0.6.8 的 bug 就是它被这里静默吞掉）：
+ * 省略等于回落到 `owner`，而 `owner` 是**按位置**命名（项目所有者那一侧），
+ * 不是"对方那一侧" —— 方向 B（导师出题、导师是 owner）里两者正好相反，
+ * 于是学生/导师点【下载】拿回来的是**自己写的那一侧**（一个完全正常的 200，
+ * 看起来像"下载到了老文件"）。
+ *
+ * 服务器文档 `API.md` §13.7：`counterpart` = **相对调用者**的对方那一侧
+ * （owner 问 → `mentor` 侧；非 owner 问 → `owner` 侧），响应头 `X-Source`
+ * 报出**实际交付**的那一侧（已解析成 `owner` / `mentor`）。
+ *
+ * 为什么不写 `?source=owner`：旧服务器（v0.5.3 时代）还没有这个参数，多带一个它不认识的
  * 查询参数会被忽略 —— 而**导师那一侧**在旧服务器上恰好就是"唯一的那个文件空间"，
  * 所以显式 `?source=mentor` 被忽略后读到的正是导师上传的文件，增量比对照旧正确。
- * 反过来，`?source=owner` 被忽略也对，只是多余。
+ * 不认 `counterpart` 的服务器会直接 422（`API.md` §13.7 明确："下载直接失败，不会静默下错侧"）。
  */
 function sourceQuery(source?: FileSource): string {
-  return source === 'mentor' ? '?source=mentor' : ''
+  // 省略 = 服务器默认（owner）。⚠️ `counterpart` 绝不能被吞掉（见上）
+  return source === undefined || source === 'owner' ? '' : `?source=${source}`
 }
 
 /**
@@ -1383,6 +1394,14 @@ async function fetchBinary(
   sourceUpdatedAt: string | null
   /** 研究工作标识（`X-Workspace-Id`；老服务器 / 非归档请求为 `null`）。 */
   workspaceId: string | null
+  /**
+   * **实际交付的那一侧**（服务器 `X-Source`，`counterpart` 已被服务器解析成具体侧）。
+   *
+   * 为什么必须读它：请求里的 `counterpart` 是"相对调用者"的，**具体是哪一侧由服务器决定**
+   * ——水位要按具体侧（`owner` / `mentor`）落盘，否则已存的水位全部作废、所有人都被提示
+   * 重新下载一次。老服务器没这个头 → `null`。
+   */
+  sourceSide: 'owner' | 'mentor' | null
   received: number
 }> {
   const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike | undefined)
@@ -1439,6 +1458,14 @@ async function fetchBinary(
    * → 不写身份（保持"未知"比写一个错的强）。
    */
   const workspaceId = normalizeWorkspaceId(res.headers?.get('x-workspace-id'))
+  /*
+   * 实际交付的那一侧（服务器 `X-Source`；`counterpart` 已解析成 `owner` / `mentor`）。
+   *
+   * ⚠️ 只认 `owner` / `mentor` 两个值：头缺失或给了别的 → `null`（调用方自己决定兜底），
+   * 不把 `counterpart` 这种"相对"值当成水位键存下去 —— 那会让已存的水位失配。
+   */
+  const sourceSideRaw = (res.headers?.get('x-source') ?? '').trim().toLowerCase()
+  const sourceSide = sourceSideRaw === 'owner' || sourceSideRaw === 'mentor' ? sourceSideRaw : null
   const received = await readBody(res, options, label, controller)
   return {
     bytes: received.bytes,
@@ -1446,6 +1473,7 @@ async function fetchBinary(
     fileCount,
     sourceUpdatedAt,
     workspaceId,
+    sourceSide,
     received: received.total,
   }
 }
@@ -1593,7 +1621,8 @@ function filenameFromDisposition(value: string | null): string | null {
  *
  * @param sink 写盘目标（宿主侧是 {@link openDownloadPart} 的 `.part` 文件）
  * @returns `received` 实际字节数、`filename` 服务器给的文件名、`fileCount` 服务器声明的条目数、
- *   `sourceUpdatedAt` 这一版的**水位**（`X-Source-Updated-At`，老服务器为 `null`）
+ *   `sourceUpdatedAt` 这一版的**水位**（`X-Source-Updated-At`，老服务器为 `null`）、
+ *   `sourceSide` **实际交付的那一侧**（`X-Source`；请求 `counterpart` 时由服务器解析）
  */
 export async function fetchProjectArchive(
   base: string,
@@ -1607,11 +1636,13 @@ export async function fetchProjectArchive(
   fileCount: number | null
   sourceUpdatedAt: string | null
   workspaceId: string | null
+  /** 实际交付的那一侧（`X-Source`）——水位按它落盘，**不是**按请求里的 `counterpart`。 */
+  sourceSide: 'owner' | 'mentor' | null
 }> {
   const key = requireKey(apiKey)
   const id = (projectId ?? '').trim()
   if (!id) throw new ServerError('bad-request', '缺少 projectId。')
-  const { contentDisposition, fileCount, sourceUpdatedAt, workspaceId, received } = await fetchBinary(
+  const { contentDisposition, fileCount, sourceUpdatedAt, workspaceId, sourceSide, received } = await fetchBinary(
     base,
     `/projects/${encodeURIComponent(id)}/files/archive${sourceQuery(options.source)}`,
     key,
@@ -1624,6 +1655,7 @@ export async function fetchProjectArchive(
     fileCount,
     sourceUpdatedAt,
     workspaceId,
+    sourceSide,
   }
 }
 
