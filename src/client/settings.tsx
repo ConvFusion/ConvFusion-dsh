@@ -229,6 +229,13 @@ export interface HostAccountState {
   keyConfigured: boolean
   keySource: 'settings' | 'env' | 'none'
   apiKeyEnvVar: string
+  /**
+   * 研究决策辅助（DCRM）是否开启（v0.7.0）。
+   *
+   * 可选：**旧宿主没有这个字段**，界面按"开"显示（与宿主缺省一致），
+   * 但写入只有新宿主才接受 —— 老宿主会回 `bad-request`，界面如实报错而不是假装成功。
+   */
+  decisionAssistEnabled?: boolean
   /** 只有在**联网验证过**之后才非空。 */
   account: HostAccount | null
   /**
@@ -7595,6 +7602,60 @@ export function CommunityTab({
                 ) : null}
               </div>
             ) : null}
+
+            {/* 研究决策辅助（DCRM）开关：**卡片正文的最后一行**（2026-11 用户要求），
+                与上方账号行左对齐 —— 它属于这张账号卡的设置，不另起一块。
+                ⚠️ 布局：一整行（复选框 + 标题 + 一句短说明）。不要复用 `S.inlineRow`
+                （带 `flexWrap: 'wrap'`，长说明会把复选框挤到上一行）；完整说明放 `title`。 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <input
+                id="convfusion-decision-assist"
+                type="checkbox"
+                style={{ flex: '0 0 auto' }}
+                checked={state?.decisionAssistEnabled !== false}
+                disabled={busy || phase === 'loading'}
+                onChange={(event) => {
+                  const enabled = event.currentTarget.checked
+                  setBusy(true)
+                  void send('account/decision-assist', { enabled })
+                    .then((res) => {
+                      if (res.ok) {
+                        const saved = res.value as { decisionAssistEnabled?: boolean }
+                        // 以**宿主返回的**状态回写（不回写就等于界面自己猜）
+                        setState((current) =>
+                          current ? { ...current, decisionAssistEnabled: saved.decisionAssistEnabled !== false } : current,
+                        )
+                        setFailure(null)
+                      } else {
+                        setFailure({ code: res.error?.code ?? 'unknown', message: res.error?.message ?? t('community.error.unknown') })
+                      }
+                    })
+                    .catch((e: unknown) => {
+                      setFailure({ code: 'transport', message: e instanceof Error ? e.message : String(e) })
+                    })
+                    .finally(() => setBusy(false))
+                }}
+              />
+              <label
+                htmlFor="convfusion-decision-assist"
+                title={t('community.decisionAssist.tip')}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, cursor: 'pointer' }}
+              >
+                <span style={{ ...S.label, flex: '0 0 auto' }}>{t('community.decisionAssist.title')}</span>
+                <span
+                  style={{
+                    ...S.hint,
+                    flex: '0 1 auto',
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  · {t('community.decisionAssist.description')}
+                </span>
+              </label>
+            </div>
           </div>
         ) : null}
       </div>

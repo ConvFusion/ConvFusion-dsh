@@ -148,6 +148,9 @@ export declare const en: {
     readonly 'community.tab.account': "Account";
     readonly 'community.tab.signIn': "Sign in";
     readonly 'community.tab.server': "Server";
+    readonly 'community.decisionAssist.title': "Enable decision assistance";
+    readonly 'community.decisionAssist.description': "calls the ConvFusion decision service at decision points (can be off)";
+    readonly 'community.decisionAssist.tip': "Available by default after signing in. At research decision points, the needed research state is sent to the ConvFusion decision service; when disabled or unavailable the existing workflow continues.";
     readonly 'community.tip.expand': "Show account and server settings";
     readonly 'community.tip.collapse': "Hide account and server settings";
     readonly 'community.dash.token': "Token balance";

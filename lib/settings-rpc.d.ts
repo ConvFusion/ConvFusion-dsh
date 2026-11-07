@@ -366,6 +366,13 @@ export interface AccountState {
     keySource: 'settings' | 'env' | 'none';
     /** 凭据的环境变量名（仅提示）。 */
     apiKeyEnvVar: string;
+    /**
+     * 研究决策辅助（DCRM）是否开启（v0.7.0）。
+     *
+     * ⚠️ 只报"开/关"，**不报**任何模型地址、模型名或密钥 —— 那些只在服务端，
+     * 插件侧既没有也不该有（见 `server-client.fetchDecisionAssist`）。
+     */
+    decisionAssistEnabled: boolean;
     /** 已认证账号；未验证或未登录时为 null。 */
     account: AccountWire | null;
     /**
@@ -608,6 +615,7 @@ export declare function compareVersions(a: string, b: string): number;
  * | `account/state` | `{}` | 【ConvFusion.com】登录状态（**不联网**） |
  * | `account/probe` | `{ serverUrl? }` | **只测连通性**（匿名 `/health`，最长 8 秒）；`reachable` 是结果不是错误 |
  * | `account/serverUrl` | `{ serverUrl }` | 保存服务器地址（空串 = 跟随环境配置）；只改地址**不动凭据** |
+ * | `account/decision-assist` | `{ enabled }` | 保存决策辅助（DCRM）开关；不联网、不动凭据 |
  * | `account/login` | `{ apiKey, serverUrl? }` | 用 API Key 登录（联网验证后落盘） |
  * | `account/register` | `{ invitationCode, email, displayName, serverUrl? }` | 凭邀请码注册并登录 |
  * | `account/verify` | `{}` | 用已保存的凭据重新验证身份（联网） |

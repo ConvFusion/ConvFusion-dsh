@@ -155,6 +155,16 @@ export interface Config {
   autoContinue: boolean
   /** 连续自动推进的轮数上限（防止无人值守跑飞）。 */
   autoContinueMaxRounds: number
+  /**
+   * 研究决策辅助（DCRM）开关（v0.7.0）。
+   *
+   * 开启后，`research_decision_assist` 会把**当前研究状态的投影**（各维度 ≤500 字符）
+   * 连同决策问题与候选项发给 ConvFusion 决策服务，取回"候选内归一化概率"。
+   *
+   * ⚠️ 这是**数据出本机**的开关：默认开，但必须能一键关（设置页【ConvFusion.com】
+   * 账号卡片）。关闭 / 未登录 / 服务不可用时，插件按原有流程继续，不报错、不重试。
+   */
+  decisionAssistEnabled: boolean
 }
 
 /**
@@ -177,6 +187,12 @@ export type LiveConfig = { [K in keyof Config]: Volatile<Config[K]> }
 // 硬写 `Schema<LiveConfig>` 会把 `Volatile<string>` 塞进输入位置而报 TS2322。
 // 因此让 TS 自行推断，输出形状就是 {@link LiveConfig}。
 export const Config = Schema.object({
+  decisionAssistEnabled: Schema.boolean()
+    .default(true)
+    .volatile()
+    .description(
+      '启用研究决策辅助（DCRM）：把研究状态投影发送到 ConvFusion 决策服务，取回候选建议；关闭后沿用原有流程。',
+    ),
   customizationFile: Schema.string()
     .default('skill-customizations.json')
     .volatile()
@@ -268,6 +284,8 @@ export function resolveConfig(input: Partial<Config> | undefined): Config {
       typeof c.autoContinueMaxRounds === 'number' && c.autoContinueMaxRounds >= 0
         ? Math.floor(c.autoContinueMaxRounds)
         : 3,
+    // 缺省 = **开**（v0.7.0 用户拍板）；只有显式 `false` 才是关。
+    decisionAssistEnabled: c.decisionAssistEnabled !== false,
   }
 }
 

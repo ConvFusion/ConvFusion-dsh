@@ -136,6 +136,16 @@ export interface Config {
     autoContinue: boolean;
     /** 连续自动推进的轮数上限（防止无人值守跑飞）。 */
     autoContinueMaxRounds: number;
+    /**
+     * 研究决策辅助（DCRM）开关（v0.7.0）。
+     *
+     * 开启后，`research_decision_assist` 会把**当前研究状态的投影**（各维度 ≤500 字符）
+     * 连同决策问题与候选项发给 ConvFusion 决策服务，取回"候选内归一化概率"。
+     *
+     * ⚠️ 这是**数据出本机**的开关：默认开，但必须能一键关（设置页【ConvFusion.com】
+     * 账号卡片）。关闭 / 未登录 / 服务不可用时，插件按原有流程继续，不报错、不重试。
+     */
+    decisionAssistEnabled: boolean;
 }
 /**
  * `apply(ctx, config)` 运行期**实际拿到**的配置形状。
@@ -154,6 +164,7 @@ export type LiveConfig = {
     [K in keyof Config]: Volatile<Config[K]>;
 };
 export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
+    decisionAssistEnabled: Schema<boolean, boolean, "volatile-defined">;
     customizationFile: Schema<string, string, "volatile-defined">;
     customizationDir: Schema<string, string, "volatile-defined">;
     openalexApiKey: Schema<string, string, "volatile-defined">;
@@ -164,6 +175,7 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     autoContinue: Schema<boolean, boolean, "volatile-defined">;
     autoContinueMaxRounds: Schema<number, number, "volatile-defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
+    decisionAssistEnabled: Schema<boolean, boolean, "volatile-defined">;
     customizationFile: Schema<string, string, "volatile-defined">;
     customizationDir: Schema<string, string, "volatile-defined">;
     openalexApiKey: Schema<string, string, "volatile-defined">;

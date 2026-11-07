@@ -148,6 +148,9 @@ export declare const zh: {
     'community.tab.account': string;
     'community.tab.signIn': string;
     'community.tab.server': string;
+    'community.decisionAssist.title': string;
+    'community.decisionAssist.description': string;
+    'community.decisionAssist.tip': string;
     'community.tip.expand': string;
     'community.tip.collapse': string;
     'community.dash.token': string;

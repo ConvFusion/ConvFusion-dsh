@@ -33,11 +33,14 @@ import { type LiteratureDeps } from './literature.js';
 import { type PaperDownloadDeps } from './paper-download.js';
 import { type BibEntry, type ComposeInput } from './latex.js';
 import { openQuestions } from './research-state.js';
+import type { Config } from '../config.js';
+import type { ServerRequestOptions } from '../server-client.js';
 /** 工具名（`research_` 命名空间，与 Skill/Plan 资产一致）。 */
 export declare const PROJECT_TOOL = "research_project";
 export declare const EVIDENCE_TOOL = "research_evidence";
 export declare const CLAIM_TOOL = "research_claim";
 export declare const DECISION_TOOL = "research_decision";
+export declare const DECISION_ASSIST_TOOL = "research_decision_assist";
 export declare const STATE_READ_TOOL = "research_state_read";
 export declare const STATE_PROPOSE_TOOL = "research_state_propose";
 export declare const PAPER_TOOL = "research_paper";
@@ -49,6 +52,13 @@ export declare const ACTION_CONSTRUCTION_TOOL = "research_action_construction";
 export declare const DIAGRAM_TOOL = "research_diagram";
 export declare const SCHEMATIC_TOOL = "research_schematic";
 export declare const IR_TOOL = "research_ir";
+/** 决策辅助依赖（缺省 = 该宿主未接线，工具恒返回 `skipped/disabled`）。 */
+export interface DecisionAssistDeps {
+    /** 每次调用现取（用户在设置页关掉开关后立刻生效）。 */
+    getConfig: () => Partial<Config>;
+    env?: NodeJS.ProcessEnv;
+    net?: ServerRequestOptions;
+}
 /**
  * 构造研究资产工具集。
  *
@@ -63,7 +73,7 @@ export declare const IR_TOOL = "research_ir";
  */
 export declare function defineResearchTools(resolveWorkspace: (agent?: {
     id?: unknown;
-} | null) => string, literatureDeps?: LiteratureDeps, downloadDeps?: PaperDownloadDeps): ToolDefinition[];
+} | null) => string, literatureDeps?: LiteratureDeps, downloadDeps?: PaperDownloadDeps, decisionDeps?: DecisionAssistDeps): ToolDefinition[];
 /**
  * 从 Markdown 参考文献列表解析 `\bibitem` 条目。
  *

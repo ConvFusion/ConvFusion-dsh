@@ -413,6 +413,27 @@ export interface BinaryStreamOptions extends ServerRequestOptions {
  */
 export declare function probeServerHealth(base: string, options?: ServerRequestOptions): Promise<void>;
 /**
+ * **研究决策辅助（DCRM）**：`POST /api/v1/decision-model/assist`。
+ *
+ * ## 为什么由服务器代理
+ *
+ * DCRM 的上游地址与网关密钥**只在服务端**（`ConvFusion-server/docs/DCRM.md`）：
+ * 插件拿到的只是一份服务端返回的候选概率。所以这里没有"模型地址""模型 Key"任何参数，
+ * 也不允许调用方指定 —— 那会变成一把可以拿去乱花的凭据。
+ *
+ * ## 超时为什么不用默认的 {@link SERVER_TIMEOUT_MS}
+ *
+ * 服务端自身对上游设了 `DCRM_TIMEOUT_SECONDS=10`，再叠上 tokenizer 与网络往返；
+ * 8 秒会比服务端先放弃，于是明明还能成功的一次咨询被我们记成"服务不可用"。
+ * 这里给 15 秒，并**额外 race 一个超时 promise**：DSH 的 `requestJson` 已经这么做了，
+ * 但那条路径依赖 `server-client` 内部实现；assist 是**独立入口**，必须自己兜住
+ * "响应头回来了、JSON 体卡住"这种半开连接（codex 侧踩过同样的坑）。
+ *
+ * 失败一律抛 {@link ServerError}；上层 `decision-assist.ts` 会把它统一折成
+ * `status:'skipped', reason:'service_unavailable'`，**不重试、不把服务器原文透给模型**。
+ */
+export declare function fetchDecisionAssist(base: string, apiKey: string, body: unknown, options?: ServerRequestOptions): Promise<unknown>;
+/**
  * 用一份 API Key 做身份自检（连通性 + Key 有效性 + 账号状态 + 角色）。
  *
  * 对应 `INTEGRATION.md` §3 ①：「建议作为插件启动时的第一个调用」。

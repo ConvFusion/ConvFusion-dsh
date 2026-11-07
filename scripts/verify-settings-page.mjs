@@ -1024,6 +1024,7 @@ console.log('\n[1h] ConvFusion.com：服务器地址与凭据来源')
   assert(res.ok, 'account/state 可用')
   assertEq(res.value.account, null, '不联网 → 无已认证账号')
   assertEq(typeof res.value.keyConfigured, 'boolean', '报告凭据可用性')
+  assertEq(res.value.decisionAssistEnabled, true, '默认开启决策辅助（缺省 = 开）')
   assert(/^https?:\/\//.test(res.value.serverUrl), '报告生效的服务器地址')
   assert(!('convfusionApiKey' in res.value), 'account 状态里没有凭据字段')
   // 两个环境的地址也一并带回（设置页那两个快捷按钮要用；旧宿主没有 → 按钮不显示）
@@ -1032,6 +1033,21 @@ console.log('\n[1h] ConvFusion.com：服务器地址与凭据来源')
     ['development', 'production'],
     '带回 serverPresets（开发 / 线上两个地址）',
   )
+}
+
+/* ── 1h-2. 决策辅助（DCRM）开关：只落开关、不联网 ───────────────────── */
+{
+  const h = makeHost({ writableConfig: true })
+  const off = await h.handler('account/decision-assist', { enabled: false })
+  assert(off.ok, 'account/decision-assist 可写（有设置存储时）')
+  assertEq(off.value.decisionAssistEnabled, false, '返回落盘后的开关值（关）')
+  assertEq(h.config.decisionAssistEnabled, false, '配置里确实写入了 false')
+  const on = await h.handler('account/decision-assist', { enabled: true })
+  assertEq(on.value.decisionAssistEnabled, true, '可以再打开')
+  const bad = await h.handler('account/decision-assist', { enabled: 'false' })
+  assertEq(bad.ok, false, '字符串 "false" 被拒（否则等于关不掉）')
+  const noStore = await makeHost().handler('account/decision-assist', { enabled: true })
+  assertEq(noStore.ok, false, '无设置存储时如实报错，而不是假装已保存')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -1502,6 +1518,37 @@ console.log('\n[7] 静态边界：客户端不引入禁用依赖、无凭据字�
   assert(/account\/login/.test(community), '登录走宿主 account/login 端点')
   assert(/account\/register/.test(community), '邀请码注册走宿主 account/register 端点')
   assert(/account\/logout/.test(community), '登出走宿主 account/logout 端点')
+  // 决策辅助（DCRM）开关：只走宿主端点（浏览器不碰凭据/服务器），且复选框与标题必须同一行
+  assert(/account\/decision-assist/.test(community), '决策辅助开关走宿主 account/decision-assist 端点')
+  assert(
+    /id="convfusion-decision-assist"/.test(community) && /htmlFor="convfusion-decision-assist"/.test(community),
+    '复选框与标题同一行（id/htmlFor 关联，点标题也能切换）',
+  )
+  assert(
+    !/S\.inlineRow[^\n]*decision/i.test(community),
+    '决策辅助开关不复用 flexWrap 的 inlineRow（长说明会把复选框挤到上一行）',
+  )
+  {
+    // 一整行：复选框 + 标题 + 一句短说明；完整说明走 title 悬浮提示
+    const at = community.indexOf('convfusion-decision-assist')
+    const block = community.slice(at, at + 3200)
+    assert(/decisionAssist\.description/.test(block), '开关行里带一句短说明')
+    assert(/decisionAssist\.tip/.test(block), '完整说明放在悬浮提示（title）里')
+    assert(/whiteSpace: 'nowrap'/.test(block), '短说明不换行（换行就说明还是两行结构）')
+    assert(!/display: 'block'/.test(block), '标题与说明不再上下两行')
+    assert(
+      community.indexOf('convfusion-decision-assist') > community.indexOf("userTab === 'account'"),
+      '开关位于账号信息之后（不在内部 Tab 上方）',
+    )
+    assert(
+      community.indexOf('convfusion-decision-assist') > community.indexOf('失败原因必须具体'),
+      '开关在账号卡片正文的**最后一行**（失败提示之后）',
+    )
+    assert(
+      community.indexOf('convfusion-decision-assist') < community.indexOf('══ 发布确认对话框'),
+      '开关仍在账号卡片内部（没有挪到卡片之外）',
+    )
+  }
   assert(
     !/fetch\(/.test(community),
     '研究方法库自己不发请求（服务器未开 CORS；一律经宿主 account/*）',
@@ -3491,8 +3538,8 @@ console.log('\n[11] 导师出题：挂牌价（价目来自服务器 + 自定义
     assert(/priceChanged/.test(rpcSrc), '复用项目时按需改价（PUT asking_fee）')
     const protoSrc = readFileSync(join(PKG, 'src', 'protocol.ts'), 'utf8')
     assert(
-      /export const HOST_PROTOCOL = 31/.test(protoSrc),
-      '协议升到 31（30 加挂牌价；31 加下载侧 counterpart —— 旧宿主会把它静默归成 owner）',
+      /export const HOST_PROTOCOL = 32/.test(protoSrc),
+      '协议升到 32（32 加决策辅助开关；31 下载侧 counterpart；30 加挂牌价）',
     )
   }
 }

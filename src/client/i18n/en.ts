@@ -159,6 +159,11 @@ export const en = {
   'community.tab.account': 'Account',
   'community.tab.signIn': 'Sign in',
   'community.tab.server': 'Server',
+  // Decision assistance (DCRM): on by default and leaves the machine — say what is sent.
+  'community.decisionAssist.title': 'Enable decision assistance',
+  'community.decisionAssist.description': 'calls the ConvFusion decision service at decision points (can be off)',
+  'community.decisionAssist.tip':
+    'Available by default after signing in. At research decision points, the needed research state is sent to the ConvFusion decision service; when disabled or unavailable the existing workflow continues.',
   // The account card is collapsed by default: it keeps only "who + how many Tokens left".
   // The chevron is the only hint, so the tooltip says what expanding gives you.
   'community.tip.expand': 'Show account and server settings',

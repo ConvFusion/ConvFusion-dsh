@@ -7,10 +7,10 @@
 <p align="center"><strong>A research operating system plugin built for DeepSeek Harness</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.6.8-4a43ea" alt="Version 0.6.8">
+  <img src="https://img.shields.io/badge/version-v0.7.0-4a43ea" alt="Version 0.7.0">
   <img src="https://img.shields.io/badge/DeepSeek_Harness-plugin-4a43ea" alt="DeepSeek Harness Plugin">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="MIT License"></a>
-  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-v0.6.8-6b7280" alt="Changelog"></a>
+  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-v0.7.0-6b7280" alt="Changelog"></a>
 </p>
 
 <p align="center">
@@ -28,6 +28,7 @@ ConvFusion is a research operating system plugin built for DeepSeek Harness. It 
 - **Research context injection**: Automatically maintains research project state and dynamically injects system prompts so the AI assistant always understands the current research progress
 - **Professional skill library**: Includes 57 validated research methodology skills in 10 categories (Global Capabilities · Research Understanding · Literature · Innovation · Research Planning · Resource Estimation · Research Decision · Experiment · Academic Writing · Review), covering the full research workflow, including literature reviews, experiment design (with simulation-first results when hardware is insufficient), result analysis, and academic writing
 - **Paper diagrams (deterministic drawing)**: The agent writes a structured **Diagram IR**; a validator decides whether it is structurally and visually sound, a renderer draws the same IR to SVG **deterministically**, and the result is converted to a **vector PDF** for LaTeX (fonts embedded, byte-reproducible) — broken figures never leave the tool, good ones are reproducible, diffable and editable in place, and export reports the figure's real on-page text size, so a compilable-but-unreadable figure is caught before submission (`research_diagram`)
+- **Decision assistance (DCRM)**: At research decision points (next action, evidence sufficiency, claim consistency, research direction) the plugin sends a bounded projection of the research state to the ConvFusion decision service and returns candidate-normalized probabilities plus a recommendation; consultations are read-only, never write research assets, keep a trace under `research/decision-assists/` (advice + adoption), and can be switched off in settings
 - **Research asset tracking**: Native structured recording and traceability for Evidence, Claims, and Decisions
 - **Plan management system**: Natural-language-driven research plan lifecycle management with draft, review, and execution state transitions
 - **Paper evolution support**: Treats papers as continuously evolving entities, with revision proposals, gap analysis, and version management

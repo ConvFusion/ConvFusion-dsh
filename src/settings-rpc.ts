@@ -568,6 +568,13 @@ export interface AccountState {
   keySource: 'settings' | 'env' | 'none'
   /** 凭据的环境变量名（仅提示）。 */
   apiKeyEnvVar: string
+  /**
+   * 研究决策辅助（DCRM）是否开启（v0.7.0）。
+   *
+   * ⚠️ 只报"开/关"，**不报**任何模型地址、模型名或密钥 —— 那些只在服务端，
+   * 插件侧既没有也不该有（见 `server-client.fetchDecisionAssist`）。
+   */
+  decisionAssistEnabled: boolean
   /** 已认证账号；未验证或未登录时为 null。 */
   account: AccountWire | null
   /**
@@ -605,6 +612,7 @@ export function buildAccountState(
     keyConfigured: key.configured,
     keySource: key.source,
     apiKeyEnvVar: CONVFUSION_API_KEY_ENV,
+    decisionAssistEnabled: config.decisionAssistEnabled !== false,
     account,
     tokens: options.tokens ?? null,
   }
@@ -1044,6 +1052,7 @@ async function fetchLatestRelease(
  * | `account/state` | `{}` | 【ConvFusion.com】登录状态（**不联网**） |
  * | `account/probe` | `{ serverUrl? }` | **只测连通性**（匿名 `/health`，最长 8 秒）；`reachable` 是结果不是错误 |
  * | `account/serverUrl` | `{ serverUrl }` | 保存服务器地址（空串 = 跟随环境配置）；只改地址**不动凭据** |
+ * | `account/decision-assist` | `{ enabled }` | 保存决策辅助（DCRM）开关；不联网、不动凭据 |
  * | `account/login` | `{ apiKey, serverUrl? }` | 用 API Key 登录（联网验证后落盘） |
  * | `account/register` | `{ invitationCode, email, displayName, serverUrl? }` | 凭邀请码注册并登录 |
  * | `account/verify` | `{}` | 用已保存的凭据重新验证身份（联网） |
@@ -2002,6 +2011,23 @@ export function createSettingsRpcHandler(
             }
           }
           return await persist({ serverUrl: base }, null)
+        }
+
+        /*
+         * ── 研究决策辅助（DCRM）开关（v0.7.0）──────────────────────────────
+         *
+         * 语义与 `account/serverUrl` 同款：**只落一个开关，不联网、不动凭据**。
+         * 为什么走端点而不是让设置页直接改 config：DSH 的设置页只能改本插件声明的
+         * `configForms` 字段，而这一项的语义是"数据是否出本机"，必须与登录状态放在
+         * 一起、由宿主统一写入（同一份 profile 条目）。
+         *
+         * ⚠️ 严格校验：`enabled` 必须是布尔。字符串 `"false"` 很诱人（表单值），
+         * 但它在这里会被当成"真"，等于**关不掉**——宁可报错。
+         */
+        case 'account/decision-assist': {
+          const enabled = p.enabled
+          if (typeof enabled !== 'boolean') return fail('bad-request', 'enabled 必须是布尔值。')
+          return await persist({ decisionAssistEnabled: enabled }, null)
         }
 
         case 'account/login': {

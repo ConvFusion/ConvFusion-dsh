@@ -171,6 +171,14 @@ import {
   updateProjectDefinition,
   updateProjectTopic,
 } from './project.js'
+import {
+  ADOPTION_STATUSES as DCRM_ADOPTION_STATUSES,
+  DECISION_TYPES as DCRM_DECISION_TYPES,
+  annotateDecisionAssist,
+  createDecisionAssistant,
+} from './decision-assist.js'
+import type { Config } from '../config.js'
+import type { ServerRequestOptions } from '../server-client.js'
 import { researchWorkName } from './work-name.js'
 import {
   DECISION_TYPES,
@@ -201,6 +209,7 @@ export const PROJECT_TOOL = 'research_project'
 export const EVIDENCE_TOOL = 'research_evidence'
 export const CLAIM_TOOL = 'research_claim'
 export const DECISION_TOOL = 'research_decision'
+export const DECISION_ASSIST_TOOL = 'research_decision_assist'
 export const STATE_READ_TOOL = 'research_state_read'
 export const STATE_PROPOSE_TOOL = 'research_state_propose'
 export const PAPER_TOOL = 'research_paper'
@@ -216,6 +225,22 @@ export const IR_TOOL = 'research_ir'
 /** 把错误对象转成工具返回值（不抛异常，让模型看到原因并纠正）。 */
 function fail(error: string, extra: Record<string, unknown> = {}): Record<string, JsonValue> {
   return losslessJson({ ok: false, error, ...extra }) as unknown as Record<string, JsonValue>
+}
+
+/** 决策辅助依赖（缺省 = 该宿主未接线，工具恒返回 `skipped/disabled`）。 */
+export interface DecisionAssistDeps {
+  /** 每次调用现取（用户在设置页关掉开关后立刻生效）。 */
+  getConfig: () => Partial<Config>
+  env?: NodeJS.ProcessEnv
+  net?: ServerRequestOptions
+}
+
+/** 四类决策的中文名（只用于工具卡标题；四个类型码本身不翻译）。 */
+const DCRM_TYPE_LABELS: Record<string, string> = {
+  C1_next_action_selection: '下一步行动',
+  B1_evidence_sufficiency: '证据充分性',
+  B2_claim_evidence_consistency: '主张一致性',
+  D1_direction_decision: '研究方向',
 }
 
 /**
@@ -234,7 +259,21 @@ export function defineResearchTools(
   resolveWorkspace: (agent?: { id?: unknown } | null) => string,
   literatureDeps?: LiteratureDeps,
   downloadDeps?: PaperDownloadDeps,
+  decisionDeps?: DecisionAssistDeps,
 ): ToolDefinition[] {
+  /**
+   * 决策辅助的**进程内**实例：缓存与在途合并都挂在它身上，所以必须只造一次。
+   * 未接线时给一个恒定 `skipped/disabled` —— 不联网、不误报"未登录"。
+   */
+  const decisionAssist = decisionDeps
+    ? createDecisionAssistant(decisionDeps.getConfig, decisionDeps.env ?? process.env, decisionDeps.net ?? {})
+    : async (): Promise<Record<string, unknown>> => ({
+        ok: true,
+        status: 'skipped',
+        reason: 'disabled',
+        instruction: 'Decision assistance is not available on this host. Continue the normal workflow.',
+      })
+
   /* ── Evidence ───────────────────────────────────────────────────────── */
   const evidenceTool = defineTool({
     name: EVIDENCE_TOOL,
@@ -571,6 +610,174 @@ export function defineResearchTools(
       }
     },
     presentCall: () => ({ card: 'generic', title: 'Research decision', kind: 'execute' }),
+  })
+
+  /* ── Decision assistance（DCRM，v0.7.0）──────────────────────────────── */
+  /**
+   * 决策辅助 = **只读咨询** + **留痕**。
+   *
+   * 与 `research_decision` 的分工：本工具**不**记录决策、不生成 Evidence/Claim；
+   * 它只回答"几个候选项里模型更倾向哪个"，并把采纳判断留给人/Agent 事后回填。
+   * 因此它是 `isConcurrencySafe`（只读 + 进程内并发合并），不会与写类工具抢锁。
+   */
+  const decisionAssistTool = defineTool({
+    name: DECISION_ASSIST_TOOL,
+    description:
+      'Consult the ConvFusion decision model (DCRM) — a second opinion on one bounded research ' +
+      'decision — and record the consultation for later review.\n' +
+      'When enabled, consult **before**: choosing the next research action ' +
+      '(`C1_next_action_selection`), judging evidence sufficiency (`B1_evidence_sufficiency`), ' +
+      'judging claim/evidence consistency (`B2_claim_evidence_consistency`), or changing the research ' +
+      'direction (`D1_direction_decision`) — including read-only/chat-only tasks. Ordinary reading, ' +
+      'formatting and downloads do not need it; one unchanged decision needs one consultation.\n' +
+      'Give a concrete question and 2–26 distinct labeled candidate options describing the real choice.\n' +
+      'Actions:\n' +
+      '- `consult` (default): sends the current Research State projection and candidate options to the ' +
+      'ConvFusion decision service. It never writes decisions, evidence, claims or research state; when ' +
+      'the workspace is writable it saves the consultation under `research/decision-assists/` ' +
+      '(`record` / `id` in the result; `record_warning` if it could not be saved).\n' +
+      '- `annotate`: record how the advice was used (`id`, `adoption` = adopt | partial | reject, and a ' +
+      'short `note` with the reason). Do this after deciding, when writes are permitted.\n' +
+      'Probabilities are candidate-normalized and **uncalibrated**: advisory only, never evidence, ' +
+      'never a permission, never a bypass of review. `status:"skipped"` means no advice was used — ' +
+      'continue the normal workflow without retrying.',
+    parameters: {
+      action: {
+        type: 'string',
+        description: 'One of: consult (default when omitted) | annotate.',
+        enum: ['consult', 'annotate'],
+      },
+      decision_type: {
+        type: 'string',
+        description: 'For `consult`: which kind of decision this is.',
+        enum: [...DCRM_DECISION_TYPES],
+      },
+      decision_question: {
+        type: 'string',
+        description:
+          'For `consult`: the decision as one concrete question (≤1000 characters). State what has to be chosen now.',
+      },
+      candidate_options: {
+        type: 'array',
+        description:
+          'For `consult`: 2–26 distinct labeled options reflecting the actual choice. `label` is a short id, ' +
+          '`text` is the option itself (≤500 characters).',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          // 值 schema DSL 不支持嵌套 `required`；缺字段由 `readRequest` 在运行期拒绝
+          // （返回 `skipped/invalid_input`，模型能看到原因）。
+          properties: {
+            label: { type: 'string', description: 'Short unique identifier, e.g. `ablation` (≤64 characters).' },
+            text: { type: 'string', description: 'The candidate action/answer, one sentence (≤500 characters).' },
+          },
+        },
+      },
+      id: {
+        type: 'string',
+        description: 'For `annotate`: the consultation id returned by `consult` (e.g. `A001`).',
+      },
+      adoption: {
+        type: 'string',
+        description: 'For `annotate`: how the advice was used.',
+        enum: [...DCRM_ADOPTION_STATUSES],
+      },
+      note: {
+        type: 'string',
+        description: 'For `annotate`: the evidence-based reason for that adoption judgement (≤2000 characters).',
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => {
+        const v = value as {
+          ok?: boolean
+          error?: string
+          status?: string
+          reason?: string
+          predicted_label?: string
+          predicted_text?: string
+          cached?: boolean
+          shared_request?: boolean
+          record?: string
+          record_warning?: string
+          id?: string
+          adoption?: { status?: string }
+        }
+        if (v.ok === false) return [{ type: 'text' as const, text: `决策辅助：${v.error ?? '未完成'}` }]
+        // annotate 的回执
+        if (v.adoption) {
+          return [
+            {
+              type: 'text' as const,
+              text: `已记录采纳情况：${v.id ?? ''} → ${v.adoption.status ?? ''}${v.record ? `（${v.record}）` : ''}`,
+            },
+          ]
+        }
+        if (v.status === 'used') {
+          const title = v.cached === true
+            ? '【DCRM 缓存建议】复用已有结果，未发起新的模型推理。'
+            : v.shared_request === true
+              ? '【DCRM 共享请求】取得同一进行中请求的结果，未重复推理。'
+              : '【已调用 DCRM】已取得本次决策模型的建议。'
+          const saved = v.record ? `留痕：${v.record}` : v.record_warning ? `留痕：${v.record_warning}` : ''
+          return [
+            {
+              type: 'text' as const,
+              text:
+                `${title}\n推荐：${v.predicted_label ?? ''} · ${v.predicted_text ?? ''}\n` +
+                '采纳情况：待主 Agent 判断。继续处理前，请在聊天区用醒目的「DCRM 决策辅助」说明采纳、' +
+                '部分采纳或不采纳及依据；允许写时可用 annotate 回填。' +
+                (saved ? `\n${saved}` : ''),
+            },
+          ]
+        }
+        const skipped: Record<string, string> = {
+          disabled: '【DCRM 已关闭】本次未请求决策服务，按常规流程继续。',
+          not_logged_in: '【DCRM 未调用】尚未登录 ConvFusion，本次按常规流程继续。',
+          no_research_workspace: '【DCRM 未调用】当前没有研究工作区，本次按常规流程继续。',
+          invalid_input: '【DCRM 未调用】决策问题或候选项无效，本次按常规流程继续。',
+          input_too_long: '【DCRM 未调用】决策输入超出模型上下文预算，请缩短研究状态或候选项后重试。',
+          settings_changed: '【DCRM 建议未使用】等待期间开关、账号或服务器设置发生变化，已丢弃返回结果。',
+          service_unavailable: '【DCRM 暂不可用】本次未取得可用建议，已回退到常规流程。',
+        }
+        return [
+          {
+            type: 'text' as const,
+            text: skipped[String(v.reason)] ?? '【DCRM 未使用】本次没有可用的决策建议，按常规流程继续。',
+          },
+        ]
+      },
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const ws = resolveWorkspace(exec?.agent)
+      const a = args as Record<string, unknown>
+      const action = String(a.action ?? 'consult')
+      if (action === 'annotate') {
+        const result = annotateDecisionAssist(
+          ws,
+          String(a.id ?? ''),
+          String(a.adoption ?? '') as (typeof DCRM_ADOPTION_STATUSES)[number],
+          String(a.note ?? ''),
+        )
+        return 'error' in result
+          ? fail(result.error)
+          : (losslessJson(result) as unknown as Record<string, JsonValue>)
+      }
+      if (action !== 'consult') {
+        return fail(`Unknown action "${action}".`, { allowed: ['consult', 'annotate'] })
+      }
+      const value = await decisionAssist(ws, a)
+      return losslessJson(value) as unknown as Record<string, JsonValue>
+    },
+    presentCall: (args) => {
+      const a = args as { action?: string; decision_type?: string }
+      if (a.action === 'annotate') return { card: 'generic', title: 'DCRM 采纳记录', kind: 'other' }
+      const label = DCRM_TYPE_LABELS[a.decision_type as string] ?? '决策咨询'
+      // DSH 没有 MCP 进度通知：这张**卡片标题**就是"正在调用"的可见面。
+      return { card: 'generic', title: `DCRM 决策辅助 · ${label}（调用中）`, kind: 'other' }
+    },
   })
 
   /**
@@ -3482,6 +3689,7 @@ export function defineResearchTools(
     evidenceTool as ToolDefinition,
     claimTool as ToolDefinition,
     decisionTool as ToolDefinition,
+    decisionAssistTool as ToolDefinition,
     stateReadTool as ToolDefinition,
     stateProposeTool as ToolDefinition,
     paperTool as ToolDefinition,

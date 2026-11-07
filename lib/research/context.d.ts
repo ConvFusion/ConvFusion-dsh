@@ -150,7 +150,14 @@ export declare class ResearchContextService extends Service {
     /** 最近一次渲染的上下文（供 UI / 调试读取；§20 要求 Research Context 用户可见）。 */
     private lastRendered;
     private lastWorkspace;
-    constructor(ctx: Context, resolveWorkspace: WorkspaceResolver, skillContent?: (id: string) => string | undefined, resolveSessionWorkspace?: WorkspaceResolver);
+    /**
+     * 决策辅助（DCRM）开关的**实时**读取器（v0.7.0）。
+     *
+     * 每轮组装现取：用户在设置页关掉开关后，下一轮注入段立刻改成"已关闭"口径 ——
+     * 开关属于**动态状态**，不能钉进稳定段 `RESEARCH_GUIDE_TEXT`。
+     */
+    private readonly decisionAssist;
+    constructor(ctx: Context, resolveWorkspace: WorkspaceResolver, skillContent?: (id: string) => string | undefined, resolveSessionWorkspace?: WorkspaceResolver, decisionAssist?: () => boolean);
     /** 最近一次注入给模型的 Research Context 文本（`''` = 当前会话不是研究项目）。 */
     get current(): string;
     /** 最近一次解析出的 workspace 路径。 */

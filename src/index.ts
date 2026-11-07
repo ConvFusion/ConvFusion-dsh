@@ -350,7 +350,14 @@ export function apply(ctx: Context, liveConfig: Partial<LiveConfig> = {}): void 
   // 过程定义是一个**可定制能力**：读它的"生效正文"必须经过用户覆盖层合成。
   const skillContent = (id: string): string | undefined =>
     effectiveSkillContentById(id, customizationStore)
-  const research = new ResearchContextService(ctx, resolveCurrentWorkspace, skillContent, resolveCurrentSessionWorkspace)
+  const research = new ResearchContextService(
+    ctx,
+    resolveCurrentWorkspace,
+    skillContent,
+    resolveCurrentSessionWorkspace,
+    // 决策辅助段随每轮组装求值：设置页关掉开关后立刻改成"已关闭"口径。
+    () => currentConfig().decisionAssistEnabled !== false,
+  )
   ctx.effect(() => {
     const disposers = research.mount()
     return () => {
@@ -455,6 +462,12 @@ export function apply(ctx: Context, liveConfig: Partial<LiveConfig> = {}): void 
       // 不需要单独的 API Key —— 下载走论文的开放获取源（arXiv / ACL / OA）。
       // mailto 复用检索同款（进 polite pool），这里暂不注入，留待需要时扩展。
       { fetchImpl: globalThis.fetch as unknown as import('./research/paper-download.js').DownloadFetchLike },
+      // 决策辅助（DCRM）：配置（开关 / 服务器 / 凭据）与 fetch 都在这里注入，
+      // 工具本身不持有任何凭据。用户关掉开关后，下一次调用立刻走 `skipped/disabled`。
+      {
+        getConfig: currentConfig,
+        net: { fetchImpl: globalThis.fetch as unknown as import('./server-client.js').FetchLike },
+      },
     ).map((tool) => ctx.tools.register(tool))
     return () => {
       for (const d of disposers) {

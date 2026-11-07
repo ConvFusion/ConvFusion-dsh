@@ -1,5 +1,84 @@
 # 版本记录
 
+## v0.7.0
+
+**研究决策辅助（DCRM）**：在研究决策节点，把有界的决策问题 + 研究状态投影发给 ConvFusion
+决策服务，取回候选项的**候选内归一化概率**与推荐项。咨询**只读**（不写 Decision / Evidence /
+Claim / Research State），建议与**采纳情况留痕**在 `research/decision-assists/`，设置页可一键关。
+
+### 新增：`research_decision_assist`（咨询 + 采纳回填）
+
+- **四类决策**（与服务端 `Literal` 一一对应）：`C1_next_action_selection`（下一步行动）、
+  `B1_evidence_sufficiency`（证据充分性）、`B2_claim_evidence_consistency`（主张一致性）、
+  `D1_direction_decision`（研究方向）。参数：一个问题 + 2–26 个带 `label` 的候选项。
+- **门禁顺序**（顺序即语义，前四道门**零网络请求**）：
+  `disabled → not_logged_in → no_research_workspace → invalid_input → input_too_long →
+  缓存(60s) → 在途合并 → 网络 → 事后设置校验 →（尽力）留痕`。
+  关着开关还联网是隐私事故；没登录还联网是把"未配置"伪装成"服务异常"。
+- **状态投影**：`research_question` / `hypothesis` / `method` 各 ≤500 字符；`experiments` /
+  `evidence` / `claims` / `history` 按行切**最多 4 项**（总预算仍 500）。截断的字段名进
+  `truncated_fields`，让 Agent 知道"建议看到的是被裁过的状态"。
+- **预算守卫**：投影 + 问题 + 候选项先做保守 token 估算，超 ~1800 就直接返回
+  `skipped/input_too_long`，**不发请求**。理由：服务端 422 会被折成"服务不可用"，
+  对 Agent 是错误的归因 —— 失败要响在正确的地方。
+- **响应严格校验**：概率和 = 1、推荐项 = 最大项、top3 = 排序前 3、`input_hash` 为 64 位 hex、
+  `probability_kind` 为 `candidate_normalized_uncalibrated`、token ∈[1,2048]；任一不符按不可用处理，
+  且**逐字段重建**返回值（上游任意数据进不了记录与上下文）。
+- **缓存与合并**：60 秒 TTL（key 含 workspace / 服务器 / 账号 hash / 请求体 / state version）、
+  在途同 key 共享一个 Promise（`shared_request:true`）、容量 64。等待期间关开关 / 换账号 /
+  换服务器 → **丢弃结果**（`settings_changed`），否则"刚关掉还弹建议"。
+- **降级**：任何失败（401/403/404/422/429/503、畸形响应、超时）统一 `skipped/service_unavailable`，
+  **不重试、不透服务器原文**。`skipped` 不是错误（工具不亮红灯），也永远不能被说成"用过"。
+- **留痕（v0.7.0 用户拍板要）**：每次**真正拿到建议**写 `research/decision-assists/A###.json`
+  （发出去的投影 + 候选项 + 返回的概率/推荐 + `adoption: null`）；`action:'annotate'` 回填
+  `adoption`（adopt / partial / reject + 依据），改判保留 `adoption_history`。
+  ⚠️ 留痕是**尽力而为**：研究根不可写时咨询照常返回，只带 `record_warning` ——
+  这与 codex 首发实现（`39c2cc8` 写盘、`3c661e0` 整段撤掉）不同：本版把"咨询"与"留痕"拆开，
+  只读会话照样能咨询。
+- **参数 schema 注意**：DSH 的值 schema DSL **不支持嵌套 `required`**，候选项的字段强制性
+  由运行期校验负责（缺字段 → `skipped/invalid_input`）。
+- **可见性**：DSH 没有 MCP 进度通知，所以工具卡的 `presentCall` 标题就是"正在调用"的可见面
+  （`DCRM 决策辅助 · 下一步行动（调用中）`）；结果另给人读文本（推荐 / 采纳待判断 / 留痕路径）。
+
+### 新增：开关、端点与协议 32
+
+- 配置 `decisionAssistEnabled`（**默认开**，`.volatile()`；`resolveConfig` 缺省 = 开，
+  只有显式 `false` 才是关）。
+- 新端点 `account/decision-assist`（`{ enabled: boolean }`）：**只落开关、不联网、不动凭据**；
+  非布尔值一律 `bad-request`（字符串 `"false"` 很诱人，但它在这里是"真" —— 等于**关不掉**）。
+- `account/state` 增 `decisionAssistEnabled`（只报开/关，不报任何模型地址/密钥）。
+- 设置页【ConvFusion.com】账号卡片**正文最后一行**加开关（与账号行左对齐）：**一整行**（复选框 + 「启用决策辅助」+ 一句短说明
+  「决策节点调用 ConvFusion 决策服务（可关闭）」），完整说明放在 `title` 悬浮提示里；
+  `id`/`htmlFor` 关联，点标题也能切换。⚠️ 不要复用 `S.inlineRow`：它带 `flexWrap: 'wrap'`，
+  长说明会把复选框挤到上一行（2026-11 实测）；短说明用 `nowrap` + 省略号兜窄宽度。
+- `HOST_PROTOCOL` **31 → 32**（新端点 + 新字段；旧宿主会 `unknown-endpoint` 或"关不掉"）。
+
+### 新增：动态注入段（不改 `skills/`）
+
+`systemPrompt.context()` 末尾追加 `## Decision assistance (DCRM)`：**每轮重新求值**（读当下的开关），
+写明四类必咨询点、采纳/部分采纳/不采纳的汇报要求、`skipped` 不得冒充参与、概率不是校准置信度、
+咨询只读且可在"不改工作区"的任务里使用。**没有**写进 `skills/` —— 那是所有用户通用的研究方法，
+而"何时调 DCRM、怎么报采纳"是随插件配置变化的宿主行为。
+
+### 自检
+
+- 新增 `scripts/verify-decision-assist.mjs`（102 项，离线注入 `fetchImpl`）：四道门零请求、
+  投影（列表按行切 / 截断字段）、预算守卫、在途合并（1 次请求）、缓存与失效（状态/账号/开关）、
+  服务端各类失败与畸形响应、响应体卡住（超时 + abort）、等待期间关开关、只读研究根
+  （咨询可用 + `record_warning` + 不建目录）、**零写盘**（逐字节快照对比）、留痕与 annotate
+  （改判保留历史）、工具层（注册 / 并发安全 / 渲染 / 卡片标题 / 未接线 → disabled）。
+- `verify-settings-page`（1189/0，新增 [1h-2] 段）：新端点可写回、非布尔被拒、无设置存储时如实报错、
+  `account/state` 默认开、客户端走宿主端点且复选框与标题同一行。
+- `verify-workspace-identity`（184/0）：协议号 tripwire 更新到 32。
+- `verify-i18n`（27/0）：中英字典同键。
+
+### 已知的既有失败（与本改动无关，HEAD 上就存在）
+
+- `verify-stage1-runtime` 1 条（"相关能力被列出（literature-search）"）、
+  `verify-stage3-plan-system` 2 条（`source.kind` / `source.plugin`）、
+  `verify-stage5-paper-evolution` 3 条 + 崩溃（`generatePaperId` 现在产出 `paper-main-paper`，
+  测试夹具仍期望 `paper-main`）—— 在 `HEAD`（v0.6.8）的独立 worktree 上跑同样失败。
+
 ## v0.6.8
 
 **下载总是拿到"老文件"**的根因修复：读"对方那一侧"改用服务器的 `counterpart`；
@@ -52,8 +131,12 @@ mentor 侧），与 `X-Source` 的语义一致。
 
 ### 已知的既有失败（与本改动无关，HEAD 上就存在）
 
-- `verify-stage1-runtime` 1 条、`verify-stage3-plan-system` 2 条、`verify-sync-command` 1 条
-  （"注册表里的标识也算数"）——在 `HEAD`（v0.6.7）的独立 worktree 上跑同样失败，不是本次引入。
+- `verify-stage1-runtime` 1 条、`verify-stage3-plan-system` 2 条 —— 在 `HEAD`（v0.6.7）的独立
+  worktree 上跑同样失败，不是本次引入。
+- `verify-sync-command` 那条"注册表里的标识也算数"是**测试夹具过期**（已在下一版修正）：
+  v0.6.4 起注册表记录要凭**研究根指纹**（`project.md` 的 `created_at`）自证"还是我住这儿"，
+  而夹具既没写指纹、`project.md` 也没有 `created_at`。现在的用例分三格：
+  带指纹 → 采信（`same`）；**老记录无指纹** → 不采信（`unknown`）；记录有指纹但研究根没有 → 不采信。
 
 ## v0.6.7
 

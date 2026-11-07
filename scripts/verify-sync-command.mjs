@@ -157,7 +157,12 @@ try {
       const root = join(work, name, 'workspace')
       mkdirSync(root, { recursive: true })
       if (opts.research !== false) {
-        writeFileSync(join(root, 'project.md'), `---\ntopic: ${opts.topic ?? '分层记忆'}\n---\n`)
+        /*
+         * `created_at` 是**研究根指纹**的来源（v0.6.4 起注册表记录要凭它自证"还是我住这儿"）。
+         * 默认**不写**（= 老数据没有指纹）——需要指纹的用例显式传 `createdAt`。
+         */
+        const created = opts.createdAt ? `created_at: ${opts.createdAt}\n` : ''
+        writeFileSync(join(root, 'project.md'), `---\ntopic: ${opts.topic ?? '分层记忆'}\n${created}---\n`)
         writeFileSync(join(root, 'research-state.md'), '# state\n')
       }
       if (opts.localId) {
@@ -226,6 +231,61 @@ try {
       })
       assertEq(factsFor(t.root, t.zip, join(work, 'f-unknown')).status, 'unknown', '本地无标识 → unknown（绝不判"另一项"）')
     }
+    /*
+     * 注册表的**指纹纪律**（v0.6.4）：注册表按路径存，路径会换住户 —— 只有"写这条记录时的
+     * 研究根指纹"与当前一致才采信。下面两格钉住"老记录 / 老研究根"都**不采信**，
+     * 落回 `unknown`（界面先盘查、给判断、等确认），**绝不**当成"同一项"融合。
+     */
+    {
+      // ① 老记录没有指纹（v0.6.4 之前写的）
+      const createdAt = '2026-09-12T00:00:00Z'
+      const t = mk('f-registry-legacy', { localId: null, createdAt })
+      const store = WI.createMemoryWorkIdentityStore()
+      store.set(
+        t.root,
+        WI.makeWorkIdentity({ workspaceId: WS_A, projectId: 'p', serverUrl: 's', accountId: 'a', role: 'owner' }),
+      )
+      notes.put({
+        zipPath: t.zip,
+        remoteWorkspaceId: WS_A,
+        projectId: null,
+        projectTitle: null,
+        serverUrl: null,
+        source: 'owner',
+        savedAt: new Date().toISOString(),
+      })
+      const f = factsFor(t.root, t.zip, join(work, 'f-registry-legacy'))
+      assertEq(f.localWorkspaceId, null, '老记录（无指纹）**不采信** → 本机标识读不到')
+      assertEq(f.status, 'unknown', '老记录（无指纹）→ unknown（先盘查，不当作同一项）')
+    }
+    {
+      // ② 记录有指纹，但当前研究根**没有** created_at（无法自证）
+      const t = mk('f-registry-nofp', { localId: null })
+      const store = WI.createMemoryWorkIdentityStore()
+      store.set(
+        t.root,
+        WI.makeWorkIdentity({
+          workspaceId: WS_A,
+          projectId: 'p',
+          serverUrl: 's',
+          accountId: 'a',
+          role: 'owner',
+          rootFingerprint: '2026-09-12T00:00:00Z',
+        }),
+      )
+      notes.put({
+        zipPath: t.zip,
+        remoteWorkspaceId: WS_A,
+        projectId: null,
+        projectTitle: null,
+        serverUrl: null,
+        source: 'owner',
+        savedAt: new Date().toISOString(),
+      })
+      const f = factsFor(t.root, t.zip, join(work, 'f-registry-nofp'))
+      assertEq(f.localWorkspaceId, null, '研究根没有指纹 → 注册表记录也无法采信')
+      assertEq(f.status, 'unknown', '研究根没有指纹 → unknown')
+    }
     // unverifiable：服务器没给（没便签）
     {
       const t = mk('f-unver', { localId: WS_A })
@@ -235,11 +295,24 @@ try {
         '服务器没标识 → unverifiable（也绝不判"另一项"）',
       )
     }
-    // 注册表那一半也生效（解压前只有注册表时）
+    // 注册表那一半也生效（解压前只有注册表时）——**带指纹**才是当前代码落盘的形态
     {
-      const t = mk('f-registry', { localId: null })
+      const createdAt = '2026-09-12T00:00:00Z'
+      const t = mk('f-registry', { localId: null, createdAt })
       const store = WI.createMemoryWorkIdentityStore()
-      store.set(t.root, WI.makeWorkIdentity({ workspaceId: WS_A, projectId: 'p', serverUrl: 's', accountId: 'a', role: 'owner' }))
+      const fingerprint = WI.researchRootFingerprint(t.root)
+      assertEq(fingerprint, createdAt, '夹具研究根的指纹取自 project.md 的 created_at')
+      store.set(
+        t.root,
+        WI.makeWorkIdentity({
+          workspaceId: WS_A,
+          projectId: 'p',
+          serverUrl: 's',
+          accountId: 'a',
+          role: 'owner',
+          rootFingerprint: fingerprint,
+        }),
+      )
       notes.put({
         zipPath: t.zip,
         remoteWorkspaceId: WS_A,

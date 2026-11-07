@@ -161,6 +161,11 @@ export const zh = {
   'community.tab.account': '账号',
   'community.tab.signIn': '登录',
   'community.tab.server': '服务器设置',
+  // 研究决策辅助（DCRM）：默认开、数据出本机，所以文案要写明"发送什么"。
+  'community.decisionAssist.title': '启用决策辅助',
+  'community.decisionAssist.description': '决策节点调用 ConvFusion 决策服务（可关闭）',
+  'community.decisionAssist.tip':
+    '登录后默认可用。在研究决策节点，将所需研究状态发送到 ConvFusion 决策服务；关闭或服务不可用时沿用原有流程。',
   // 用户信息卡**默认折叠**：折叠时只留"是谁 + 还剩多少 Token"（2026-10 用户要求），
   // 展开才是账号 / 服务器设置。箭头是唯一提示，所以悬浮说明要写清"点开有什么"。
   'community.tip.expand': '展开账号与服务器设置',

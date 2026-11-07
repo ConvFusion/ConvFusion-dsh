@@ -173,6 +173,13 @@ export interface HostAccountState {
     keyConfigured: boolean;
     keySource: 'settings' | 'env' | 'none';
     apiKeyEnvVar: string;
+    /**
+     * 研究决策辅助（DCRM）是否开启（v0.7.0）。
+     *
+     * 可选：**旧宿主没有这个字段**，界面按"开"显示（与宿主缺省一致），
+     * 但写入只有新宿主才接受 —— 老宿主会回 `bad-request`，界面如实报错而不是假装成功。
+     */
+    decisionAssistEnabled?: boolean;
     /** 只有在**联网验证过**之后才非空。 */
     account: HostAccount | null;
     /**

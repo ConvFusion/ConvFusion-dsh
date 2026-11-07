@@ -7,10 +7,10 @@
 <p align="center"><strong>专为 DeepSeek Harness 打造的科研操作系统插件</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.6.8-4a43ea" alt="Version 0.6.8">
+  <img src="https://img.shields.io/badge/version-v0.7.0-4a43ea" alt="Version 0.7.0">
   <img src="https://img.shields.io/badge/DeepSeek_Harness-plugin-4a43ea" alt="DeepSeek Harness Plugin">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="MIT License"></a>
-  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-v0.6.8-6b7280" alt="版本记录"></a>
+  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-v0.7.0-6b7280" alt="版本记录"></a>
 </p>
 
 <p align="center">
@@ -28,6 +28,7 @@ ConvFusion 是专为 DeepSeek Harness 打造的科研操作系统插件，为 AI
 - **科研上下文注入**：自动维护研究项目状态，动态注入系统提示，让 AI 助手始终了解研究进展
 - **专业技能库**：内置 57 个经过验证的研究方法技能，分 10 类（全局能力 · 理解输入 · 文献调研 · 创新假设 · 研究计划 · 资源估计 · 研究决策 · 实验验证 · 论文写作 · 工作评阅），覆盖文献综述、实验设计（含硬件不足时先出仿真结果）、结果分析、论文写作等科研全流程
 - **论文配图（确定性绘图）**：Agent 写结构化 **Diagram IR**，校验器先判结构/视觉是否有效，渲染器再把同一个 IR **确定性地**画成 SVG，最后转成**矢量 PDF** 进 LaTeX（字体内嵌、逐字节可复现）—— 坏图出不了门，好图可复现、可 diff、可增量修改；导出还会回报图在论文里的实际字号，避免「能编译但没人看得清」（`research_diagram`）
+- **研究决策辅助（DCRM）**：在研究决策节点（下一步行动 / 证据充分性 / 主张一致性 / 研究方向）把所需研究状态的**有界投影**发给 ConvFusion 决策服务，取回候选项的候选内归一化概率与推荐项；咨询只读、不写研究资产，建议与采纳情况留痕在 `research/decision-assists/`，设置页可一键关闭
 - **研究资产追踪**：原生支持证据（Evidence）、主张（Claim）、决策（Decision）的结构化记录与追溯
 - **计划管理系统**：自然语言驱动的研究计划生命周期管理，支持草稿、评审、执行状态流转
 - **论文演化支持**：论文作为持续演化实体，支持修订提案、缺口分析、版本管理
