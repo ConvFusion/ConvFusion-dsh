@@ -135,6 +135,14 @@ export const zh = {
   'upload.reason.literature-fulltext': '别人的论文原文：默认不上传，需要时单独勾选',
   'upload.reason.large-files': '单个文件 ≥10 MB：默认不上传，确认有用再勾选',
   'upload.reason.others': '未归类的文件：默认不上传',
+  // ── 配额截断（`experiments/` 这类大目录只列前 5000 个）──────────────────
+  // 只报**个数 + 体积**：展开会把它们真的纳入上传，代价要说在点之前。
+  'upload.truncated.hint': '还有 {files} 个文件（{size}）未列出',
+  'upload.truncated.hintNoSize': '还有 {files} 个文件未列出',
+  'upload.truncated.expand': '展开',
+  'upload.truncated.confirm': '展开这 {files} 个文件（{size}）并纳入上传？',
+  'upload.truncated.confirmNoSize': '展开这 {files} 个文件并纳入上传？',
+  'upload.truncated.confirmYes': '确认展开',
   'community.action.seekMentor': '寻找线上导师',
   // ── 出题模式（v0.6.0）：发布入口**按角色收敛成一个按钮** ──────────────
   // 研究者 → 寻找线上导师；导师 → 寻找优秀学生（+ 下拉里的"另一个方向"）；

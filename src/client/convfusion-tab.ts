@@ -53,7 +53,9 @@
  * 4. **不碰别人的槽位**：只注册/注销自己这几条 `conversation.view`。
  * 5. **百分比进 tab 文案**：`research` 与百分比来自**同一次**探针，所以面板没挂载时 tab 上也有数；
  *    而 roster 只在槽位/语言变化时重读 label —— 数值变了必须**重注册**（`applyAnswer()`），
- *    没变则一动不动（不抖 roster）。
+ *    没变则一动不动（不抖 roster）。⚠️ 重注册会**重建 tab 正文**（DSH 按 entry 对象给 React key，
+ *    新 entry ⇒ 新 key ⇒ remount），所以：同一次例行重判**不先摘**条目（`registeredSessionId`），
+ *    且任何弹窗开着时**推迟**这次文案更新（`isOtherModalOpen()`）—— 否则用户正在填的对话框会被冲掉。
  * 6. **一次注册 / 一次注销**：两个 tab 同进同退，任何时刻 roster 里要么两条都在、要么都不在。
  *
  * 轮询：注册期间挂一个 `PROGRESS_REFRESH_MS` 的低频定时器（工作区与资产都可能变），
@@ -64,6 +66,7 @@ import React from 'react'
 import { CONVFUSION_LOCALE_NS, type Translate } from './i18n/index.js'
 import { fetchSettingsSend } from './settings.js'
 import { PROGRESS_REFRESH_MS, ResearchProgressView, readProgressValue } from './progress-panel.js'
+import { isOtherModalOpen } from './modal-state.js'
 import { CommunityView } from './community-view.js'
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -321,15 +324,28 @@ function attach(
     let disposeEntries: Array<() => void> = []
     /** 已注册时用的百分比 —— 变了就重注册，让 roster 重读 label。 */
     let registeredPercent: string | undefined
+    /**
+     * 已注册条目**是为哪个会话**注册的（`undefined` = 没注册 / 不知道）。
+     *
+     * 用途只有一个：分得清"同一次重判"和"换了会话"。
+     * - 换会话 → 先摘掉（宁可晚出现一次，也不在非研究会话里闪出一个 tab）；
+     * - 同一个会话的例行重判（60 秒轮询 / 窗口重新可见）→ **保持注册不动**，
+     *   答案回来再落定。这条是 2026-11 那个 bug 的正面修复：旧写法每次重判都先
+     *   `hide()`，于是 tab 正文被**卸载再挂载**（`applyAnswer` 之后的重注册会拿到新的
+     *   entry 对象，而 DSH 按 entry 对象给 React key ⇒ 这是 remount，不是 re-render），
+     *   用户正在填的对话框随之消失。
+     */
+    let registeredSessionId: string | undefined
     let disposed = false
     /** 竞态护栏：每次判定自增，异步探针回来时只认最新一代。 */
     let generation = 0
     /** 轮询句柄（仅在注册期间存在 —— 没 tab 就不必问宿主）。 */
     let poll: number | undefined
 
-    const show = (percent: string | undefined): void => {
+    const show = (percent: string | undefined, sessionId: string | undefined): void => {
       if (disposed || disposeEntries.length > 0) return
       registeredPercent = percent
+      registeredSessionId = sessionId
       for (const spec of tabs) {
         disposeEntries.push(
           host.slots.register(
@@ -352,17 +368,25 @@ function attach(
       for (const dispose of disposeEntries) dispose()
       disposeEntries = []
       registeredPercent = undefined
+      registeredSessionId = undefined
     }
 
-    /** 落定一次判定结果：该显示就显示，百分比变了就重注册（tab 文案跟着变）。 */
-    const applyAnswer = (answer: GateAnswer): void => {
+    /**
+     * 落定一次判定结果：该显示就显示，百分比变了就重注册（tab 文案跟着变）。
+     *
+     * ⚠️ **重注册 = 重建 tab 正文**（DSH 的 roster 按 entry 对象给 React key）。
+     * 所以有弹窗开着时**推迟**这一次文案更新：留着旧的注册项（标签上那个百分比暂时旧一点，
+     * 下一次判定会补上），不要为了一个数字把用户正在填的对话框冲掉。
+     */
+    const applyAnswer = (answer: GateAnswer, sessionId: string | undefined): void => {
       if (!answer.research) {
         hide()
         return
       }
       if (disposeEntries.length > 0 && answer.percent === registeredPercent) return
+      if (disposeEntries.length > 0 && isOtherModalOpen()) return
       hide()
-      show(answer.percent)
+      show(answer.percent, sessionId)
     }
 
     /**
@@ -381,15 +405,18 @@ function attach(
         const known = force ? undefined : cache.get(sessionId)
         if (known !== undefined) {
           // 已知答案 → 同步落定（进入会话时不等探针，避免闪一下对话）
-          applyAnswer(known)
+          applyAnswer(known, sessionId)
           return
         }
-        // 未知会话：先不显示（宁可晚出现一次，也不在非研究会话里闪出一个 tab），等探针
-        hide()
+        /*
+         * 未知会话 **或换了会话**：先不显示（宁可晚出现一次，也不在非研究会话里闪出一个
+         * tab），等探针。同一个会话的例行重判则**保持注册** —— 见 `registeredSessionId`。
+         */
+        if (registeredSessionId !== sessionId) hide()
         const answer = await probe(sessionId)
         if (disposed || generationAt !== generation) return
         cache.set(sessionId, answer)
-        applyAnswer(answer)
+        applyAnswer(answer, sessionId)
       } catch (error) {
         // 判定失败 → 摘掉这一轮的 tab（fail closed），并留一条诊断。
         // 不这样做的话，异常会变成**未处理的 rejection**：界面无提示、tab 状态还可能停在错的答案上。
@@ -402,11 +429,17 @@ function attach(
       void decide()
     })
     const offVisible = onVisible(() => {
+      /*
+       * 弹窗开着时不重判（与下面的轮询同一个理由）：切回窗口是最常见的"重判"时刻，
+       * 而重判有可能为了新百分比重注册 ⇒ 把用户正在填的对话框冲掉。
+       */
+      if (isOtherModalOpen()) return
       void decide(true)
     })
     // 低频轮询：tab 文案里的百分比要跟上研究资产的变化（与面板同一个间隔常数）。
     poll = globalThis.setInterval(() => {
-      void decide(true)
+      // 弹窗开着时不重判：重注册会把 tab 正文（含用户正在填的对话框）重建一遍。
+      if (!isOtherModalOpen()) void decide(true)
     }, PROGRESS_REFRESH_MS)
     void decide()
 

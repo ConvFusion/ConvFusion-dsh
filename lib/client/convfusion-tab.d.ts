@@ -53,7 +53,9 @@
  * 4. **不碰别人的槽位**：只注册/注销自己这几条 `conversation.view`。
  * 5. **百分比进 tab 文案**：`research` 与百分比来自**同一次**探针，所以面板没挂载时 tab 上也有数；
  *    而 roster 只在槽位/语言变化时重读 label —— 数值变了必须**重注册**（`applyAnswer()`），
- *    没变则一动不动（不抖 roster）。
+ *    没变则一动不动（不抖 roster）。⚠️ 重注册会**重建 tab 正文**（DSH 按 entry 对象给 React key，
+ *    新 entry ⇒ 新 key ⇒ remount），所以：同一次例行重判**不先摘**条目（`registeredSessionId`），
+ *    且任何弹窗开着时**推迟**这次文案更新（`isOtherModalOpen()`）—— 否则用户正在填的对话框会被冲掉。
  * 6. **一次注册 / 一次注销**：两个 tab 同进同退，任何时刻 roster 里要么两条都在、要么都不在。
  *
  * 轮询：注册期间挂一个 `PROGRESS_REFRESH_MS` 的低频定时器（工作区与资产都可能变），

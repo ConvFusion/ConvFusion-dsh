@@ -100,6 +100,17 @@ export interface UploadPlan {
   root: string
   /** 按分类聚合（顺序固定：recommended → optional → excluded）。 */
   categories: UploadCategory[]
+  /**
+   * 因**分类配额**被截掉的文件（分类 → 未列出的个数与体积）。
+   *
+   * 只可能是大目录（`experiments/`、`results/`）超配额；其余分类照常完整。
+   * 界面据此提示"还有 N 个文件未列出"，并在用户**二次确认**后带上 `expand` 重取一次
+   * 计划（见 {@link UploadPlanOptions.expand}）—— 那些文件只有确认过才会进清单/被选上。
+   *
+   * `bytes` 是给用户判断代价用的：`experiments/` 的尾巴可能是几万个结果文件、几个 GB，
+   * 不报体积的确认等于让用户在黑盒里点"是"。
+   */
+  truncated: Array<{ categoryId: string; files: number; bytes: number }>
   totals: {
     /** 目录里所有文件的合计（含排除项）—— 用来对比"全传"与"推荐"的差距。 */
     allBytes: number
@@ -348,7 +359,30 @@ function measureDir(dir: string, budget = 20000): { bytes: number; files: number
 }
 
 /** 扫描上限（防御性：某些工作区可能塞了几十万个文件）。 */
-export const SCAN_MAX_FILES = 20000
+export const SCAN_MAX_FILES = 50000
+
+/**
+ * 单个分类的上限。
+ *
+ * `experiments/` 一个目录就可能有近两万个结果文件，把全局上限吃光 —— 于是 `plans/`、
+ * `papers/`、`research/` 这些**文件很少但结构重要**的目录一个都扫不到，界面上只剩一类。
+ * 按分类各留一格配额，小目录因此总是**完整**，大目录超出的部分单独记账，交给界面提示。
+ */
+export const PER_CATEGORY_MAX_FILES = 5000
+
+/** `buildUploadPlan` 的可选项。 */
+export interface UploadPlanOptions {
+  /**
+   * 用户**二次确认**过要展开的分类：这些分类不受 {@link PER_CATEGORY_MAX_FILES} 限制
+   * （仍受全局 {@link SCAN_MAX_FILES} 保护）。
+   *
+   * 为什么要用户确认而不是默认展开：一个真实的 `experiments/` 尾巴有近四万个文件、
+   * 几个 GB。默认把它们列出来并勾上，等于替用户做了一个他看不见的决定；
+   * 而**不列也不说**又等于把文件悄悄丢了（2026-11 的原始 bug）。所以：默认只提示、
+   * 用户点了才重扫一次把它们纳入。
+   */
+  expand?: readonly string[]
+}
 
 /**
  * 扫描研究根目录并给出上传计划。
@@ -359,9 +393,20 @@ export const SCAN_MAX_FILES = 20000
  *
  * @param purpose `publish` = 学生发布（默认，口径与历史一致）；
  *   `mentor` = 导师整包回传（`review/**` 与论文 PDF 都算推荐，见 {@link UploadPurpose}）
+ * @param options `expand` = 已二次确认展开的分类（见 {@link UploadPlanOptions}）
  */
-export function buildUploadPlan(root: string, purpose: UploadPurpose = 'publish'): UploadPlan {
+export function buildUploadPlan(
+  root: string,
+  purpose: UploadPurpose = 'publish',
+  options: UploadPlanOptions = {},
+): UploadPlan {
   const files: Array<{ relPath: string; size: number; categoryId: string; decision: UploadDecision }> = []
+  /** 每个分类已收多少文件（目录占位项不算），用于分类配额。 */
+  const perCategory = new Map<string, number>()
+  /** 分类 → 因配额未列出的文件数 / 体积。 */
+  const truncated = new Map<string, { files: number; bytes: number }>()
+  /** 已二次确认展开的分类：不受单分类配额限制。 */
+  const expanded = new Set(options.expand ?? [])
   /** 整枝跳过的机器产物目录：按**分类**累计体积/计数（分类行也要算得平）。 */
   const skipped = new Map<string, { bytes: number; files: number }>()
 
@@ -402,6 +447,16 @@ export function buildUploadPlan(root: string, purpose: UploadPurpose = 'publish'
         continue
       }
       const { categoryId, decision } = classify(relPath, size, purpose)
+      const taken = perCategory.get(categoryId) ?? 0
+      if (taken >= PER_CATEGORY_MAX_FILES && !expanded.has(categoryId)) {
+        // 该分类已满：不列进清单，但记账 —— 界面要告诉用户"还有 N 个未列出"。
+        const tally = truncated.get(categoryId) ?? { files: 0, bytes: 0 }
+        tally.files += 1
+        tally.bytes += size
+        truncated.set(categoryId, tally)
+        continue
+      }
+      perCategory.set(categoryId, taken + 1)
       files.push({ relPath, size, categoryId, decision })
     }
   }
@@ -465,6 +520,9 @@ export function buildUploadPlan(root: string, purpose: UploadPurpose = 'publish'
 
   return {
     root,
+    truncated: [...truncated]
+      .map(([categoryId, tally]) => ({ categoryId, files: tally.files, bytes: tally.bytes }))
+      .sort((a, b) => b.files - a.files),
     categories,
     totals: {
       // ⚠️ 分类的 bytes 已包含"整枝跳过的机器产物目录"的实测体积（见上面 cat.bytes +=），

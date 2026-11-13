@@ -345,6 +345,92 @@ type HostProjectDirection = 'SEEK_MENTOR' | 'SEEK_STUDENT';
  */
 export declare function askingFeeText(t: Translate, direction: HostProjectDirection, askingFee: number | null | undefined): string | null;
 /**
+ * 发布对话框的数据（宿主 `work/uploadPlan` 的镜像）。
+ *
+ * ⚠️ `plan.categories` 里含 `excluded`（机器产物），但界面**不显示**它们
+ * （2026-09 用户拍板：排除项直接不出现，不影响选择）。保留在数据里是为了对账。
+ */
+interface HostUploadPlan {
+    projectId: string;
+    root: string;
+    /** **要发布到网络的名字** = 这项研究工作自己的名字（有论文用论文标题）。 */
+    title: string;
+    /** 本机工作区名（注册表标题）—— 与 `title` 不同时对话框用一行提示指认是哪个工作区。 */
+    workspaceTitle: string;
+    /** 名字从哪来的（`paper` / `topic` / `fallback`）。 */
+    workNameSource: 'paper' | 'topic' | 'fallback';
+    /** 这次要发布到哪个方向（宿主回显；对话框标题据此显示「寻找指导 / 寻找学生」）。 */
+    direction: HostProjectDirection;
+    plan: {
+        categories: Array<{
+            id: string;
+            decision: 'recommended' | 'optional' | 'excluded';
+            files: Array<{
+                relPath: string;
+                size: number;
+            }>;
+            bytes: number;
+        }>;
+        totals: {
+            allBytes: number;
+            allFiles: number;
+            recommendedBytes: number;
+            recommendedFiles: number;
+            optionalBytes: number;
+            optionalFiles: number;
+            excludedBytes: number;
+            excludedFiles: number;
+        };
+        limits: {
+            maxFileBytes: number;
+            maxFilesPerRequest: number;
+            maxRequestBytes: number;
+        };
+        /**
+         * 因**单分类配额**（5000）未列出的文件：个数 + 体积。
+         *
+         * `bytes` 在旧宿主上缺失（协议 32 及以前只报个数）→ 界面按 0 显示，不编。
+         */
+        truncated?: Array<{
+            categoryId: string;
+            files: number;
+            bytes?: number;
+        }>;
+        defaultSelection: string[];
+        oversize: Array<{
+            relPath: string;
+            size: number;
+        }>;
+        requestCount: number;
+    };
+    selection: string[];
+    remembered: boolean;
+    changed: string[];
+    unchangedCount: number;
+    usage: {
+        nextPublishCost: number;
+        storage: {
+            usedBytes: number;
+            capacityBytes: number;
+            availableBytes: number;
+        };
+    } | null;
+    /**
+     * 上次发布用的**挂牌价**（Token）；`null` = 还没挂过价。
+     *
+     * 只对导师出题（`SEEK_STUDENT`）有意义 —— 用它把价格输入框预填成"网络上现在挂的那个价"。
+     */
+    askingFee: number | null;
+    /**
+     * **价目参考**（服务器 `GET /mentorship/price-guide`）；`null` = 旧服务器 / 取不到。
+     *
+     * ⚠️ 界面**不自带价目表**：写死 500/600/800/1000 的界面在平台调价那天会撒谎，
+     * 而且是没人会立刻发现的那种（服务器文档 `payment-system.md` §3.2.6）。
+     * `null` 时退化成"直接填价格"，不挡发布。
+     */
+    priceGuide: PriceGuideLike | null;
+}
+/**
  * 一个**候选下载目标工作区**的校验结果（宿主 `mentor/downloadState` 的 `items[]` 镜像）。
  *
  * 判据是服务器给的研究工作标识 `workspace_id`（全局唯一、跨项目生命周期不变）：
@@ -382,6 +468,14 @@ interface HostDownloadTarget {
  * 水位键（`syncBySide[owner|mentor]`）与文案都用这两个值 —— **不随请求口径变**。
  */
 type HostFileSide = 'owner' | 'mentor';
+/** 回传进度（宿主 `mentor/uploadProgress` 的镜像）。 */
+interface HostUploadProgress {
+    doneFiles: number;
+    totalFiles: number;
+    sentBytes: number;
+    totalBytes: number;
+    running: boolean;
+}
 /** 导师简介（`research_profiles` 投影；后端 enrich 后才有）。 */
 interface HostMentorProfile {
     institution: string | null;
@@ -561,6 +655,55 @@ export declare function PriceGuideRow({ t, direction, guide, options, mode, toke
     onSelectCustom: () => void;
     onText: (next: string) => void;
 }): JSX.Element;
+export declare function PublishDialog({ t, data, selection, remember, expanded, busy, progress, 
+/** 对话框内的失败提示（`null` = 没有）：展开重取计划失败时不能只写到列表页去。 */
+notice, onToggleFiles, onToggleExpand, expandingCategory, onExpandTruncated, onRemember, priceMode, priceTokens, priceText, firstPublish, onSelectPricePreset, onSelectPriceCustom, onPriceText, onCancel, onConfirm, }: {
+    t: Translate;
+    data: HostUploadPlan;
+    selection: ReadonlySet<string>;
+    remember: boolean;
+    expanded: ReadonlySet<string>;
+    busy: boolean;
+    /** 上传进度（宿主按批上报）——附件大时这一行就是"慢 ≠ 死"的唯一判据。 */
+    progress: HostUploadProgress | null;
+    /** 对话框内的失败提示（展开失败等）；渲染在底部，用户点完立刻能看到。 */
+    notice: string | null;
+    onToggleFiles: (relPaths: string[], next: boolean) => void;
+    onToggleExpand: (categoryId: string) => void;
+    /** 正在重取计划的分类（展开配额截断的那部分时）。 */
+    expandingCategory: string | null;
+    /** 二次确认展开某个分类（父级带上 `expand` 重取计划）。 */
+    onExpandTruncated: (categoryId: string) => void;
+    onRemember: (next: boolean) => void;
+    /**
+     * 这是**首次发布**吗（该方向在网络上还没有项目）。
+     *
+     * 只有首次发布才显示挂牌价：价格是"立项时定的价"，之后不该在【更新】里被顺手改掉
+     * （2026-11 用户要求）。更新时**整行不渲染**，`work/publish` 也就不带 `askingFee`
+     * —— 宿主那一侧"不传 = 不动价"，网络上的价保持不变。
+     */
+    firstPublish: boolean;
+    /** 挂牌价（只对导师出题 `SEEK_STUDENT` 有意义）。 */
+    priceMode: 'preset' | 'custom';
+    priceTokens: number | null;
+    priceText: string;
+    onSelectPricePreset: (tokens: number) => void;
+    onSelectPriceCustom: () => void;
+    onPriceText: (next: string) => void;
+    onCancel: () => void;
+    onConfirm: () => void;
+}): JSX.Element;
+/**
+ * 展开配额截断后**新出现**、且值得勾上的文件（相对展开前的清单）。
+ *
+ * 为什么由这个纯函数算：两个对话框（发布 / 回传）都要"把用户确认展开的那批纳入勾选"，
+ * 各写一遍迟早分叉；而且"哪些算新"必须看得见 —— 是**相对旧清单**的差集，不是
+ * "现在所有文件"，否则用户已经手动取消的勾会被重新勾上。
+ *
+ * 排除三类：机器产物分类（`excluded`，界面本来就不显示）、目录占位项（`relPath` 以 `/` 结尾）、
+ * 超过单文件上限的（勾了也传不上去，见 `oversizeWarning`）。
+ */
+export declare function newlyListedFiles(categories: HostUploadPlan['plan']['categories'], before: ReadonlySet<string>, maxFileBytes: number): string[];
 /**
  * 接受指导的**确认对话框**。
  *

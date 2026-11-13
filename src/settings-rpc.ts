@@ -957,6 +957,18 @@ function asInt(v: unknown): number {
   return typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : 0
 }
 
+/**
+ * 归一"已二次确认展开的分类"（`buildUploadPlan` 的 `expand`）。
+ *
+ * 只当字符串数组收：界面递来的分类 id 是扫描器自己产生的（`experiments` 之类），
+ * 未知值只会让扫描器什么都不展开 —— 不需要在这里校验白名单。多余的类型直接丢掉，
+ * 不把奇怪的值递给扫描器。
+ */
+function asCategoryIds(v: unknown): string[] {
+  if (!Array.isArray(v)) return []
+  return v.filter((x): x is string => typeof x === 'string' && x.length > 0)
+}
+
 /** 普通对象读取（非对象 → null，不抛）。 */
 function asRecordLike(v: unknown): Record<string, unknown> | null {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -2401,7 +2413,8 @@ export function createSettingsRpcHandler(
           const listed = await collectLocalWorks()
           const source = listed.sources.get(id)
           if (!source) return fail('not-found', '找不到这个本机研究项目（或其研究状态读不出来）。')
-          const plan: UploadPlan = buildUploadPlan(source.root)
+          // `expand` = 用户在对话框里**二次确认**展开的分类（见 upload-selection 的 UploadPlanOptions）
+          const plan: UploadPlan = buildUploadPlan(source.root, 'publish', { expand: asCategoryIds(p.expand) })
           /*
            * 对话框头部显示**要发布到网络的那个名字**（这项研究工作自己的名字），
            * 而不是本机工作区名 —— 用户点的是【寻找指导/寻找学生】，他看到的名字
@@ -2684,7 +2697,9 @@ export function createSettingsRpcHandler(
               )
             }
             // ── 附件：状态传完再传（服务器要求 state_version 存在）──────────
-            const plan = buildUploadPlan(source.root)
+            // 与 `work/uploadPlan` 同口径：展开过的分类必须一起放开，否则用户刚确认纳入的文件
+            // 会被这里重算的白名单挡掉（白名单只用于默认选择，显式 selection 不受它过滤）。
+            const plan = buildUploadPlan(source.root, 'publish', { expand: asCategoryIds(p.expand) })
             const recommendedFiles = plan.categories
               .filter((c) => c.decision === 'recommended')
               .flatMap((c) => c.files.filter((f) => !f.relPath.endsWith('/')).map((f) => f.relPath))
@@ -3211,7 +3226,7 @@ export function createSettingsRpcHandler(
             )
           }
           try {
-            const plan: UploadPlan = buildUploadPlan(root, 'mentor')
+            const plan: UploadPlan = buildUploadPlan(root, 'mentor', { expand: asCategoryIds(p.expand) })
             return {
               ok: true,
               value: { workspaceId, title: target.title, path: canonical, root, plan },
@@ -3262,7 +3277,8 @@ export function createSettingsRpcHandler(
 
           try {
             // 白名单 = 扫描得到的**可选**文件（recommended / optional 两级；机器产物不收）
-            const plan = buildUploadPlan(root, 'mentor')
+            // 展开过的分类必须一起放开：否则用户二次确认纳入的文件会被白名单挡掉。
+            const plan = buildUploadPlan(root, 'mentor', { expand: asCategoryIds(p.expand) })
             const allowed = new Set(
               plan.categories
                 .filter((c) => c.decision !== 'excluded')

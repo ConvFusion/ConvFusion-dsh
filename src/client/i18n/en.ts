@@ -133,6 +133,14 @@ export const en = {
   'upload.reason.literature-fulltext': 'Other people’s papers: not uploaded by default; select individually if needed',
   'upload.reason.large-files': 'Single files ≥10 MB: not uploaded by default; select if genuinely useful',
   'upload.reason.others': 'Unclassified files: not uploaded by default',
+  // Quota truncation (big directories such as `experiments/` list only the first 5000).
+  // The count AND the size are reported: expanding really does add them to the upload.
+  'upload.truncated.hint': '{files} more files not listed ({size})',
+  'upload.truncated.hintNoSize': '{files} more files not listed',
+  'upload.truncated.expand': 'Show them',
+  'upload.truncated.confirm': 'List these {files} files ({size}) and include them in the upload?',
+  'upload.truncated.confirmNoSize': 'List these {files} files and include them in the upload?',
+  'upload.truncated.confirmYes': 'Include them',
   'community.action.seekMentor': 'Find an online mentor',
   // ── Topic mode (v0.6.0): the publish entry collapses to ONE button per role ──
   // researcher → "Find an online mentor"; mentor → "Find top students" (+ the other

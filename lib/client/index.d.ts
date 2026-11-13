@@ -40,6 +40,11 @@ export { CommunityTab, DownloadDialog } from './settings.js';
  */
 export { AcceptConfirmDialog, TokenDialog } from './settings.js';
 /**
+ * 发布确认对话框：同样**无 hook**（状态都在 `CommunityTab` 里），导出给离线自检渲染 ——
+ * "【更新】时不出现挂牌价、首次发布才出现"这条只有遍历产出的树才算数。
+ */
+export { PublishDialog } from './settings.js';
+/**
  * 上传清单的**目录树**：纯逻辑 + 纯渲染，导出给离线自检（`verify-settings-page.mjs`
  * 直接构建树、并渲染第一层/展开后的行 —— "目录整枝勾选"这条交互只有遍历产出的树才算数）。
  */
@@ -55,6 +60,15 @@ export { PriceGuideRow, askingFeeText } from './settings.js';
 export { defaultPriceOf, priceOptionsOf, normalizePrice, validatePrice, formatTokenYuan } from './price-guide.js';
 export { canDownloadProposal, downloadSideCount } from './settings.js';
 export { CategoryFileTreeView } from './settings.js';
+/**
+ * 「展开配额截断后哪些文件是新出现的」：两个对话框（发布 / 回传）共用同一份判据，
+ * 导出给离线自检跑真值表（差集算错就会把用户手动取消的勾重新勾上）。
+ */
+export { newlyListedFiles } from './settings.js';
+/**
+ * 「谁在弹窗里」（`./modal-state.js`）：导出给离线自检断言"弹窗开着时轮询/重注册跳过"。
+ */
+export { enterModal, exitModal, isOtherModalOpen, openModalIds } from './modal-state.js';
 export { buildUploadTree, folderState, nodeFilePaths, treeFilePaths } from './upload-tree.js';
 export { readProgressValue, shortenPath };
 /** 顶部品牌入口（本体单独导出：离线验证直接渲染它，不必穿透整页容器）。 */

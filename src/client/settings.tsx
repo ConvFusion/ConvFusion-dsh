@@ -39,6 +39,8 @@
  * 路由带 Harness 的信任/鉴权栅栏，等价于 RPC 渠道的安全级别。
  */
 
+import { enterModal, exitModal, isOtherModalOpen } from './modal-state.js'
+import { ModalBoundary } from './modal-boundary.js'
 import React from 'react'
 import { ConvFusionMark } from './icon.js'
 import { Markdown } from './markdown-view.js'
@@ -2005,6 +2007,12 @@ interface HostUploadPlan {
       excludedFiles: number
     }
     limits: { maxFileBytes: number; maxFilesPerRequest: number; maxRequestBytes: number }
+    /**
+     * 因**单分类配额**（5000）未列出的文件：个数 + 体积。
+     *
+     * `bytes` 在旧宿主上缺失（协议 32 及以前只报个数）→ 界面按 0 显示，不编。
+     */
+    truncated?: Array<{ categoryId: string; files: number; bytes?: number }>
     defaultSelection: string[]
     oversize: Array<{ relPath: string; size: number }>
     requestCount: number
@@ -2189,9 +2197,13 @@ function PublishButton({
   // 点空白处收起下拉（否则它只能靠再点一次箭头关掉）
   React.useEffect(() => {
     if (!open) return
+    enterModal('republish')
     const close = (): void => setOpen(false)
     document.addEventListener('pointerdown', close)
-    return () => document.removeEventListener('pointerdown', close)
+    return () => {
+      exitModal('republish')
+      document.removeEventListener('pointerdown', close)
+    }
   }, [open])
 
   /** 主按钮：单独用时就是整宽；带下拉时占满固定宽度减去箭头那一小段。 */
@@ -2854,14 +2866,21 @@ function UploadCategoryList({
   maxFileBytes,
   selection,
   expanded,
+  truncated,
+  expandingCategory,
   onToggleFiles,
   onToggleExpand,
+  onExpandTruncated,
 }: {
   t: Translate
   categories: HostUploadPlan['plan']['categories']
   maxFileBytes: number
   selection: ReadonlySet<string>
   expanded: ReadonlySet<string>
+  /** 因分类配额未列出的文件（宿主 `plan.truncated`）；空/缺省 = 没有截断。 */
+  truncated?: HostUploadPlan['plan']['truncated']
+  /** 正在重取计划的分类（`mentor`/`publish` 两条路共用一个提示位）。 */
+  expandingCategory?: string | null
   /**
    * 勾选**一组**文件（分类整选、目录整枝切换共用）。
    *
@@ -2871,6 +2890,11 @@ function UploadCategoryList({
    */
   onToggleFiles: (relPaths: string[], next: boolean) => void
   onToggleExpand: (categoryId: string) => void
+  /**
+   * 二次确认后展开某个分类（父级带上 `expand` 重取一次计划，把未列出的文件纳入清单与勾选）。
+   * 缺省 = 只提示、不给展开入口（例如旧宿主，递了也不认）。
+   */
+  onExpandTruncated?: (categoryId: string) => void
 }): JSX.Element {
   const visible = categories.filter((c) => c.decision !== 'excluded' && c.files.length > 0)
   return (
@@ -2880,6 +2904,9 @@ function UploadCategoryList({
         const all = files.every((f) => selection.has(f.relPath))
         const some = !all && files.some((f) => selection.has(f.relPath))
         const isOpen = expanded.has(cat.id)
+        /** 这个分类还有多少文件因配额没进清单（`undefined` = 没有）。 */
+        const cut = truncated?.find((x) => x.categoryId === cat.id)
+        const expanding = expandingCategory === cat.id
         return (
           <div
             key={cat.id}
@@ -2903,6 +2930,15 @@ function UploadCategoryList({
                   </span>
                 </div>
                 <div style={S.hint}>{t(`upload.reason.${cat.id}`)}</div>
+                {cut ? (
+                  <TruncatedHint
+                    t={t}
+                    files={cut.files}
+                    bytes={cut.bytes ?? 0}
+                    expanding={expanding}
+                    {...(onExpandTruncated ? { onExpand: () => onExpandTruncated(cat.id) } : {})}
+                  />
+                ) : null}
               </div>
               <button type="button" style={S.linkBtn} onClick={() => onToggleExpand(cat.id)}>
                 {isOpen ? t('community.publish.collapse') : t('community.publish.expand')}
@@ -2923,6 +2959,86 @@ function UploadCategoryList({
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * 一个分类里**因配额没列出来**的那部分（"还有 N 个文件未列出" + 二次确认）。
+ *
+ * ## 为什么要有它
+ *
+ * 宿主按分类留一格配额（`PER_CATEGORY_MAX_FILES` = 5000）：`experiments/` 一个目录就能有
+ * 四五万个结果文件，按旧写法吃完配额后**既不列也不说** —— 用户 2026-11 的原话是
+ * "上传目录不全"：界面上少了文件，和"扫不到"看起来一模一样。
+ *
+ * ## 为什么展开要二次确认
+ *
+ * "展开"不是把已有的行铺开，而是让宿主**重新扫一遍**、把那几万个文件真的列出来并勾上
+ * （点了就等于把它们纳入上传）。四五万个文件、几个 GB 是个**真实代价**，所以先把
+ * 个数与体积说清楚（`bytes` 由宿主扫的时候顺手统计），用户确认了才做。
+ *
+ * 状态在本组件里（`confirming`）而不是提到 `CommunityTab`：它只活到用户点完为止，
+ * 提上去会让 `dialog` / `uploadPlan` 那些状态再多两个可正交组合的字段。
+ */
+function TruncatedHint({
+  t,
+  files,
+  bytes,
+  expanding,
+  onExpand,
+}: {
+  t: Translate
+  /** 未列出的文件数。 */
+  files: number
+  /** 未列出文件的体积（旧宿主不报 → 0，此时只说个数，不编体积）。 */
+  bytes: number
+  /** 正在重取计划（按钮变成"读取中"）。 */
+  expanding: boolean
+  /** 二次确认后回调；缺省 = 只提示、不给展开入口（旧宿主不认 `expand`）。 */
+  onExpand?: (() => void) | undefined
+}): JSX.Element {
+  const [confirming, setConfirming] = React.useState(false)
+  const size = formatBytes(bytes)
+  if (confirming && onExpand) {
+    return (
+      <div style={{ ...S.inlineRow, gap: 6 }}>
+        <span style={{ ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' }}>
+          {bytes > 0
+            ? t('upload.truncated.confirm', { files, size })
+            : t('upload.truncated.confirmNoSize', { files })}
+        </span>
+        <button
+          type="button"
+          style={S.linkBtn}
+          onClick={() => {
+            setConfirming(false)
+            onExpand()
+          }}
+        >
+          {t('upload.truncated.confirmYes')}
+        </button>
+        <button type="button" style={S.linkBtn} onClick={() => setConfirming(false)}>
+          {t('community.action.cancel')}
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div style={{ ...S.hint, color: 'var(--dsw-alias-state-warn-primary)' }}>
+      {bytes > 0
+        ? t('upload.truncated.hint', { files, size })
+        : t('upload.truncated.hintNoSize', { files })}
+      {onExpand ? (
+        <button
+          type="button"
+          style={{ ...S.linkBtn, marginLeft: 6 }}
+          disabled={expanding}
+          onClick={() => setConfirming(true)}
+        >
+          {expanding ? t('community.action.loading') : t('upload.truncated.expand')}
+        </button>
+      ) : null}
     </div>
   )
 }
@@ -3271,7 +3387,7 @@ export function PriceGuideRow({
   )
 }
 
-function PublishDialog({
+export function PublishDialog({
   t,
   data,
   selection,
@@ -3279,12 +3395,17 @@ function PublishDialog({
   expanded,
   busy,
   progress,
+  /** 对话框内的失败提示（`null` = 没有）：展开重取计划失败时不能只写到列表页去。 */
+  notice,
   onToggleFiles,
   onToggleExpand,
+  expandingCategory,
+  onExpandTruncated,
   onRemember,
   priceMode,
   priceTokens,
   priceText,
+  firstPublish,
   onSelectPricePreset,
   onSelectPriceCustom,
   onPriceText,
@@ -3299,9 +3420,23 @@ function PublishDialog({
   busy: boolean
   /** 上传进度（宿主按批上报）——附件大时这一行就是"慢 ≠ 死"的唯一判据。 */
   progress: HostUploadProgress | null
+  /** 对话框内的失败提示（展开失败等）；渲染在底部，用户点完立刻能看到。 */
+  notice: string | null
   onToggleFiles: (relPaths: string[], next: boolean) => void
   onToggleExpand: (categoryId: string) => void
+  /** 正在重取计划的分类（展开配额截断的那部分时）。 */
+  expandingCategory: string | null
+  /** 二次确认展开某个分类（父级带上 `expand` 重取计划）。 */
+  onExpandTruncated: (categoryId: string) => void
   onRemember: (next: boolean) => void
+  /**
+   * 这是**首次发布**吗（该方向在网络上还没有项目）。
+   *
+   * 只有首次发布才显示挂牌价：价格是"立项时定的价"，之后不该在【更新】里被顺手改掉
+   * （2026-11 用户要求）。更新时**整行不渲染**，`work/publish` 也就不带 `askingFee`
+   * —— 宿主那一侧"不传 = 不动价"，网络上的价保持不变。
+   */
+  firstPublish: boolean
   /** 挂牌价（只对导师出题 `SEEK_STUDENT` 有意义）。 */
   priceMode: 'preset' | 'custom'
   priceTokens: number | null
@@ -3336,7 +3471,7 @@ function PublishDialog({
    *     不该因为"价格参考挂了"就把导师的发布整个堵死。
    */
   const priceInvalid =
-    data.priceGuide !== null && validatePrice(priceTokens, data.priceGuide) !== null
+    firstPublish && data.priceGuide !== null && validatePrice(priceTokens, data.priceGuide) !== null
   const oversizeSelected = selectable.filter(
     (f) => selection.has(f.relPath) && f.size > data.plan.limits.maxFileBytes,
   )
@@ -3401,24 +3536,31 @@ function PublishDialog({
           </div>
 
           {/*
-            **挂牌价**（`asking_fee`）—— **两个方向都有**，措辞不同（服务器同一个字段两种含义）：
+            **挂牌价**（`asking_fee`）—— **只在首次发布时出现**，两个方向都有，措辞不同
+            （服务器同一个字段两种含义）：
             · 导师出题（`SEEK_STUDENT`）→ 导师的**开价**；
             · 学生发题（`SEEK_MENTOR`）→ 学生的**预算 / 出价**。
             两者都只是**挂牌信息**，不是成交价：成交价写在提案的 `total_fee` 上，
             所以"导师开 800、学生出 500、导师接受 500"依然成立（双方在提案里议价）。
+
+            ⚠️ 【更新研究工作】不显示这一行（2026-11 用户要求）：价格是立项时定的，
+            更新只更新内容。行不渲染 ⇒ 确认时也不会把 `askingFee` 发出去
+            （宿主"不传 = 不动价"），网络上的价格因此保持不变。
           */}
-          <PriceGuideRow
-            t={t}
-            direction={data.direction}
-            guide={data.priceGuide}
-            options={priceOptionsOf(data.priceGuide)}
-            mode={priceMode}
-            tokens={priceTokens}
-            text={priceText}
-            onSelectPreset={onSelectPricePreset}
-            onSelectCustom={onSelectPriceCustom}
-            onText={onPriceText}
-          />
+          {firstPublish ? (
+            <PriceGuideRow
+              t={t}
+              direction={data.direction}
+              guide={data.priceGuide}
+              options={priceOptionsOf(data.priceGuide)}
+              mode={priceMode}
+              tokens={priceTokens}
+              text={priceText}
+              onSelectPreset={onSelectPricePreset}
+              onSelectCustom={onSelectPriceCustom}
+              onText={onPriceText}
+            />
+          ) : null}
 
           <UploadCategoryList
             t={t}
@@ -3426,13 +3568,22 @@ function PublishDialog({
             maxFileBytes={data.plan.limits.maxFileBytes}
             selection={selection}
             expanded={expanded}
+            truncated={data.plan.truncated}
+            expandingCategory={expandingCategory}
             onToggleFiles={onToggleFiles}
-                        onToggleExpand={onToggleExpand}
+            onToggleExpand={onToggleExpand}
+            onExpandTruncated={onExpandTruncated}
           />
 
           {oversizeSelected.length > 0 ? (
             <div style={{ fontSize: 11.5, color: 'var(--dsw-alias-state-warn-primary)', lineHeight: 1.6 }}>
               {t('community.publish.oversizeWarning', { count: oversizeSelected.length })}
+            </div>
+          ) : null}
+
+          {notice ? (
+            <div style={{ fontSize: 11.5, color: 'var(--dsw-alias-state-error-primary)', lineHeight: 1.6 }}>
+              {notice}
             </div>
           ) : null}
 
@@ -3468,6 +3619,34 @@ function PublishDialog({
       </div>
     </div>
   )
+}
+
+/**
+ * 展开配额截断后**新出现**、且值得勾上的文件（相对展开前的清单）。
+ *
+ * 为什么由这个纯函数算：两个对话框（发布 / 回传）都要"把用户确认展开的那批纳入勾选"，
+ * 各写一遍迟早分叉；而且"哪些算新"必须看得见 —— 是**相对旧清单**的差集，不是
+ * "现在所有文件"，否则用户已经手动取消的勾会被重新勾上。
+ *
+ * 排除三类：机器产物分类（`excluded`，界面本来就不显示）、目录占位项（`relPath` 以 `/` 结尾）、
+ * 超过单文件上限的（勾了也传不上去，见 `oversizeWarning`）。
+ */
+export function newlyListedFiles(
+  categories: HostUploadPlan['plan']['categories'],
+  before: ReadonlySet<string>,
+  maxFileBytes: number,
+): string[] {
+  const out: string[] = []
+  for (const cat of categories) {
+    if (cat.decision === 'excluded') continue
+    for (const f of cat.files) {
+      if (f.relPath.endsWith('/')) continue
+      if (before.has(f.relPath)) continue
+      if (f.size > maxFileBytes) continue
+      out.push(f.relPath)
+    }
+  }
+  return out
 }
 
 /**
@@ -4889,9 +5068,11 @@ function UploadDialog({
   busy,
   progress,
   notice,
+  expandingCategory,
   onSelectWorkspace,
   onToggleFiles,
   onToggleExpand,
+  onExpandTruncated,
   onUpload,
   onClose,
 }: {
@@ -4910,9 +5091,13 @@ function UploadDialog({
   busy: boolean
   progress: HostUploadProgress | null
   notice: { tone: 'success' | 'error'; text: string } | null
+  /** 正在重取计划的分类（展开配额截断的那部分时）。 */
+  expandingCategory: string | null
   onSelectWorkspace: (id: string) => void
   onToggleFiles: (relPaths: string[], next: boolean) => void
   onToggleExpand: (categoryId: string) => void
+  /** 二次确认展开某个分类（父级带上 `expand` 重取计划）。 */
+  onExpandTruncated: (categoryId: string) => void
   onUpload: () => void
   onClose: () => void
 }): JSX.Element {
@@ -5002,8 +5187,11 @@ function UploadDialog({
               maxFileBytes={plan.plan.limits.maxFileBytes}
               selection={selection}
               expanded={expanded}
+              truncated={plan.plan.truncated}
+              expandingCategory={expandingCategory}
               onToggleFiles={onToggleFiles}
-                            onToggleExpand={onToggleExpand}
+              onToggleExpand={onToggleExpand}
+              onExpandTruncated={onExpandTruncated}
             />
           )}
           {/* 机器产物被剔掉了 —— 说一句，免得导师找不到 node_modules 里的东西以为漏了 */}
@@ -5373,7 +5561,25 @@ export function CommunityTab({
     priceMode: 'preset' | 'custom'
     priceTokens: number | null
     priceText: string
+    /**
+     * 该方向在网络上**还没有项目**（首次发布）。
+     *
+     * 决定挂不挂那行挂牌价：首次发布要定价，【更新】只更新内容 —— 价格不该在更新里
+     * 被顺手改掉（2026-11 用户要求）。
+     */
+    firstPublish: boolean
+    /**
+     * 用户**二次确认**展开过的分类（宿主 `plan.truncated` 里那些）。
+     *
+     * 必须留着：重取一次计划只多列一个分类，用户再展开第二个时要把前面的一起带上，
+     * 否则宿主按新请求重扫，先前那批又回到"未列出"。
+     */
+    truncatedExpanded: string[]
   } | null>(null)
+  /** 正在重取上传计划的那个分类（展开配额截断的那部分时；其余按钮照常可用）。 */
+  const [truncatedBusy, setTruncatedBusy] = React.useState<string | null>(null)
+  /** 对话框里的失败提示（目前只有"展开失败"）：写在对话框里，不写到背后的列表页去。 */
+  const [dialogNotice, setDialogNotice] = React.useState<string | null>(null)
   /** 正在取上传计划的那一项（同样带方向：只有被点的那一个按钮该显示「读取中…」）。 */
   const [dialogLoading, setDialogLoading] = React.useState<
     { id: string; direction: HostProjectDirection } | null
@@ -5582,6 +5788,10 @@ export function CommunityTab({
   const [uploadSelected, setUploadSelected] = React.useState<Set<string>>(new Set())
   /** 展开的分类（清单可能很长，默认收起）。 */
   const [uploadExpanded, setUploadExpanded] = React.useState<Set<string>>(new Set())
+  /** 用户**二次确认**展开过的分类（突破宿主单分类配额；随每次重取计划一起递回去）。 */
+  const [uploadPlanExpanded, setUploadPlanExpanded] = React.useState<string[]>([])
+  /** 正在重取清单的那个分类（展开配额截断的那部分时）。 */
+  const [uploadTruncatedBusy, setUploadTruncatedBusy] = React.useState<string | null>(null)
   const [exchangeBusy, setExchangeBusy] = React.useState(false)
   const [exchangeNotice, setExchangeNotice] = React.useState<{ tone: 'success' | 'error'; text: string } | null>(null)
   /** 回传进度（宿主 `mentor/uploadProgress`；`null` = 未在跑）。 */
@@ -6023,6 +6233,8 @@ export function CommunityTab({
     setUploadPlan(null)
     setUploadSelected(new Set())
     setUploadExpanded(new Set())
+    // 换了工作区 = 换了一份清单：之前对别的目录做的"展开"确认不继承（配额要重新征得同意）
+    setUploadPlanExpanded([])
     setExchangeNotice(null)
     if (!id) return
     setUploadPlanLoading(true)
@@ -6035,6 +6247,42 @@ export function CommunityTab({
     const v = res.value as HostMentorUploadPlan
     setUploadPlan(v)
     setUploadSelected(new Set(v.plan.defaultSelection))
+  }
+
+  /**
+   * **二次确认后展开配额截断的分类**（回传对话框）——与发布那条同语义，见
+   * {@link expandPublishTruncated}。区别只有一个：这里还要把 `expand` 一起递给
+   * `mentor/upload`，否则宿主重扫出来的白名单不认这些文件（用户确认了却传不上去）。
+   */
+  const expandUploadTruncated = async (categoryId: string): Promise<void> => {
+    const workspaceId = uploadWorkspaceId
+    if (!workspaceId) return
+    const expand = [...new Set([...uploadPlanExpanded, categoryId])]
+    /** 展开**之前**清单里有哪些文件（"新出现"的判据，不是"现在有哪些"）。 */
+    const before = new Set(
+      (uploadPlan?.plan.categories ?? []).flatMap((c) => c.files.map((f) => f.relPath)),
+    )
+    setUploadTruncatedBusy(categoryId)
+    try {
+      const res = await post('mentor/uploadPlan', { workspaceId, expand })
+      if (!res.ok) {
+        setExchangeNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
+        return
+      }
+      const next = res.value as HostMentorUploadPlan
+      setUploadPlanExpanded(expand)
+      setUploadPlan(next)
+      setUploadExpanded((prev) => new Set([...prev, categoryId]))
+      setUploadSelected((prev) => {
+        const out = new Set(prev)
+        for (const rel of newlyListedFiles(next.plan.categories, before, next.plan.limits.maxFileBytes)) {
+          out.add(rel)
+        }
+        return out
+      })
+    } finally {
+      setUploadTruncatedBusy(null)
+    }
   }
 
   /*
@@ -6145,6 +6393,8 @@ export function CommunityTab({
         paths: Array.from(uploadSelected),
         // 增量比对**自己那一侧**（服务器按"谁写的"分两侧，同名互不覆盖）
         source: viewOf(target).mySide,
+        // 二次确认展开过的分类：宿主重扫白名单时要跟着放开，否则那批文件会被挡掉
+        ...(uploadPlanExpanded.length > 0 ? { expand: uploadPlanExpanded } : {}),
       })
     } finally {
       stopPoll()
@@ -6348,6 +6598,7 @@ export function CommunityTab({
       timer = undefined
     }
     timer = setInterval(() => {
+      if (isOtherModalOpen('download')) return
       void post('mentor/downloadProgress', { projectId }).then((p) => {
         if (!p.ok) return
         const got = (p.value as { received?: number } | undefined)?.received
@@ -6545,6 +6796,7 @@ export function CommunityTab({
   const openPublish = async (w: HostLocalWork, direction: HostProjectDirection): Promise<void> => {
     setDialogLoading({ id: w.id, direction })
     setPublishNotice(null)
+    setDialogNotice(null)
     const res = await post('work/uploadPlan', { id: w.id, direction })
     setDialogLoading(null)
     if (!res.ok) {
@@ -6579,7 +6831,60 @@ export function CommunityTab({
       priceMode: presetHitsTier ? 'preset' : 'custom',
       priceTokens: initialPrice,
       priceText: initialPrice === null ? '' : String(initialPrice),
+      // 该方向已发布过 → 这是【更新】：不显示挂牌价（也不发送它）
+      firstPublish: !publishedHere,
+      // 还没展开任何被配额截断的分类（用户在对话框里点了才加）
+      truncatedExpanded: [],
     })
+  }
+
+  /**
+   * **二次确认后展开配额截断的分类**（发布对话框）。
+   *
+   * 带上 `expand` 重问一次 `work/uploadPlan`（宿主多列一个分类），把返回的计划整体替换
+   * 对话框里那一份，并把**新出现**的文件加进勾选 —— 用户点那一下的语义就是"纳入上传"。
+   *
+   * ⚠️ 不要在这里重置 `selection`：用户可能已经手动取消过几个文件，重取计划不该把它们
+   * 又勾回来（所以只做并集，且只并"相对旧清单新出现"的那些）。
+   */
+  const expandPublishTruncated = async (categoryId: string): Promise<void> => {
+    const current = dialog
+    if (!current) return
+    const expand = [...new Set([...current.truncatedExpanded, categoryId])]
+    setTruncatedBusy(categoryId)
+    try {
+      const res = await post('work/uploadPlan', {
+        id: current.work.id,
+        direction: current.direction,
+        expand,
+      })
+      if (!res.ok) {
+        const staleHost = res.error?.code === 'unknown-endpoint'
+        setDialogNotice(
+          staleHost ? t('community.error.hostRestart') : (res.error?.message ?? t('community.error.publish')),
+        )
+        return
+      }
+      setDialogNotice(null)
+      const next = res.value as HostUploadPlan
+      setDialog((d) => {
+        if (!d) return d
+        const before = new Set(d.data.plan.categories.flatMap((c) => c.files.map((f) => f.relPath)))
+        const selection = new Set(d.selection)
+        for (const rel of newlyListedFiles(next.plan.categories, before, next.plan.limits.maxFileBytes)) {
+          selection.add(rel)
+        }
+        return {
+          ...d,
+          data: next,
+          selection,
+          truncatedExpanded: expand,
+          expanded: new Set([...d.expanded, categoryId]),
+        }
+      })
+    } finally {
+      setTruncatedBusy(null)
+    }
   }
 
   /** 真正执行发布（对话框确认后 / 无变化直接更新时）。 */
@@ -6596,6 +6901,13 @@ export function CommunityTab({
      * 是唯一安全的"不动它"）。
      */
     askingFee?: number,
+    /**
+     * 二次确认展开过的分类（见 {@link expandPublishTruncated}）。
+     *
+     * 只影响宿主重算计划时的**白名单与体积**：显式 `selection` 本来就照单收，所以漏传
+     * 不会丢文件 —— 但进度条的"总字节"会少算，慢与死在界面上就分不出来了。
+     */
+    expand: readonly string[] = [],
   ): Promise<void> => {
     setPublishing({ id: w.id, direction })
     setPublishNotice(null)
@@ -6613,6 +6925,7 @@ export function CommunityTab({
       publishTimer = undefined
     }
     publishTimer = setInterval(() => {
+        if (isOtherModalOpen('publish')) return
       void post('mentor/uploadProgress', { projectId: w.id }).then((p) => {
         if (!p.ok) return
         const v = p.value as HostUploadProgress | undefined
@@ -6627,6 +6940,7 @@ export function CommunityTab({
         selection,
         remember,
         ...(askingFee !== undefined ? { askingFee } : {}),
+        ...(expand.length > 0 ? { expand } : {}),
       })
     } finally {
       stopPublishPoll()
@@ -7662,73 +7976,82 @@ export function CommunityTab({
 
       {/* ══ 发布确认对话框（点「寻找指导」/「更新」时出现）═════════════════ */}
       {dialog ? (
-        <PublishDialog
-          t={t}
-          data={dialog.data}
-          selection={dialog.selection}
-          remember={dialog.remember}
-          expanded={dialog.expanded}
-          busy={publishing !== null}
-          progress={publishProgress}
-          onToggleFiles={(relPaths, next) =>
-            setDialog((d) => {
-              if (!d) return d
-              const sel = new Set(d.selection)
-              for (const f of relPaths) {
-                if (next) sel.add(f)
-                else sel.delete(f)
-              }
-              return { ...d, selection: sel }
-            })
-          }
-          onToggleExpand={(categoryId) =>
-            setDialog((d) => {
-              if (!d) return d
-              const ex = new Set(d.expanded)
-              if (ex.has(categoryId)) ex.delete(categoryId)
-              else ex.add(categoryId)
-              return { ...d, expanded: ex }
-            })
-          }
-          onRemember={(next) => setDialog((d) => (d ? { ...d, remember: next } : d))}
-          priceMode={dialog.priceMode}
-          priceTokens={dialog.priceTokens}
-          priceText={dialog.priceText}
-          onSelectPricePreset={(tokens) =>
-            setDialog((d) => (d ? { ...d, priceMode: 'preset', priceTokens: tokens } : d))
-          }
-          onSelectPriceCustom={() => setDialog((d) => (d ? { ...d, priceMode: 'custom' } : d))}
-          onPriceText={(next) =>
-            setDialog((d) => (d ? { ...d, priceText: next, priceTokens: normalizePrice(next) } : d))
-          }
-          onCancel={() => setDialog(null)}
-          onConfirm={() => {
-            if (!dialog) return
-            void doPublish(
-              dialog.work,
-              dialog.direction,
-              [...dialog.selection],
-              dialog.remember,
-              // 挂牌价（两个方向都送：导师=开价，学生=预算）；价格不合法时不传（按钮已禁用）
-              dialog.priceTokens !== null ? dialog.priceTokens : undefined,
-            )
-          }}
-        />
+        <ModalBoundary id="publish">
+          <PublishDialog
+            t={t}
+            data={dialog.data}
+            selection={dialog.selection}
+            remember={dialog.remember}
+            expanded={dialog.expanded}
+            busy={publishing !== null}
+            progress={publishProgress}
+            notice={dialogNotice}
+            onToggleFiles={(relPaths, next) =>
+              setDialog((d) => {
+                if (!d) return d
+                const sel = new Set(d.selection)
+                for (const f of relPaths) {
+                  if (next) sel.add(f)
+                  else sel.delete(f)
+                }
+                return { ...d, selection: sel }
+              })
+            }
+            onToggleExpand={(categoryId) =>
+              setDialog((d) => {
+                if (!d) return d
+                const ex = new Set(d.expanded)
+                if (ex.has(categoryId)) ex.delete(categoryId)
+                else ex.add(categoryId)
+                return { ...d, expanded: ex }
+              })
+            }
+            expandingCategory={truncatedBusy}
+            onExpandTruncated={(categoryId) => void expandPublishTruncated(categoryId)}
+            onRemember={(next) => setDialog((d) => (d ? { ...d, remember: next } : d))}
+            firstPublish={dialog.firstPublish}
+            priceMode={dialog.priceMode}
+            priceTokens={dialog.priceTokens}
+            priceText={dialog.priceText}
+            onSelectPricePreset={(tokens) =>
+              setDialog((d) => (d ? { ...d, priceMode: 'preset', priceTokens: tokens } : d))
+            }
+            onSelectPriceCustom={() => setDialog((d) => (d ? { ...d, priceMode: 'custom' } : d))}
+            onPriceText={(next) =>
+              setDialog((d) => (d ? { ...d, priceText: next, priceTokens: normalizePrice(next) } : d))
+            }
+            onCancel={() => setDialog(null)}
+            onConfirm={() => {
+              if (!dialog) return
+              void doPublish(
+                dialog.work,
+                dialog.direction,
+                [...dialog.selection],
+                dialog.remember,
+                // 挂牌价只在**首次发布**时送（更新 = 不动网络上的价）；价格不合法时不传（按钮已禁用）
+                dialog.firstPublish && dialog.priceTokens !== null ? dialog.priceTokens : undefined,
+                dialog.truncatedExpanded,
+              )
+            }}
+          />
+        </ModalBoundary>
       ) : null}
 
       {/* ══ 详情扣费确认（点【详情】时出现；确认前不发请求、不扣费）══════════ */}
       {briefConfirm ? (
-        <BriefConfirmDialog
-          t={t}
-          title={briefConfirm.title}
-          balance={state?.tokens?.available ?? null}
-          onCancel={() => setBriefConfirm(null)}
-          onConfirm={() => {
-            const target = briefConfirm
-            setBriefConfirm(null)
-            void toggleBrief(target)
-          }}
-        />
+        <ModalBoundary id="brief">
+          <BriefConfirmDialog
+            t={t}
+            title={briefConfirm.title}
+            balance={state?.tokens?.available ?? null}
+            onCancel={() => setBriefConfirm(null)}
+            onConfirm={() => {
+              const target = briefConfirm
+              setBriefConfirm(null)
+              void toggleBrief(target)
+            }}
+          />
+        </ModalBoundary>
       ) : null}
 
       {/*
@@ -7738,21 +8061,23 @@ export function CommunityTab({
         * 不用"我是什么角色"：同一个人可能两个角色都有。
         */}
       {proposeTarget ? (
-        <ProposeDialog
-          t={t}
-          title={proposeTarget.title}
-          fee={proposeFee}
-          feeLoading={proposeFeeLoading}
-          busy={proposeBusy}
-          error={proposeError}
-          variant={proposeTarget.direction === 'SEEK_STUDENT' ? 'researcher' : 'mentor'}
-          onCancel={() => {
-            setProposeTarget(null)
-            setProposeError(null)
-          }}
-          onTermsChange={(terms) => void requestProposeFee(terms)}
-          onSubmit={(input) => void submitPropose(input)}
-        />
+        <ModalBoundary id="propose">
+          <ProposeDialog
+            t={t}
+            title={proposeTarget.title}
+            fee={proposeFee}
+            feeLoading={proposeFeeLoading}
+            busy={proposeBusy}
+            error={proposeError}
+            variant={proposeTarget.direction === 'SEEK_STUDENT' ? 'researcher' : 'mentor'}
+            onCancel={() => {
+              setProposeTarget(null)
+              setProposeError(null)
+            }}
+            onTermsChange={(terms) => void requestProposeFee(terms)}
+            onSubmit={(input) => void submitPropose(input)}
+          />
+        </ModalBoundary>
       ) : null}
 
       {/*
@@ -7809,125 +8134,135 @@ export function CommunityTab({
 
       {/* ══ 【下载】到选定的 DSH 工作区 ══════════════════════════════════════ */}
       {download ? (
-        <DownloadDialog
-          t={t}
-          proposal={download.proposal}
-          fileName={download.fileName}
-          workspaces={download.workspaces}
-          workspacesAvailable={download.available}
-          workspacesReason={download.reason}
-          selection={download.selection}
-          files={download.files}
-          bytes={download.bytes}
-          busy={downloadBusy}
-          received={downloadReceived}
-          notice={download.notice}
-          targets={download.targets}
-          currentWorkspaceId={download.currentWorkspaceId}
-          done={download.done}
-          onSelect={(id) => setDownload((prev) => (prev ? { ...prev, selection: id } : prev))}
-          onDownload={() => void runDownload()}
-          onClose={() => setDownload(null)}
-          onFill={() => {
-            const prompt = download.done?.prompt
-            if (!prompt || !session?.setDraft) return
-            /*
-             * 走到这里说明输入框里**已经有内容**（空的话下载完就自动填好了）——
-             * 按钮旁边那句"会替换输入框里现有的内容"就是给这一步的确认。
-             * ⚠️ 只填，**不发送**（绝不调用 submit）。
-             */
-            session.setDraft(prompt)
-            setDownload((prev) =>
-              prev?.done ? { ...prev, done: { ...prev.done, filled: true } } : prev,
-            )
-            setMentorNotice({ tone: 'success', text: t('community.merge.filled') })
-          }}
-          onCopy={() => {
-            const prompt = download.done?.prompt
-            if (!prompt) return
-            void copyText(prompt).then((copied) => {
-              setMentorNotice({
-                tone: 'success',
-                text: copied ? t('community.merge.copied') : t('community.merge.copyFailed'),
+        <ModalBoundary id="download">
+          <DownloadDialog
+            t={t}
+            proposal={download.proposal}
+            fileName={download.fileName}
+            workspaces={download.workspaces}
+            workspacesAvailable={download.available}
+            workspacesReason={download.reason}
+            selection={download.selection}
+            files={download.files}
+            bytes={download.bytes}
+            busy={downloadBusy}
+            received={downloadReceived}
+            notice={download.notice}
+            targets={download.targets}
+            currentWorkspaceId={download.currentWorkspaceId}
+            done={download.done}
+            onSelect={(id) => setDownload((prev) => (prev ? { ...prev, selection: id } : prev))}
+            onDownload={() => void runDownload()}
+            onClose={() => setDownload(null)}
+            onFill={() => {
+              const prompt = download.done?.prompt
+              if (!prompt || !session?.setDraft) return
+              /*
+               * 走到这里说明输入框里**已经有内容**（空的话下载完就自动填好了）——
+               * 按钮旁边那句"会替换输入框里现有的内容"就是给这一步的确认。
+               * ⚠️ 只填，**不发送**（绝不调用 submit）。
+               */
+              session.setDraft(prompt)
+              setDownload((prev) =>
+                prev?.done ? { ...prev, done: { ...prev.done, filled: true } } : prev,
+              )
+              setMentorNotice({ tone: 'success', text: t('community.merge.filled') })
+            }}
+            onCopy={() => {
+              const prompt = download.done?.prompt
+              if (!prompt) return
+              void copyText(prompt).then((copied) => {
+                setMentorNotice({
+                  tone: 'success',
+                  text: copied ? t('community.merge.copied') : t('community.merge.copyFailed'),
+                })
               })
-            })
-          }}
-          onRefill={() => {
-            const corrected = download.done?.correctedPrompt
-            if (!corrected) return
-            /*
-             * 落盘的实际文件名与提示词里猜的不同 → 换成更正版。
-             * 这是**用户明确点的一下**（不是静默改），所以可以替换输入框。
-             */
-            if (download.done?.canFill && session?.setDraft) session.setDraft(corrected)
-            setDownload((prev) =>
-              prev?.done
-                ? {
-                    ...prev,
-                    done: {
-                      ...prev.done,
-                      prompt: corrected,
-                      correctedPrompt: null,
-                      filled: prev.done.filled || prev.done.canFill,
-                    },
-                  }
-                : prev,
-            )
-            setMentorNotice({ tone: 'success', text: t('community.merge.filled') })
-          }}
-        />
+            }}
+            onRefill={() => {
+              const corrected = download.done?.correctedPrompt
+              if (!corrected) return
+              /*
+               * 落盘的实际文件名与提示词里猜的不同 → 换成更正版。
+               * 这是**用户明确点的一下**（不是静默改），所以可以替换输入框。
+               */
+              if (download.done?.canFill && session?.setDraft) session.setDraft(corrected)
+              setDownload((prev) =>
+                prev?.done
+                  ? {
+                      ...prev,
+                      done: {
+                        ...prev.done,
+                        prompt: corrected,
+                        correctedPrompt: null,
+                        filled: prev.done.filled || prev.done.canFill,
+                      },
+                    }
+                  : prev,
+              )
+              setMentorNotice({ tone: 'success', text: t('community.merge.filled') })
+            }}
+          />
+        </ModalBoundary>
       ) : null}
 
       {/* ══ 文件交换：【上传】我这一份工作区 ════════════════════════════════ */}
       {exchange?.mode === 'upload' ? (
-        <UploadDialog
-          t={t}
-          proposal={exchange.proposal}
-          workspaces={uploadWorkspaces}
-          workspacesAvailable={uploadRegistry?.available ?? false}
-          workspacesReason={uploadRegistry?.reason ?? null}
-          workspaceId={uploadWorkspaceId}
-          currentWorkspaceId={uploadCurrentWorkspaceId}
-          plan={uploadPlan}
-          planLoading={uploadPlanLoading}
-          selection={uploadSelected}
-          expanded={uploadExpanded}
-          busy={exchangeBusy}
-          progress={uploadProgress}
-          notice={exchangeNotice}
-          onSelectWorkspace={(id) => void selectUploadWorkspace(id)}
-          onToggleFiles={toggleUploadFiles}
-          onToggleExpand={toggleUploadExpand}
-          onUpload={() => void runUpload()}
-          onClose={() => setExchange(null)}
-        />
+        <ModalBoundary id="upload">
+          <UploadDialog
+            t={t}
+            proposal={exchange.proposal}
+            workspaces={uploadWorkspaces}
+            workspacesAvailable={uploadRegistry?.available ?? false}
+            workspacesReason={uploadRegistry?.reason ?? null}
+            workspaceId={uploadWorkspaceId}
+            currentWorkspaceId={uploadCurrentWorkspaceId}
+            plan={uploadPlan}
+            planLoading={uploadPlanLoading}
+            selection={uploadSelected}
+            expanded={uploadExpanded}
+            busy={exchangeBusy}
+            progress={uploadProgress}
+            notice={exchangeNotice}
+            expandingCategory={uploadTruncatedBusy}
+            onSelectWorkspace={(id) => void selectUploadWorkspace(id)}
+            onToggleFiles={toggleUploadFiles}
+            onToggleExpand={toggleUploadExpand}
+            onExpandTruncated={(categoryId) => void expandUploadTruncated(categoryId)}
+            onUpload={() => void runUpload()}
+            onClose={() => setExchange(null)}
+          />
+        </ModalBoundary>
       ) : null}
 
       {/* ══ 对方信息（点【导师】/【学生】时出现；数据来自提案内嵌的 profile）════ */}
       {profileTarget ? (
-        <PartyProfileDialog
-          t={t}
-          party={profileTarget.party}
-          isMentor={profileTarget.view.counterpartyIsMentor}
-          status={profileTarget.proposal.status}
-          onClose={() => setProfileTarget(null)}
-        />
+        <ModalBoundary id="profile">
+          <PartyProfileDialog
+            t={t}
+            party={profileTarget.party}
+            isMentor={profileTarget.view.counterpartyIsMentor}
+            status={profileTarget.proposal.status}
+            onClose={() => setProfileTarget(null)}
+          />
+        </ModalBoundary>
       ) : null}
 
       {/* ══ 接受确认（点【接受】时出现；确认前不发请求、不冻结押金）═══════════ */}
       {acceptConfirm ? (
-        <AcceptConfirmDialog
-          t={t}
-          proposal={acceptConfirm}
-          party={viewOf(acceptConfirm).counterparty ?? { id: '', displayName: '' }}
-          partyIsMentor={viewOf(acceptConfirm).counterpartyIsMentor}
-          iPayer={viewOf(acceptConfirm).iAmPayer}
-          balance={state?.tokens?.available ?? null}
-          funded={state?.tokens?.funded ?? null}
-          grant={state?.tokens?.grant ?? null}
-          onCancel={() => setAcceptConfirm(null)}
-          onConfirm={() => void confirmAccept()}
-        />
+        <ModalBoundary id="accept">
+          <AcceptConfirmDialog
+            t={t}
+            proposal={acceptConfirm}
+            party={viewOf(acceptConfirm).counterparty ?? { id: '', displayName: '' }}
+            partyIsMentor={viewOf(acceptConfirm).counterpartyIsMentor}
+            iPayer={viewOf(acceptConfirm).iAmPayer}
+            balance={state?.tokens?.available ?? null}
+            funded={state?.tokens?.funded ?? null}
+            grant={state?.tokens?.grant ?? null}
+            onCancel={() => setAcceptConfirm(null)}
+            onConfirm={() => void confirmAccept()}
+          />
+        </ModalBoundary>
       ) : null}
 
       {/*
@@ -7937,25 +8272,27 @@ export function CommunityTab({
        * 管理员在服务器上批准之后，用户点一下就能看到余额变了、申请变成 APPROVED。
        */}
       {tokenDialog ? (
-        <TokenDialog
-          t={t}
-          tokens={state?.tokens ?? null}
-          requests={rechargeRequests}
-          loading={rechargeLoading || refreshingBalance}
-          amount={rechargeAmount}
-          reason={rechargeReason}
-          submitting={rechargeSubmitting}
-          error={rechargeError}
-          receipt={rechargeReceipt}
-          onAmount={setRechargeAmount}
-          onReason={setRechargeReason}
-          onApply={() => void applyRecharge()}
-          onRefresh={() => {
-            void refreshBalance()
-            void loadRechargeRequests()
-          }}
-          onClose={() => setTokenDialog(false)}
-        />
+        <ModalBoundary id="tokens">
+          <TokenDialog
+            t={t}
+            tokens={state?.tokens ?? null}
+            requests={rechargeRequests}
+            loading={rechargeLoading || refreshingBalance}
+            amount={rechargeAmount}
+            reason={rechargeReason}
+            submitting={rechargeSubmitting}
+            error={rechargeError}
+            receipt={rechargeReceipt}
+            onAmount={setRechargeAmount}
+            onReason={setRechargeReason}
+            onApply={() => void applyRecharge()}
+            onRefresh={() => {
+              void refreshBalance()
+              void loadRechargeRequests()
+            }}
+            onClose={() => setTokenDialog(false)}
+          />
+        </ModalBoundary>
       ) : null}
 
       {/*

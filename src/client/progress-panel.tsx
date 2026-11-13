@@ -26,6 +26,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react'
+import { isOtherModalOpen } from './modal-state.js'
 import { fetchSettingsSend } from './settings.js'
 import {
   maturityDimensionText,
@@ -396,9 +397,12 @@ export function ResearchProgressPanel({ sessionId, t }: PanelProps): JSX.Element
   // （切回 Harness 是最常见的"刚跑完一轮"时刻）。
   // 不订阅 chat 快照是为了不镜像更多 DSH 内部契约（契约一变就会静默失效）。
   useEffect(() => {
-    const timer = window.setInterval(() => void load(), PROGRESS_REFRESH_MS)
+    const timer = window.setInterval(() => {
+      // 弹窗开着时不重拉：setState 会让整个面板重渲染，把用户正在勾选的项清掉。
+      if (!isOtherModalOpen()) void load()
+    }, PROGRESS_REFRESH_MS)
     const onVisible = (): void => {
-      if (document.visibilityState === 'visible') void load()
+      if (document.visibilityState === 'visible' && !isOtherModalOpen()) void load()
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => {

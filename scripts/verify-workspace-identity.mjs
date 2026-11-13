@@ -429,8 +429,8 @@ const registryOf = (dirs) => async () => ({
   // 否则会以假红提醒你回来确认。
   assertEq(
     s1.value.protocol,
-    32,
-    '协议已升到 32（决策辅助开关；31 = 下载侧 counterpart；30 = 挂牌价；29 = retrieval/saveKey）',
+    33,
+    '协议已升到 33（配额截断的二次确认展开；32 = 决策辅助开关；31 = 下载侧 counterpart；30 = 挂牌价）',
   )
 
   // ② 同一项研究 → same，且**下载成功后**才写身份
@@ -651,8 +651,8 @@ section('[6] 静态边界：插件不拦、只填不发送、标记不进上传'
   // ⑥ 协议号与历史
   assertEq(
     PROTO.HOST_PROTOCOL,
-    32,
-    'HOST_PROTOCOL = 32（32 决策辅助开关 / 31 下载侧 counterpart / 30 挂牌价 / 29 retrieval/saveKey）',
+    33,
+    'HOST_PROTOCOL = 33（33 配额截断的二次确认展开 / 32 决策辅助开关 / 31 下载侧 counterpart / 30 挂牌价）',
   )
   assert(readFileSync(join(PKG, 'src', 'protocol.ts'), 'utf8').includes('**【下载】先校验目标工作区**'), 'protocol.ts 写了 23 的理由')
 }

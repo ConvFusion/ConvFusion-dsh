@@ -132,6 +132,12 @@ export declare const dictionaries: {
         'upload.reason.literature-fulltext': string;
         'upload.reason.large-files': string;
         'upload.reason.others': string;
+        'upload.truncated.hint': string;
+        'upload.truncated.hintNoSize': string;
+        'upload.truncated.expand': string;
+        'upload.truncated.confirm': string;
+        'upload.truncated.confirmNoSize': string;
+        'upload.truncated.confirmYes': string;
         'community.action.seekMentor': string;
         'community.action.seekStudent': string;
         'community.tip.morePublish': string;
@@ -818,6 +824,12 @@ export declare const dictionaries: {
         readonly 'upload.reason.literature-fulltext': "Other people’s papers: not uploaded by default; select individually if needed";
         readonly 'upload.reason.large-files': "Single files ≥10 MB: not uploaded by default; select if genuinely useful";
         readonly 'upload.reason.others': "Unclassified files: not uploaded by default";
+        readonly 'upload.truncated.hint': "{files} more files not listed ({size})";
+        readonly 'upload.truncated.hintNoSize': "{files} more files not listed";
+        readonly 'upload.truncated.expand': "Show them";
+        readonly 'upload.truncated.confirm': "List these {files} files ({size}) and include them in the upload?";
+        readonly 'upload.truncated.confirmNoSize': "List these {files} files and include them in the upload?";
+        readonly 'upload.truncated.confirmYes': "Include them";
         readonly 'community.action.seekMentor': "Find an online mentor";
         readonly 'community.action.seekStudent': "Find top students";
         readonly 'community.tip.morePublish': "More publishing options (the other direction)";

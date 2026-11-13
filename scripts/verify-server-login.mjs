@@ -2798,6 +2798,56 @@ section('[6f] 上传计划（哪些文件值得传）')
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+ * 6f2. 分类配额与"二次确认展开"（协议 33）
+ *
+ * 2026-11 的真实报障：`experiments/` 一个目录就四五万个结果文件，吃完单分类配额后
+ * **既不被列出来、也不告诉用户少了多少** —— 界面上"文件少了"和"扫描失败"一模一样。
+ * 修法有两半，这里各钉一条：
+ *   ① 未列出的部分**要记账**（个数 **和体积**，确认框要报代价）；
+ *   ② 用户二次确认（`expand`）之后，那些文件必须**真的进清单、进默认勾选**。
+ * ════════════════════════════════════════════════════════════════════════ */
+section('[6f2] 分类配额：未列出部分记账 + 二次确认展开')
+{
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const UP = await import(lib('research/upload-selection.js'))
+  const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-trunc-'))
+  const root = path.join(HOME, 'workspace')
+  const dir = path.join(root, 'experiments', 'runs')
+  fs.mkdirSync(dir, { recursive: true })
+  // 配额 + 3：多出来的三个就是"未列出"的那部分（各 10 字节，便于核对体积）
+  const extra = 3
+  const total = UP.PER_CATEGORY_MAX_FILES + extra
+  for (let i = 0; i < total; i++) {
+    fs.writeFileSync(path.join(dir, `run-${String(i).padStart(5, '0')}.json`), Buffer.alloc(10, 0x61))
+  }
+
+  const plan = UP.buildUploadPlan(root)
+  const cat = plan.categories.find((c) => c.id === 'experiments')
+  assertEq(cat?.files.length, UP.PER_CATEGORY_MAX_FILES, `单分类最多列 ${UP.PER_CATEGORY_MAX_FILES} 个（不把整本清单撑爆）`)
+  assertEq(plan.truncated.length, 1, '有一个分类被截断（其余分类不受影响）')
+  assertEq(plan.truncated[0].categoryId, 'experiments', '截断记在 experiments 名下（界面按分类提示）')
+  assertEq(plan.truncated[0].files, extra, '未列出的个数如实记账（不是 0，也不是"不知道"）')
+  assertEq(plan.truncated[0].bytes, extra * 10, '未列出的体积也记账（确认框要报代价，不能只说个数）')
+  assertEq(plan.defaultSelection.includes('experiments/runs/run-05002.json'), false, '被截掉的文件默认不在勾选里')
+
+  // 二次确认：带上 expand 重取一次 → 那批文件真的进清单、进默认勾选，且不再报截断
+  const wide = UP.buildUploadPlan(root, 'publish', { expand: ['experiments'] })
+  const wideCat = wide.categories.find((c) => c.id === 'experiments')
+  assertEq(wideCat?.files.length, total, '展开后这个分类列全了（配额不再是障碍）')
+  assertEq(wide.truncated.length, 0, '展开后不再有截断提示（否则用户会以为还有尾巴）')
+  assertEq(wide.defaultSelection.length, total, '展开出来的文件进入**默认勾选**（用户点的那一下就是"纳入上传"）')
+  assert(wide.defaultSelection.includes('experiments/runs/run-05002.json'), '最后一个（原先被截掉的）也在勾选里')
+
+  // 展开只影响点过的那一个分类：别的分类不会因此被放开
+  const other = UP.buildUploadPlan(root, 'publish', { expand: ['papers'] })
+  assertEq(other.truncated[0]?.files, extra, 'expand 里没有的分类照旧被配额限制（不会顺手全放开）')
+
+  fs.rmSync(HOME, { recursive: true, force: true })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
  * 6g. 发布对话框的数据 + 附件增量上传
  *
  * 覆盖：上传计划（推荐/可选/排除、记住的选择、用量与成本）、
@@ -2897,6 +2947,10 @@ section('[6g] 上传计划 + 附件增量上传')
     assert(plan.value.selection.includes('research/evidence/E001.md'), '默认勾选含研究资产')
     assertDeepSelection(plan.value.selection, 'research/literature/notes.md', true, '文献**笔记**默认上传（用户已拍板）')
     assertDeepSelection(plan.value.selection, 'research/literature/fulltext/001_paper.pdf', false, '文献**原文**默认不上传')
+    assert(Array.isArray(p.truncated), '计划带回 `truncated`（界面据此提示"还有 N 个未列出"）')
+    // 协议 33：`expand` 只认字符串数组，递怪值按"没展开"处理（不抛、不误展开）
+    const badExpand = await makeHost5(server)('work/uploadPlan', { id: 'ws-dialog', expand: 'nope' })
+    assert(badExpand.ok, 'expand 递非法值也不炸（当没展开处理）')
     assert(Array.isArray(plan.value.changed), '带上"与上次已上传相比的变化"')
     assertEq(plan.value.usage?.nextPublishCost, 1, '带上发布成本（来自 /usage）')
     assertEq(plan.value.usage?.storage.availableBytes, 1073740824, '带上存储余量（对话框要显示）')

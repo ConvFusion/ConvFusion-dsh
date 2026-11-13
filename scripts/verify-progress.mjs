@@ -1584,6 +1584,87 @@ console.log('\n[9c] 客户端：两个会话 Tab（研究进展 19 / 科V社区 
       assertEq(byId(fake, 'convfusion-progress'), before, '百分比没变 → 注册项不动（不抖 roster）')
     }
 
+    /* ── ⑤b 例行重判**不重建 tab 正文**（2026-11 "弹窗自己消失"的回归点）───
+     *
+     * 用户的原始报障：刷新页面 → 点【更新研究工作】→ 不操作 → 等几十秒 → 界面刷新一次、
+     * 弹窗消失。根因不在对话框，而在这个闸门：旧写法 `decide(force)` 一律**先 hide()**，
+     * 探针回来再 show() —— 于是每 60 秒就把 tab 正文卸载再挂载一次。
+     *
+     * 为什么"卸载再挂载"能确定：DSH 的 roster 按**每个 entry 对象**给 React key
+     * （`dsh-client-ui-renderer` 的 `entryKeyOf` 用 WeakMap 计数），`dispose()` + 重新
+     * `register()` 会造出新的 entry ⇒ 新 key ⇒ remount，正文里所有 state（对话框的
+     * `open`）全部丢掉。所以这里守住两条：① 答案没变 → 注册项一个都不动；
+     * ② 探针在飞的时候也**不先摘**。
+     */
+    {
+      const visibility = makeDoc()
+      globalThis.document = visibility.doc
+      const s = createSessions(['A'])
+      const fake = newCtx(s.service)
+      mod.apply(fake.ctx)
+      await tick()
+      answer = research(true, 0.62)
+      s.select('A')
+      await tick()
+      const first = byId(fake, 'convfusion-progress')
+      const firstCommunity = byId(fake, 'convfusion-community')
+      assertEq(fake.list().length, 2, '（前提）A 是研究工作区 → 两个 tab 在')
+
+      // ① 答案没变：整次重判结束后，注册项还是**同一个对象**
+      calls.length = 0
+      visibility.fireVisible()
+      await tick()
+      assertEq(calls.length, 1, '（前提）例行重判确实问了宿主一次')
+      assertEq(byId(fake, 'convfusion-progress'), first, '答案没变 → 注册项不动（tab 正文不重建）')
+      assertEq(byId(fake, 'convfusion-community'), firstCommunity, '另一个 tab 同理（同一批条目一起留）')
+
+      // ② 百分比变了：探针**在飞的时候**不许先摘（旧写法在这一步就卸载了正文）
+      answer = research(true, 0.71)
+      visibility.fireVisible()
+      assertEq(fake.list().length, 2, '探针未回来前仍在注册（不闪空、不卸载）')
+      await tick()
+      assert(byId(fake, 'convfusion-progress') !== first, '百分比变了 → 重注册一次（文案要跟）')
+      assert(byId(fake, 'convfusion-progress').options.label().includes('percent=71%'), '新文案生效')
+      assertEq(fake.list().length, 2, '重注册期间也始终是两个 tab')
+    }
+
+    /* ── ⑤c 弹窗开着 → 重判整体跳过（不为了一个百分比重建正文）──────────── */
+    {
+      const visibility = makeDoc()
+      globalThis.document = visibility.doc
+      const s = createSessions(['A'])
+      const fake = newCtx(s.service)
+      mod.apply(fake.ctx)
+      await tick()
+      answer = research(true, 0.62)
+      s.select('A')
+      await tick()
+      const before = byId(fake, 'convfusion-progress')
+
+      mod.enterModal('publish')
+      try {
+        assertEq(mod.isOtherModalOpen(), true, '（前提）弹窗登记生效')
+        calls.length = 0
+        answer = research(true, 0.93)
+        visibility.fireVisible()
+        await tick()
+        assertEq(calls.length, 0, '弹窗开着 → 窗口重新可见也不重判（不问宿主、不重注册）')
+        assertEq(byId(fake, 'convfusion-progress'), before, '弹窗开着 → 注册项不动（对话框不会被冲掉）')
+      } finally {
+        mod.exitModal('publish')
+      }
+
+      // 关窗之后不许"卡住"：下一次重判把文案补上
+      calls.length = 0
+      visibility.fireVisible()
+      await tick()
+      assertEq(calls.length, 1, '关窗后的下一次重判照常问宿主')
+      assert(
+        byId(fake, 'convfusion-progress').options.label().includes('percent=93%'),
+        '关窗后补上新百分比（推迟 ≠ 丢）',
+      )
+    }
+
     /* ── ⑥ 失败即隐藏：端点报错 / 协议过旧 都不注册 ─────────────────────── */
     {
       const s = createSessions(['A'])

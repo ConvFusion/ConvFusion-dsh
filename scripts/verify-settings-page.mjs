@@ -2891,7 +2891,8 @@ console.log('\n[13] 指导闭环：下载 / 上传')
   assert(!/extractZip|unzip|adm-zip/i.test(rpc), '宿主不解压（只存 ZIP，其余交给用户）')
   // 上传（v19）：清单来自扫描、与服务器 sha256 比对、分批 + 按体积估超时
   assert(/uploadWorkspaceFiles\(base, apiKey, projectId, payload/.test(rpc), '回传走 uploadWorkspaceFiles')
-  assert(/buildUploadPlan\(root, 'mentor'\)/.test(rpc), '清单来自扫描（mentor 口径）')
+  // 协议 33 起多一个可选的 `expand`（用户二次确认展开被配额截断的分类）
+  assert(/buildUploadPlan\(root, 'mentor'(, \{ expand[^)]*\)?)?\)/.test(rpc), '清单来自扫描（mentor 口径）')
   assert(/allowed\.has\(rel\)/.test(rpc), '只上传扫描得到的文件（界面不能递任意路径读盘）')
   assert(/case 'mentor\/uploadProgress':/.test(rpc), '有上传进度端点（界面按秒问，宿主本地读）')
   assert(/beginUploadProgress/.test(rpc), '宿主侧只留一个进度入口（发布与回传共用同一份记录）')
@@ -3525,7 +3526,7 @@ console.log('\n[11] 导师出题：挂牌价（价目来自服务器 + 自定义
       '价格行对**两个方向**都渲染（方向决定措辞）',
     )
     assert(
-      /post\('work\/publish', \{\s*id: w\.id,\s*direction,\s*selection,\s*remember,\s*\.\.\.\(askingFee !== undefined \? \{ askingFee \} : \{\}\),\s*\}\)/.test(src),
+      /post\('work\/publish', \{\s*id: w\.id,\s*direction,\s*selection,\s*remember,\s*\.\.\.\(askingFee !== undefined \? \{ askingFee \} : \{\}\),[\s\S]{0,120}?\}\)/.test(src),
       '发布时把 askingFee 送给宿主（没选价就不发）',
     )
     assert(
@@ -3538,8 +3539,8 @@ console.log('\n[11] 导师出题：挂牌价（价目来自服务器 + 自定义
     assert(/priceChanged/.test(rpcSrc), '复用项目时按需改价（PUT asking_fee）')
     const protoSrc = readFileSync(join(PKG, 'src', 'protocol.ts'), 'utf8')
     assert(
-      /export const HOST_PROTOCOL = 32/.test(protoSrc),
-      '协议升到 32（32 加决策辅助开关；31 下载侧 counterpart；30 加挂牌价）',
+      /export const HOST_PROTOCOL = 33/.test(protoSrc),
+      '协议升到 33（33 加"二次确认展开配额截断"；32 决策辅助开关；31 下载侧 counterpart；30 挂牌价）',
     )
   }
 }
@@ -3663,6 +3664,278 @@ console.log('\n[13] 下载 side：请求用 counterpart，水位键留在具体�
     /const sourceSide = sourceSideRaw === 'owner' \|\| sourceSideRaw === 'mentor' \? sourceSideRaw : null/.test(scSrc),
     '读 X-Source（实际交付侧），不把 counterpart 当水位键',
   )
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * [14] 配额截断：提示 + 二次确认展开（协议 33）
+ *
+ * 2026-11 报障的下半截：`experiments/` 四万多个文件被单分类配额截掉之后，对话框里
+ * **什么都不说**（"上传目录不全"）。这里钉三件事：
+ *   ① 宿主报的 `truncated` 真的被两个对话框传进清单组件（个数 + 体积）；
+ *   ② "展开后哪些文件算新"是一个**纯函数**，判据是"相对旧清单的差集"——
+ *      写成"现在所有文件"就会把用户手动取消的勾重新勾上；
+ *   ③ 弹窗登记：发布/下载的进度轮询用**自己的 id** 跳过自己，id 写错会让进度条消失
+ *      （发布进度停了，用户就看不到附件阶段在做什么）。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[14] 配额截断提示 + 二次确认展开')
+{
+  const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+  // ① 两个对话框都把宿主报的截断传下去
+  assertEq(
+    (src.match(/truncated=\{[a-z.]*plan\.truncated\}/g) ?? []).length,
+    2,
+    '发布 / 回传两个对话框都把 `plan.truncated` 传给清单组件（一处漏掉就是"文件不见了"）',
+  )
+  assert(/upload\.truncated\.hint/.test(src), '未列出的部分会**说出来**（还有 N 个文件）')
+  assert(/upload\.truncated\.confirm/.test(src), '展开前要二次确认（代价说在点之前）')
+  const zhDict2 = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
+  const enDict2 = readFileSync(join(PKG, 'src', 'client', 'i18n', 'en.ts'), 'utf8')
+  for (const key of [
+    'upload.truncated.hint',
+    'upload.truncated.hintNoSize',
+    'upload.truncated.expand',
+    'upload.truncated.confirm',
+    'upload.truncated.confirmNoSize',
+    'upload.truncated.confirmYes',
+  ]) {
+    assert(zhDict2.includes(`'${key}'`) && enDict2.includes(`'${key}'`), `中英文字典都有 ${key}`)
+  }
+  // ② 展开的判定是纯函数，导出给离线自检
+  let mod = null
+  try {
+    let captured = null
+    new Function('window', readFileSync(join(PKG, 'lib', 'client.js'), 'utf8'))({
+      __ModuleLoader__: { load: (m) => { captured = m } },
+    })
+    mod = captured.factory(createRequire(import.meta.url))
+  } catch (e) {
+    assert(false, `bundle 可在 node 求值：${e instanceof Error ? e.message : String(e)}`)
+  }
+  if (mod) {
+    const MAX = 100
+    const cats = [
+      {
+        id: 'experiments',
+        decision: 'recommended',
+        bytes: 3,
+        files: [
+          { relPath: 'experiments/a.json', size: 1 },
+          { relPath: 'experiments/b.json', size: 1 },
+          { relPath: 'experiments/c.json', size: 1 },
+        ],
+      },
+      {
+        id: 'models-data',
+        decision: 'excluded',
+        bytes: 1,
+        files: [{ relPath: 'experiments/w.bin', size: 1 }],
+      },
+      {
+        id: 'junk',
+        decision: 'recommended',
+        bytes: 0,
+        files: [{ relPath: 'node_modules/', size: 0 }],
+      },
+      {
+        id: 'huge',
+        decision: 'optional',
+        bytes: 500,
+        files: [{ relPath: 'experiments/huge.log', size: 500 }],
+      },
+    ]
+    const before = new Set(['experiments/a.json'])
+    assertEq(
+      mod.newlyListedFiles(cats, before, MAX),
+      ['experiments/b.json', 'experiments/c.json'],
+      '只算**相对旧清单新出现**的可勾文件（已见过的 a 不再算）',
+    )
+    assertEq(
+      mod.newlyListedFiles(cats, new Set(), MAX),
+      ['experiments/a.json', 'experiments/b.json', 'experiments/c.json'],
+      '空清单 → 全部可勾文件',
+    )
+    assert(
+      !mod.newlyListedFiles(cats, new Set(), MAX).includes('experiments/w.bin'),
+      '机器产物分类（excluded）不进勾选',
+    )
+    assert(
+      !mod.newlyListedFiles(cats, new Set(), MAX).some((r) => r.endsWith('/')),
+      '目录占位项不进勾选（勾了也没有文件可传）',
+    )
+    assert(
+      !mod.newlyListedFiles(cats, new Set(), MAX).includes('experiments/huge.log'),
+      '超单文件上限的不进勾选（勾了也传不上去）',
+    )
+  }
+
+  // ③ 弹窗登记：id 必须与轮询方问的那个 id 一致
+  const boundarySrc = readFileSync(join(PKG, 'src', 'client', 'modal-boundary.tsx'), 'utf8')
+  assert(/enterModal\(id\)/.test(boundarySrc) && /exitModal\(id\)/.test(boundarySrc), '弹窗登记在挂载/卸载时成对发生')
+  assertEq((src.match(/<ModalBoundary id="/g) ?? []).length, 8, '八个对话框都登记了（漏一个就还是会被重注册冲掉）')
+  assert(/<ModalBoundary id="publish">/.test(src), '发布对话框的 id = publish（发布进度轮询按这个 id 排除自己）')
+  assert(/<ModalBoundary id="download">/.test(src), '下载对话框的 id = download（下载进度轮询按这个 id 排除自己）')
+  assert(/isOtherModalOpen\('publish'\)/.test(src), '发布进度轮询确实在用 publish 这个 id')
+  assert(/isOtherModalOpen\('download'\)/.test(src), '下载进度轮询确实在用 download 这个 id')
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * [15] 挂牌价**只在首次发布时**出现（【更新研究工作】不显示、也不发送）
+ *
+ * 2026-11 用户要求：价格是**立项时**定的，【更新】只更新内容，不该顺手把价改掉。
+ * 这里把对话框**真的渲染一遍**（它无 hook，状态都在 `CommunityTab` 里）：
+ *   ① 首次发布 → 有「导师开价」那一行（含档位）；
+ *   ② 更新 → 整行不在树里，且**一个预填的旧价不能把【发布】按钮禁用**；
+ *   ③ 源码层面：确认时只在首次发布才把 `askingFee` 递给宿主（宿主：不传 = 不动价）。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[15] 挂牌价只在首次发布时出现')
+{
+  const ZH15 = (await import(join(PKG, 'src', 'client', 'i18n', 'zh.ts'))).zh
+  const t15 = (k, prm) => {
+    const tpl = ZH15[k] ?? k
+    return prm ? tpl.replace(/\{(\w+)\}/g, (m, n) => (n in prm ? String(prm[n]) : m)) : tpl
+  }
+  const GUIDE15 = {
+    minAllowed: 1,
+    recommendedMin: 500,
+    recommendedMax: 1000,
+    tokenValueFen: 1000,
+    tiers: [
+      { jcrLevel: 1, ccfLevel: 'A', label: 'JCR 1区 / CCF-A', tokens: 1000 },
+      { jcrLevel: 4, ccfLevel: 'C', label: 'JCR 4区 / CCF-C', tokens: 500 },
+    ],
+  }
+  const file = (relPath, size) => ({ relPath, size })
+  const plan15 = {
+    title: 'H-Mem+',
+    workspaceTitle: 'H-Mem+',
+    workNameSource: 'paper',
+    direction: 'SEEK_STUDENT',
+    changed: [],
+    unchangedCount: 3,
+    remembered: true,
+    selection: ['project.md'],
+    /** 上次挂的价：更新时它会被预填，但**不该**出现在界面上。 */
+    askingFee: 800,
+    priceGuide: GUIDE15,
+    usage: { nextPublishCost: 0, storage: { usedBytes: 10, capacityBytes: 100, availableBytes: 90 } },
+    plan: {
+      categories: [{ id: 'state', decision: 'recommended', files: [file('project.md', 10)], bytes: 10 }],
+      totals: { allBytes: 10, allFiles: 1, recommendedBytes: 10, recommendedFiles: 1, optionalBytes: 0, optionalFiles: 0, excludedBytes: 0, excludedFiles: 0 },
+      limits: { maxFileBytes: 100 * 1024 * 1024, maxFilesPerRequest: 20, maxRequestBytes: 200 * 1024 * 1024 },
+      truncated: [],
+      defaultSelection: ['project.md'],
+      oversize: [],
+      requestCount: 1,
+    },
+  }
+
+  let mod = null
+  try {
+    let captured = null
+    new Function('window', readFileSync(join(PKG, 'lib', 'client.js'), 'utf8'))({
+      __ModuleLoader__: { load: (m) => { captured = m } },
+    })
+    mod = captured.factory(createRequire(import.meta.url))
+  } catch (e) {
+    assert(false, `bundle 可在 node 求值：${e instanceof Error ? e.message : String(e)}`)
+  }
+
+  if (mod) {
+    assert(typeof mod.PublishDialog === 'function', '发布对话框被导出（离线自检要真的渲染它）')
+    const expand = (node) => {
+      if (node !== null && typeof node === 'object' && !Array.isArray(node) && typeof node.type === 'function') {
+        try {
+          return expand(node.type(node.props ?? {}))
+        } catch {
+          return node
+        }
+      }
+      return node
+    }
+    const collect = (node, pred, out = []) => {
+      const n0 = expand(node)
+      if (n0 === null || n0 === undefined || typeof n0 !== 'object') return out
+      if (Array.isArray(n0)) {
+        for (const x of n0) collect(x, pred, out)
+        return out
+      }
+      if (pred(n0)) out.push(n0)
+      const kids = n0.props?.children
+      if (Array.isArray(kids)) for (const k of kids) collect(k, pred, out)
+      else collect(kids, pred, out)
+      return out
+    }
+    const textOf = (node) => {
+      const n0 = expand(node)
+      if (n0 === null || n0 === undefined || typeof n0 === 'boolean') return ''
+      if (typeof n0 === 'string' || typeof n0 === 'number') return String(n0)
+      if (Array.isArray(n0)) return n0.map(textOf).join('')
+      return textOf(n0.props?.children)
+    }
+    const render = (over = {}) =>
+      mod.PublishDialog({
+        t: t15,
+        data: plan15,
+        selection: new Set(['project.md']),
+        remember: true,
+        expanded: new Set(),
+        busy: false,
+        progress: null,
+        notice: null,
+        firstPublish: false,
+        onToggleFiles: () => {},
+        onToggleExpand: () => {},
+        expandingCategory: null,
+        onExpandTruncated: () => {},
+        onRemember: () => {},
+        priceMode: 'preset',
+        priceTokens: 800,
+        priceText: '800',
+        onSelectPricePreset: () => {},
+        onSelectPriceCustom: () => {},
+        onPriceText: () => {},
+        onCancel: () => {},
+        onConfirm: () => {},
+        ...over,
+      })
+    const confirmBtn = (tree) => collect(tree, (n) => n.type === 'button' && textOf(n) === ZH15['community.publish.confirm'])[0]
+
+    // ① 首次发布：有挂牌价（导师侧措辞 = 导师开价）+ 档位
+    const first = render({ firstPublish: true })
+    const firstText = textOf(first)
+    assert(firstText.includes(ZH15['community.publish.priceMentor']), '首次发布显示「导师开价」')
+    assert(firstText.includes('JCR 4区 / CCF-C'), '首次发布能选档位（价目来自服务器）')
+    assert(firstText.includes('H-Mem+'), '（前提）对话框渲染了要发布的名字')
+
+    // ② 更新：整行不在树里
+    const update = render({ firstPublish: false })
+    const updateText = textOf(update)
+    assert(!updateText.includes(ZH15['community.publish.priceMentor']), '【更新】不显示「导师开价」')
+    assert(!updateText.includes(ZH15['community.publish.priceResearcher']), '【更新】也不显示「预算 / 出价」那一行')
+    assert(!updateText.includes('JCR 4区 / CCF-C'), '【更新】没有档位下拉（价不是这一版能改的）')
+    assert(
+      !collect(update, (n) => n.type === 'select').length,
+      '【更新】没有任何 select（价格是这里唯一的 select）',
+    )
+
+    // ③ 一个不合法/空的预填价，不能把【更新】的发布按钮禁用
+    const badPrice = render({ firstPublish: false, priceMode: 'custom', priceTokens: null, priceText: '0' })
+    assert(confirmBtn(badPrice)?.props?.disabled === false, '【更新】不受价格校验影响（按钮可用）')
+    const badFirst = render({ firstPublish: true, priceMode: 'custom', priceTokens: null, priceText: '0' })
+    assert(confirmBtn(badFirst)?.props?.disabled === true, '（对照）首次发布时非法价仍然禁用发布')
+
+    // ④ 源码契约：确认时只在首次发布送价；校验也只在首次发布生效
+    const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+    assert(
+      /dialog\.firstPublish && dialog\.priceTokens !== null \? dialog\.priceTokens : undefined/.test(src),
+      '只有首次发布才把 askingFee 送给宿主（更新 = 不传 = 宿主不动价）',
+    )
+    assert(
+      /const priceInvalid =\s*firstPublish && data\.priceGuide !== null/.test(src),
+      '价格校验只在首次发布时生效',
+    )
+    assert(/firstPublish: !publishedHere/.test(src), '「首次发布」由"该方向在网络上还没有项目"判定')
+  }
 }
 
 console.log(`\n${failed === 0 ? '✅' : '❌'} settings-page: ${passed} passed, ${failed} failed`)

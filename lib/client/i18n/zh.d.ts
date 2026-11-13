@@ -127,6 +127,12 @@ export declare const zh: {
     'upload.reason.literature-fulltext': string;
     'upload.reason.large-files': string;
     'upload.reason.others': string;
+    'upload.truncated.hint': string;
+    'upload.truncated.hintNoSize': string;
+    'upload.truncated.expand': string;
+    'upload.truncated.confirm': string;
+    'upload.truncated.confirmNoSize': string;
+    'upload.truncated.confirmYes': string;
     'community.action.seekMentor': string;
     'community.action.seekStudent': string;
     'community.tip.morePublish': string;
