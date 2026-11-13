@@ -282,6 +282,11 @@ export interface WorkBrief {
  * | `idempotency-reused` | 409 同 Key 不同 payload | 客户端 bug（同一意图才能复用 Key） |
  * | `proposal-state` | 409 提案已不在可接受状态 / 项目已有生效关系 | 刷新列表（别人已处理，或已过期） |
  * | `path-reserved` | 403 **仅旧服务器**：导师越界写（那个版本只允许 `review/**`） | 升级服务器；临时把文件放进 `review/` 再传 |
+ * | `upload-in-progress` | 409 这台工作区已有未完成的上传作业 | **取消/等它结束**，别重试新作业 |
+ * | `upload-closed` | 409 作业已过期/已关闭 | 用新的作业 id 重开 |
+ * | `upload-incomplete` | 409 还有文件没落到服务器就提交 | 补传 `needed` 再 complete |
+ * | `upload-id-reused` | 409 同一个作业 id 配了**不同**的清单 | 换新 id（清单变了就是另一笔） |
+ * | `project-creation-retired` | 409 幂等建项目撞上已删除的项目 | 换 `creationId`（把被删的 id 拼进哈希） |
  */
 export type ServerErrorCode =
   | 'invalid-key'
@@ -309,6 +314,16 @@ export type ServerErrorCode =
   | 'proposal-state'
   /** 403：导师写了 `review/` 之外（或别人的）路径 —— 结构上禁止改写研究事实。 */
   | 'path-reserved'
+  /** 409：这台工作区已有**未完成的上传作业**（分阶段上传，v0.7.3）。 */
+  | 'upload-in-progress'
+  /** 409：上传作业已过期 / 已取消 / 已关闭。 */
+  | 'upload-closed'
+  /** 409：还有 `needed` 里的文件没收到，不能提交。 */
+  | 'upload-incomplete'
+  /** 409：同一个作业 id 被用于了不同的清单（服务端 `UPLOAD_ID_REUSED`）。 */
+  | 'upload-id-reused'
+  /** 409：幂等建项目撞上一个**已删除**的项目（服务端 `PROJECT_CREATION_RETIRED`）。 */
+  | 'project-creation-retired'
 
 /** 带分类的服务器错误。`message` **已经是可直接展示的中文**。 */
 export class ServerError extends Error {
@@ -432,6 +447,13 @@ export function normalizeApiKey(raw: string): string {
 export interface ServerRequestOptions {
   /** 网络实现（测试注入；缺省 = 全局 `fetch`）。 */
   fetchImpl?: FetchLike
+  /**
+   * **中断信号**（v0.7.3）：取消一次上传 / 一次长请求时用它。
+   *
+   * 只"不理会"信号是不够的（`fetch` 也可能不尊重），所以 `requestJson` 既把它接到
+   * 自己的 `AbortController` 上，也在每次 await 前后用 `throwIfAborted()` 兜一次。
+   */
+  signal?: AbortSignal
   /** 超时（毫秒）；缺省 {@link SERVER_TIMEOUT_MS}。 */
   timeoutMs?: number
   /**
@@ -683,6 +705,44 @@ function mapHttpError(status: number, body: unknown): ServerError {
         { ...withCode, serverCode },
       )
     }
+    /*
+     * 分阶段上传（v0.7.3 / 协议 34）的四个 409。
+     *
+     * 为什么要分开：它们的**正确动作完全不同** —— 有别的作业在跑就不该再开新的（该去取消或等），
+     * 作业过期要换新 id，缺文件要补传，id 撞车要换 id。全都并成"版本冲突/参数错"，
+     * 界面就只能让用户"重试"，而重试是错的。
+     */
+    if (serverCode === 'UPLOAD_IN_PROGRESS') {
+      return new ServerError(
+        'upload-in-progress',
+        '这项研究已经有一个未完成的上传任务；请等它结束或先取消它。',
+        { ...withCode, serverCode },
+      )
+    }
+    if (serverCode === 'UPLOAD_CLOSED') {
+      return new ServerError('upload-closed', '这次上传已过期或被取消了，需要重新开始。', {
+        ...withCode,
+        serverCode,
+      })
+    }
+    if (serverCode === 'UPLOAD_INCOMPLETE') {
+      return new ServerError('upload-incomplete', '还有文件没有传到服务器，暂时不能提交。', {
+        ...withCode,
+        serverCode,
+      })
+    }
+    if (serverCode === 'UPLOAD_ID_REUSED') {
+      return new ServerError('upload-id-reused', '这次上传的文件清单变了，需要重新开始。', {
+        ...withCode,
+        serverCode,
+      })
+    }
+    if (serverCode === 'PROJECT_CREATION_RETIRED') {
+      return new ServerError('project-creation-retired', '这个发布标识对应的项目已被删除。', {
+        ...withCode,
+        serverCode,
+      })
+    }
   }
   if (status === 400 || status === 422) {
     if (serverCode === 'INVALID_INVITATION' || serverCode === 'INVITATION_EXPIRED') {
@@ -714,7 +774,11 @@ async function requestJson(
   if (typeof fetchImpl !== 'function') {
     throw new ServerError('unreachable', '当前运行环境没有可用的 fetch。')
   }
+  options.signal?.throwIfAborted()
   const controller = new AbortController()
+  // 外部信号（取消上传）→ 本地 controller：超时与取消共用同一条中断路径
+  const abortFromCaller = (): void => controller.abort(options.signal?.reason)
+  options.signal?.addEventListener('abort', abortFromCaller, { once: true })
   const timeoutMs = options.timeoutMs ?? SERVER_TIMEOUT_MS
   const url = apiUrl(base, path)
 
@@ -741,25 +805,33 @@ async function requestJson(
         method: init.method,
         headers: {
           accept: 'application/json',
-          ...(init.body === undefined ? {} : { 'content-type': 'application/json' }),
+          // `FormData` 由运行时自己带 boundary —— 手写 content-type 会把 boundary 写坏
+          ...(init.body === undefined || init.body instanceof FormData
+            ? {}
+            : { 'content-type': 'application/json' }),
           ...(init.apiKey ? { authorization: `Bearer ${init.apiKey}` } : {}),
           // 幂等键：**同一次业务意图**重试必须复用（402 后充值再试就靠它不重复扣费）
           ...(init.idempotencyKey ? { 'idempotency-key': init.idempotencyKey } : {}),
           // 这项工作是谁：服务器据此拒绝"往别人的项目里写"（老服务器忽略该头）
           ...(options.workspaceId ? { 'x-workspace-id': options.workspaceId } : {}),
         },
-        ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+        ...(init.body === undefined
+          ? {}
+          : { body: init.body instanceof FormData ? init.body : JSON.stringify(init.body) }),
         signal: controller.signal,
       }),
       timeout,
     ])
   } catch (e) {
+    // 外部取消优先于"连不上"：取消不是故障，别把用户的操作报成网络错误
+    options.signal?.throwIfAborted()
     if (e instanceof ServerError) throw e // 超时（上面那个 race 的拒绝）
     throw new ServerError(
       'unreachable',
       `无法连接 ${base}：${e instanceof Error ? e.message : String(e)}。请确认服务器已启动。`,
     )
   } finally {
+    options.signal?.removeEventListener('abort', abortFromCaller)
     if (timer !== undefined) clearTimeout(timer)
   }
 
@@ -1135,6 +1207,49 @@ export async function fetchUsage(
 }
 
 /**
+ * **购买存储空间**（`POST /tokens/storage/purchase`）。
+ *
+ * 一次性买断（服务器 `STORAGE_BYTES_PER_TOKEN` = 1 GiB / Token，可按部署调整），
+ * 幂等靠 `Idempotency-Key`：**同一次购买意图的重试必须复用同一个键**，否则会买两笔。
+ *
+ * 回执三个数一个都不能少：`purchased_gb`（**买的是几 GB**，与请求比对）、
+ * `capacity_bytes`（**买完后的总容量**，不是增量）、`cost`（实际扣了多少 Token）。
+ * 少一个就不许界面往"已购买"改 —— 宁可报 `bad-response`，也不要显示一个编出来的容量。
+ *
+ * @param gb 要增加的容量（GB，正整数）
+ * @param intentKey 幂等键（一次购买意图一个）
+ */
+export async function purchaseStorage(
+  base: string,
+  apiKey: string,
+  gb: number,
+  intentKey: string,
+  options: ServerRequestOptions = {},
+): Promise<{ purchasedGb: number; capacityBytes: number; cost: number }> {
+  const body = await requestJson(
+    base,
+    '/tokens/storage/purchase',
+    { method: 'POST', apiKey: requireKey(apiKey), body: { gb }, idempotencyKey: intentKey },
+    options,
+    '购买存储空间',
+  )
+  const root = asObject(body, '存储购买结果')
+  const purchasedGb = asNumber(root.purchased_gb, -1)
+  const capacityBytes = asNumber(root.capacity_bytes, -1)
+  const cost = asNumber(root.cost, -1)
+  if (
+    purchasedGb !== gb ||
+    !Number.isSafeInteger(capacityBytes) ||
+    capacityBytes <= 0 ||
+    !Number.isSafeInteger(cost) ||
+    cost <= 0
+  ) {
+    throw new ServerError('bad-response', '服务器返回的存储购买回执不完整。')
+  }
+  return { purchasedGb, capacityBytes, cost }
+}
+
+/**
  * **挂牌价参考**（`GET /mentorship/price-guide`）。
  *
  * 出题（`SEEK_STUDENT`）的导师用它决定自己开多少；数字**全部由服务器定价配置算出**
@@ -1293,6 +1408,143 @@ async function postProjectFiles(
       sha256: asString(b.sha256),
     }
   })
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 分阶段上传（v0.7.3 / 协议 34，服务器 `/projects/{id}/uploads…`）
+ *
+ * 与老的"一次 multipart 整批传完"相比，这套流程解决三件事：
+ *   ① **只传缺的**：客户端先发清单（path + size + sha256），服务器回 `received` / `needed`
+ *      —— 它按"这一侧最新一版 + 内容哈希 + blob 是否在盘上"去重，重复上传不再翻倍占空间；
+ *   ② **可查询 / 可取消**：作业落在服务器上，换台机器、关掉页面都还能查（`/active`、`/{id}`），
+ *      取消是 `DELETE`（pending 会连同暂存文件一起清掉）；
+ *   ③ **丢 ACK 不重复**：同一个 `id` 重发同一份清单 → 服务器返回原作业（不是新建）；
+ *      批次 ACK 丢了就 `GET` 核对 `received`，不重传已验证的批次。
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** 清单里的一项：**`sha256` 必须带 `sha256:` 前缀**（服务器用正则校验）。 */
+export interface UploadManifestFile {
+  path: string
+  size: number
+  sha256: string
+}
+
+/** `complete` 的回执。 */
+export interface WorkspaceUploadReceipt {
+  /** 本次真正**新写进去**的文件数（= `needed` 的数量）。 */
+  uploaded: number
+  uploadedBytes: number
+  /** 清单里的文件总数。 */
+  totalFiles: number
+  /** 服务器已经有、因此跳过的文件数。 */
+  skippedExisting: number
+  /** 提交后的研究状态版本；非 owner / 状态没变时为 `null`。 */
+  version: number | null
+  contentHash: string | null
+}
+
+/** 一个上传作业的状态。 */
+export interface WorkspaceUploadStatus {
+  id: string
+  status: 'pending' | 'completed' | 'cancelled'
+  /** 已暂存并通过校验的索引。 */
+  received: number[]
+  receivedBytes: number
+  /** 服务器**还缺**的索引（`totalBytes` 只算这些）。 */
+  needed: number[]
+  totalBytes: number
+  totalFiles: number
+  receipt: WorkspaceUploadReceipt | null
+}
+
+function parseWorkspaceUpload(body: unknown, label: string): WorkspaceUploadStatus {
+  const root = asObject(body, label)
+  const rawStatus = asString(root.status)
+  const status = rawStatus === 'completed' || rawStatus === 'cancelled' ? rawStatus : 'pending'
+  const rawReceipt = root.receipt
+  let receipt: WorkspaceUploadReceipt | null = null
+  if (rawReceipt !== null && rawReceipt !== undefined && typeof rawReceipt === 'object') {
+    const r = asObject(rawReceipt, '上传回执')
+    const version = typeof r.version === 'number' ? r.version : null
+    const contentHash = typeof r.content_hash === 'string' ? r.content_hash : null
+    receipt = {
+      uploaded: asNumber(r.uploaded, 0),
+      uploadedBytes: asNumber(r.uploaded_bytes, 0),
+      totalFiles: asNumber(r.total_files, 0),
+      skippedExisting: asNumber(r.skipped_existing, 0),
+      version,
+      contentHash,
+    }
+  }
+  return {
+    id: asString(root.id),
+    status,
+    received: Array.isArray(root.received) ? root.received.filter((x): x is number => typeof x === 'number') : [],
+    receivedBytes: asNumber(root.received_bytes, 0),
+    needed: Array.isArray(root.needed) ? root.needed.filter((x): x is number => typeof x === 'number') : [],
+    totalBytes: asNumber(root.total_bytes, 0),
+    totalFiles: asNumber(root.total_files, 0),
+    receipt,
+  }
+}
+
+/**
+ * 打一次上传作业的请求（`/projects/{id}/uploads` + `suffix`）。
+ *
+ * @param method `GET` / `POST` / `PUT` / `DELETE`
+ * @param suffix `''`（开作业）/ `'/active'` / `'/{id}'` / `'/{id}/files'` / `'/{id}/complete'`
+ */
+export async function workspaceUploadRequest(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  suffix: string,
+  body: unknown,
+  options: ServerRequestOptions = {},
+  label = '分阶段上传',
+): Promise<WorkspaceUploadStatus | null> {
+  const raw = await requestJson(
+    base,
+    `/projects/${encodeURIComponent(projectId)}/uploads${suffix}`,
+    { method, apiKey: requireKey(apiKey), ...(body === undefined ? {} : { body }) },
+    options,
+    label,
+  )
+  // `/active` 在没有作业时回 `null`
+  if (raw === null) return null
+  return parseWorkspaceUpload(raw, label)
+}
+
+/**
+ * 暂存**一批**文件（`PUT /uploads/{taskId}/files`，multipart：`files` + `indexes`）。
+ *
+ * 服务器逐文件按清单校验 size + sha256（不符 422），且只接受 `needed` 里的索引；
+ * 同一索引重复暂存会被跳过（幂等）。批大小受服务器 `MAX_FILES_PER_REQUEST` 约束，
+ * 由调用方（`planUploadBatches`）切好。
+ */
+export async function stageWorkspaceFiles(
+  base: string,
+  apiKey: string,
+  projectId: string,
+  taskId: string,
+  files: ReadonlyArray<{ index: number; path: string; bytes: Uint8Array }>,
+  options: ServerRequestOptions = {},
+): Promise<void> {
+  const form = new FormData()
+  for (const file of files) {
+    const view = file.bytes
+    const buf = view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength) as ArrayBuffer
+    form.append('files', new Blob([buf]), file.path.slice(file.path.lastIndexOf('/') + 1))
+    form.append('indexes', String(file.index))
+  }
+  await requestJson(
+    base,
+    `/projects/${encodeURIComponent(projectId)}/uploads/${encodeURIComponent(taskId)}/files`,
+    { method: 'PUT', apiKey: requireKey(apiKey), body: form },
+    options,
+    '暂存上传文件',
+  )
 }
 
 export async function uploadProjectFiles(
@@ -1875,6 +2127,17 @@ export async function createProject(
      * 且 `null` 在服务层会被跳过（改价时传 null **不会**清空，见 `payment-system.md` §3.2.5）。
      */
     askingFee?: number | null
+    /**
+     * **建项目的幂等标识**（v0.7.3）：服务器按 `uuid5(owner, creation_id)` 定项目 id。
+     *
+     * 为什么需要：首次发布是"先建项目、再传状态/附件、最后发布"，中间任何一步的
+     * ACK 丢失后重试都会**再建一个项目** —— 用户在网络里看到两项一模一样的研究。
+     * 带一个稳定的标识后重试落到同一个项目上（服务器还认得"这个 id 已被删过"并回
+     * 409 `PROJECT_CREATION_RETIRED`，见调用方的 `retiredProjectId`）。
+     *
+     * ⚠️ 服务器字段是 `creation_id`，值要能按 UUID 解析（带不带连字符都行）。
+     */
+    creationId?: string
   },
   options: ServerRequestOptions = {},
 ): Promise<ServerProject> {
@@ -1889,6 +2152,7 @@ export async function createProject(
       apiKey: key,
       body: {
         title,
+        ...(input.creationId ? { creation_id: input.creationId } : {}),
         ...(input.description ? { description: input.description } : {}),
         // ⚠️ 只在明确给了方向时才发这个字段：默认方向由服务器拥有，
         // 客户端抄一份默认值只会在平台改默认时悄悄漂移。

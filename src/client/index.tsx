@@ -62,6 +62,8 @@ export { AcceptConfirmDialog, TokenDialog } from './settings.js'
  * "【更新】时不出现挂牌价、首次发布才出现"这条只有遍历产出的树才算数。
  */
 export { PublishDialog } from './settings.js'
+/** 退出登录确认框（无 hook）：离线渲染断言"取消 / 确认两个动作都在、文案走 i18n"。 */
+export { SignOutConfirmDialog } from './settings.js'
 /**
  * 上传清单的**目录树**：纯逻辑 + 纯渲染，导出给离线自检（`verify-settings-page.mjs`
  * 直接构建树、并渲染第一层/展开后的行 —— "目录整枝勾选"这条交互只有遍历产出的树才算数）。

@@ -2670,7 +2670,10 @@ console.log('\n[13] 指导闭环：下载 / 上传')
    * 根本没有进度条（只有导师回传那条画了），几十 MB 下只有一句「发布中…」。
    */
   assert(/function TransferProgress/.test(src), '进度条抽成共用组件（发布 / 导师回传同一根）')
-  assert(/progress=\{publishProgress\}/.test(src), '发布对话框也拿得到进度')
+  assert(
+    /progress=\{publishTask\?\.progress \?\? publishProgress\}/.test(src),
+    '发布对话框也拿得到进度（优先后台上传任务，旧宿主退回 publishProgress）',
+  )
   assert(/setPublishProgress\(v\)/.test(src), '发布期间按秒轮询（与回传同一条端点）')
   /* 一个研究工作**只属于一个方向**的规则见下方 `publishActionPlan` 的行为断言。 */
   {
@@ -3586,7 +3589,7 @@ console.log('\n[11] 导师出题：挂牌价（价目来自服务器 + 自定义
       '价格行对**两个方向**都渲染（方向决定措辞）',
     )
     assert(
-      /post\('work\/publish', \{\s*id: w\.id,\s*direction,\s*selection,\s*remember,\s*\.\.\.\(askingFee !== undefined \? \{ askingFee \} : \{\}\),[\s\S]{0,120}?\}\)/.test(src),
+      /id: w\.id,\s*direction,\s*selection,\s*remember,\s*\.\.\.\(askingFee !== undefined \? \{ askingFee \} : \{\}\)/.test(src),
       '发布时把 askingFee 送给宿主（没选价就不发）',
     )
     assert(
@@ -3599,8 +3602,8 @@ console.log('\n[11] 导师出题：挂牌价（价目来自服务器 + 自定义
     assert(/priceChanged/.test(rpcSrc), '复用项目时按需改价（PUT asking_fee）')
     const protoSrc = readFileSync(join(PKG, 'src', 'protocol.ts'), 'utf8')
     assert(
-      /export const HOST_PROTOCOL = 33/.test(protoSrc),
-      '协议升到 33（33 加"二次确认展开配额截断"；32 决策辅助开关；31 下载侧 counterpart；30 挂牌价）',
+      /export const HOST_PROTOCOL = 34/.test(protoSrc),
+      '协议升到 34（34 存储购买 + 后台上传任务；33 截断二次确认展开；32 决策辅助开关）',
     )
   }
 }
@@ -3831,7 +3834,7 @@ console.log('\n[14] 配额截断提示 + 二次确认展开')
   // ③ 弹窗登记：id 必须与轮询方问的那个 id 一致
   const boundarySrc = readFileSync(join(PKG, 'src', 'client', 'modal-boundary.tsx'), 'utf8')
   assert(/enterModal\(id\)/.test(boundarySrc) && /exitModal\(id\)/.test(boundarySrc), '弹窗登记在挂载/卸载时成对发生')
-  assertEq((src.match(/<ModalBoundary id="/g) ?? []).length, 8, '八个对话框都登记了（漏一个就还是会被重注册冲掉）')
+  assertEq((src.match(/<ModalBoundary id="/g) ?? []).length, 10, '十个对话框都登记了（漏一个就还是会被重注册冲掉）')
   assert(/<ModalBoundary id="publish">/.test(src), '发布对话框的 id = publish（发布进度轮询按这个 id 排除自己）')
   assert(/<ModalBoundary id="download">/.test(src), '下载对话框的 id = download（下载进度轮询按这个 id 排除自己）')
   assert(/isOtherModalOpen\('publish'\)/.test(src), '发布进度轮询确实在用 publish 这个 id')
@@ -3995,6 +3998,132 @@ console.log('\n[15] 挂牌价只在首次发布时出现')
       '价格校验只在首次发布时生效',
     )
     assert(/firstPublish: !publishedHere/.test(src), '「首次发布」由"该方向在网络上还没有项目"判定')
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * [16] 退出登录要先确认（v0.7.3）
+ *
+ * 账号行上的 ⏏ 是**图标按钮**（为了不撑宽账号行）：一个误触就把凭据清掉、还得重新贴
+ * API Key。所以动作拆两步 —— 点 ⏏ 只开确认框，只有【退出登录】才真的发 `account/logout`。
+ * 这里把对话框**真的渲染一遍**，并且逐个点它的按钮（调 `onClick`）来验证：
+ * 取消只关框、确认才登出。
+ * ════════════════════════════════════════════════════════════════════════ */
+console.log('\n[16] 退出登录先确认')
+{
+  const src = readFileSync(join(PKG, 'src', 'client', 'settings.tsx'), 'utf8')
+  const zhDict = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
+  const enDict = readFileSync(join(PKG, 'src', 'client', 'i18n', 'en.ts'), 'utf8')
+
+  // ① 源码契约：⏏ 只开框；`account/logout` 只有一处调用点（在 logout 里）
+  assert(
+    /onClick=\{\(\) => setSignOutOpen\(true\)\}/.test(src),
+    '点 ⏏ 只打开确认框（不直接登出）',
+  )
+  assert(!/onClick=\{\(\) => void logout\(\)\}/.test(src), '不再有"点了就登出"的按钮')
+  assertEq((src.match(/post\('account\/logout'|call\('account\/logout'/g) ?? []).length, 1, 'account/logout 只有一处调用点')
+  assert(/<ModalBoundary id="signout">/.test(src), '确认框登记成弹窗（后台轮询不会把它冲掉）')
+
+  // ② 文案：中英都有（且不是"点了就退"的措辞）
+  for (const key of [
+    'community.signOut.title',
+    'community.signOut.body',
+    'community.signOut.unknownAccount',
+    'community.signOut.confirm',
+  ]) {
+    assert(zhDict.includes(`'${key}'`) && enDict.includes(`'${key}'`), `中英文字典都有 ${key}`)
+  }
+  assert(/community\.signOut\.title': '退出登录？'/.test(zhDict), '标题是一句问句（退出登录？）')
+  assert(/API Key/.test(zhDict) || /API Key/.test(enDict), '正文说清"重新登录要再贴一次 API Key"')
+
+  // ③ 行为：渲染对话框，逐按钮点一遍
+  let mod = null
+  try {
+    let captured = null
+    new Function('window', readFileSync(join(PKG, 'lib', 'client.js'), 'utf8'))({
+      __ModuleLoader__: { load: (m) => { captured = m } },
+    })
+    mod = captured.factory(createRequire(import.meta.url))
+  } catch (e) {
+    assert(false, `bundle 可在 node 求值：${e instanceof Error ? e.message : String(e)}`)
+  }
+  if (mod) {
+    assert(typeof mod.SignOutConfirmDialog === 'function', '确认框被导出（离线自检要真的渲染它）')
+    const ZH = (await import(join(PKG, 'src', 'client', 'i18n', 'zh.ts'))).zh
+    const t16 = (k, prm) => {
+      const tpl = ZH[k] ?? k
+      return prm ? tpl.replace(/\{(\w+)\}/g, (m, n) => (n in prm ? String(prm[n]) : m)) : tpl
+    }
+    const expand = (node) => {
+      if (node !== null && typeof node === 'object' && !Array.isArray(node) && typeof node.type === 'function') {
+        try {
+          return expand(node.type(node.props ?? {}))
+        } catch {
+          return node
+        }
+      }
+      return node
+    }
+    const collect = (node, pred, out = []) => {
+      const n0 = expand(node)
+      if (n0 === null || n0 === undefined || typeof n0 !== 'object') return out
+      if (Array.isArray(n0)) {
+        for (const x of n0) collect(x, pred, out)
+        return out
+      }
+      if (pred(n0)) out.push(n0)
+      const kids = n0.props?.children
+      if (Array.isArray(kids)) for (const k of kids) collect(k, pred, out)
+      else collect(kids, pred, out)
+      return out
+    }
+    const textOf = (node) => {
+      const n0 = expand(node)
+      if (n0 === null || n0 === undefined || typeof n0 === 'boolean') return ''
+      if (typeof n0 === 'string' || typeof n0 === 'number') return String(n0)
+      if (Array.isArray(n0)) return n0.map(textOf).join('')
+      return textOf(n0.props?.children)
+    }
+
+    let cancelled = 0
+    let confirmed = 0
+    const tree = mod.SignOutConfirmDialog({
+      t: t16,
+      email: 'cz-r-test@example.com',
+      serverUrl: 'https://convfusion.example.test',
+      busy: false,
+      onCancel: () => { cancelled += 1 },
+      onConfirm: () => { confirmed += 1 },
+    })
+    const text = textOf(tree)
+    assert(text.includes('退出登录？'), '标题渲染出来')
+    assert(text.includes('cz-r-test@example.com'), '显示要退的是哪个账号（不是盲点）')
+    assert(text.includes('convfusion.example.test'), '显示属于哪台服务器')
+    assert(text.includes('API Key'), '正文提醒"重新登录要再贴一次 API Key"')
+
+    const buttons = collect(tree, (n) => n.type === 'button')
+    const cancelBtn = buttons.find((b) => textOf(b) === ZH['community.action.cancel'])
+    const confirmBtn = buttons.find((b) => textOf(b) === ZH['community.signOut.confirm'])
+    assert(cancelBtn !== undefined && confirmBtn !== undefined, '取消 / 退出登录两个按钮都在')
+    assert(confirmBtn.props?.disabled !== true, '不在忙时确认按钮可用')
+
+    cancelBtn.props.onClick({ preventDefault: () => {} })
+    assertEq([cancelled, confirmed], [1, 0], '点【取消】只关框，不登出')
+    confirmBtn.props.onClick({ preventDefault: () => {} })
+    assertEq([cancelled, confirmed], [1, 1], '点【退出登录】才真的登出')
+
+    // 忙时两个按钮都禁用（避免重复发登出，也避免关框后界面停在半路）
+    const busyTree = mod.SignOutConfirmDialog({
+      t: t16,
+      email: null,
+      serverUrl: '',
+      busy: true,
+      onCancel: () => {},
+      onConfirm: () => {},
+    })
+    const busyButtons = collect(busyTree, (n) => n.type === 'button')
+    assert(busyButtons.every((b) => b.props?.disabled === true), '忙时两个按钮都禁用')
+    assert(textOf(busyTree).includes(ZH['community.signOut.unknownAccount']), '拿不到账号邮箱时显示"当前账号"（不显示空）')
   }
 }
 

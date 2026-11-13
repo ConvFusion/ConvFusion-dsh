@@ -270,6 +270,11 @@ export interface WorkBrief {
  * | `idempotency-reused` | 409 同 Key 不同 payload | 客户端 bug（同一意图才能复用 Key） |
  * | `proposal-state` | 409 提案已不在可接受状态 / 项目已有生效关系 | 刷新列表（别人已处理，或已过期） |
  * | `path-reserved` | 403 **仅旧服务器**：导师越界写（那个版本只允许 `review/**`） | 升级服务器；临时把文件放进 `review/` 再传 |
+ * | `upload-in-progress` | 409 这台工作区已有未完成的上传作业 | **取消/等它结束**，别重试新作业 |
+ * | `upload-closed` | 409 作业已过期/已关闭 | 用新的作业 id 重开 |
+ * | `upload-incomplete` | 409 还有文件没落到服务器就提交 | 补传 `needed` 再 complete |
+ * | `upload-id-reused` | 409 同一个作业 id 配了**不同**的清单 | 换新 id（清单变了就是另一笔） |
+ * | `project-creation-retired` | 409 幂等建项目撞上已删除的项目 | 换 `creationId`（把被删的 id 拼进哈希） |
  */
 export type ServerErrorCode = 'invalid-key' | 'account-inactive' | 'invalid-invitation' | 'invitation-used' | 'email-taken' | 'rate-limited' | 'bad-request' | 'bad-url' | 'unreachable' | 'server-error' | 'bad-response' | 'insufficient-tokens' | 'no-relationship' | 'not-found' | 'idempotency-reused'
 /** 409：研究状态乐观锁冲突（`details.current_version` 是服务端最新版本）。 */
@@ -281,7 +286,17 @@ export type ServerErrorCode = 'invalid-key' | 'account-inactive' | 'invalid-invi
  */
  | 'proposal-state'
 /** 403：导师写了 `review/` 之外（或别人的）路径 —— 结构上禁止改写研究事实。 */
- | 'path-reserved';
+ | 'path-reserved'
+/** 409：这台工作区已有**未完成的上传作业**（分阶段上传，v0.7.3）。 */
+ | 'upload-in-progress'
+/** 409：上传作业已过期 / 已取消 / 已关闭。 */
+ | 'upload-closed'
+/** 409：还有 `needed` 里的文件没收到，不能提交。 */
+ | 'upload-incomplete'
+/** 409：同一个作业 id 被用于了不同的清单（服务端 `UPLOAD_ID_REUSED`）。 */
+ | 'upload-id-reused'
+/** 409：幂等建项目撞上一个**已删除**的项目（服务端 `PROJECT_CREATION_RETIRED`）。 */
+ | 'project-creation-retired';
 /** 带分类的服务器错误。`message` **已经是可直接展示的中文**。 */
 export declare class ServerError extends Error {
     readonly code: ServerErrorCode;
@@ -348,6 +363,13 @@ export declare function normalizeApiKey(raw: string): string;
 export interface ServerRequestOptions {
     /** 网络实现（测试注入；缺省 = 全局 `fetch`）。 */
     fetchImpl?: FetchLike;
+    /**
+     * **中断信号**（v0.7.3）：取消一次上传 / 一次长请求时用它。
+     *
+     * 只"不理会"信号是不够的（`fetch` 也可能不尊重），所以 `requestJson` 既把它接到
+     * 自己的 `AbortController` 上，也在每次 await 前后用 `throwIfAborted()` 兜一次。
+     */
+    signal?: AbortSignal;
     /** 超时（毫秒）；缺省 {@link SERVER_TIMEOUT_MS}。 */
     timeoutMs?: number;
     /**
@@ -538,6 +560,24 @@ export interface ServerUsage {
 /** 读用量与配额。**失败时返回 null**（调用方按"未知"展示，不阻塞发布）。 */
 export declare function fetchUsage(base: string, apiKey: string, options?: ServerRequestOptions): Promise<ServerUsage | null>;
 /**
+ * **购买存储空间**（`POST /tokens/storage/purchase`）。
+ *
+ * 一次性买断（服务器 `STORAGE_BYTES_PER_TOKEN` = 1 GiB / Token，可按部署调整），
+ * 幂等靠 `Idempotency-Key`：**同一次购买意图的重试必须复用同一个键**，否则会买两笔。
+ *
+ * 回执三个数一个都不能少：`purchased_gb`（**买的是几 GB**，与请求比对）、
+ * `capacity_bytes`（**买完后的总容量**，不是增量）、`cost`（实际扣了多少 Token）。
+ * 少一个就不许界面往"已购买"改 —— 宁可报 `bad-response`，也不要显示一个编出来的容量。
+ *
+ * @param gb 要增加的容量（GB，正整数）
+ * @param intentKey 幂等键（一次购买意图一个）
+ */
+export declare function purchaseStorage(base: string, apiKey: string, gb: number, intentKey: string, options?: ServerRequestOptions): Promise<{
+    purchasedGb: number;
+    capacityBytes: number;
+    cost: number;
+}>;
+/**
  * **挂牌价参考**（`GET /mentorship/price-guide`）。
  *
  * 出题（`SEEK_STUDENT`）的导师用它决定自己开多少；数字**全部由服务器定价配置算出**
@@ -566,6 +606,57 @@ export interface UploadedFile {
     size: number;
     sha256: string;
 }
+/** 清单里的一项：**`sha256` 必须带 `sha256:` 前缀**（服务器用正则校验）。 */
+export interface UploadManifestFile {
+    path: string;
+    size: number;
+    sha256: string;
+}
+/** `complete` 的回执。 */
+export interface WorkspaceUploadReceipt {
+    /** 本次真正**新写进去**的文件数（= `needed` 的数量）。 */
+    uploaded: number;
+    uploadedBytes: number;
+    /** 清单里的文件总数。 */
+    totalFiles: number;
+    /** 服务器已经有、因此跳过的文件数。 */
+    skippedExisting: number;
+    /** 提交后的研究状态版本；非 owner / 状态没变时为 `null`。 */
+    version: number | null;
+    contentHash: string | null;
+}
+/** 一个上传作业的状态。 */
+export interface WorkspaceUploadStatus {
+    id: string;
+    status: 'pending' | 'completed' | 'cancelled';
+    /** 已暂存并通过校验的索引。 */
+    received: number[];
+    receivedBytes: number;
+    /** 服务器**还缺**的索引（`totalBytes` 只算这些）。 */
+    needed: number[];
+    totalBytes: number;
+    totalFiles: number;
+    receipt: WorkspaceUploadReceipt | null;
+}
+/**
+ * 打一次上传作业的请求（`/projects/{id}/uploads` + `suffix`）。
+ *
+ * @param method `GET` / `POST` / `PUT` / `DELETE`
+ * @param suffix `''`（开作业）/ `'/active'` / `'/{id}'` / `'/{id}/files'` / `'/{id}/complete'`
+ */
+export declare function workspaceUploadRequest(base: string, apiKey: string, projectId: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE', suffix: string, body: unknown, options?: ServerRequestOptions, label?: string): Promise<WorkspaceUploadStatus | null>;
+/**
+ * 暂存**一批**文件（`PUT /uploads/{taskId}/files`，multipart：`files` + `indexes`）。
+ *
+ * 服务器逐文件按清单校验 size + sha256（不符 422），且只接受 `needed` 里的索引；
+ * 同一索引重复暂存会被跳过（幂等）。批大小受服务器 `MAX_FILES_PER_REQUEST` 约束，
+ * 由调用方（`planUploadBatches`）切好。
+ */
+export declare function stageWorkspaceFiles(base: string, apiKey: string, projectId: string, taskId: string, files: ReadonlyArray<{
+    index: number;
+    path: string;
+    bytes: Uint8Array;
+}>, options?: ServerRequestOptions): Promise<void>;
 export declare function uploadProjectFiles(base: string, apiKey: string, projectId: string, files: ReadonlyArray<{
     relPath: string;
     bytes: Uint8Array;
@@ -777,6 +868,17 @@ export declare function createProject(base: string, apiKey: string, input: {
      * 且 `null` 在服务层会被跳过（改价时传 null **不会**清空，见 `payment-system.md` §3.2.5）。
      */
     askingFee?: number | null;
+    /**
+     * **建项目的幂等标识**（v0.7.3）：服务器按 `uuid5(owner, creation_id)` 定项目 id。
+     *
+     * 为什么需要：首次发布是"先建项目、再传状态/附件、最后发布"，中间任何一步的
+     * ACK 丢失后重试都会**再建一个项目** —— 用户在网络里看到两项一模一样的研究。
+     * 带一个稳定的标识后重试落到同一个项目上（服务器还认得"这个 id 已被删过"并回
+     * 409 `PROJECT_CREATION_RETIRED`，见调用方的 `retiredProjectId`）。
+     *
+     * ⚠️ 服务器字段是 `creation_id`，值要能按 UUID 解析（带不带连字符都行）。
+     */
+    creationId?: string;
 }, options?: ServerRequestOptions): Promise<ServerProject>;
 /**
  * 改项目（`PUT /projects/{id}`，owner-only）。

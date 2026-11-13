@@ -3439,6 +3439,7 @@ export function PublishDialog({
   onSelectPriceCustom,
   onPriceText,
   onCancel,
+  onCancelUpload,
   onConfirm,
 }: {
   t: Translate
@@ -3458,6 +3459,8 @@ export function PublishDialog({
   /** 二次确认展开某个分类（父级带上 `expand` 重取计划）。 */
   onExpandTruncated: (categoryId: string) => void
   onRemember: (next: boolean) => void
+  /** 【取消上传】：只有后台上传任务还在跑、且服务器允许取消时才给。 */
+  onCancelUpload?: (() => void) | undefined
   /**
    * 这是**首次发布**吗（该方向在网络上还没有项目）。
    *
@@ -3642,6 +3645,16 @@ export function PublishDialog({
             {/* 发布中：与导师回传同一根进度条（附件阶段是几十 MB 的一串请求） */}
             <div style={{ flexBasis: '100%' }}>
               <TransferProgress t={t} busy={busy} progress={progress} />
+              {onCancelUpload && busy ? (
+                <button
+                  type="button"
+                  style={{ ...S.linkBtn, marginTop: 4 }}
+                  title={t('community.upload.cancelTip')}
+                  onClick={onCancelUpload}
+                >
+                  {t('community.upload.cancel')}
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
@@ -4070,12 +4083,15 @@ function DashTile({
   value,
   unit,
   sub,
+  action,
 }: {
   title: string
   chart: React.ReactNode
   value?: string | null
   unit?: string | null
   sub?: string | null
+  /** 格子里的**动作**（如"存储空间"的【购买空间】）；缺省 = 纯展示。 */
+  action?: React.ReactNode
 }): JSX.Element {
   return (
     <div style={S.dashTile}>
@@ -4089,6 +4105,415 @@ function DashTile({
           </span>
         ) : null}
         {sub ? <span style={S.dashSub}>{sub}</span> : null}
+        {action}
+      </div>
+    </div>
+  )
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * 购买存储空间（v0.7.3 / 协议 34）
+ *
+ * 服务器 `POST /tokens/storage/purchase`：**一次性买断**扩容（`STORAGE_BYTES_PER_TOKEN`
+ * = 1 GiB / Token，可按部署调整），幂等键 `Idempotency-Key`。
+ *
+ * ## 这一整块都在解决三件事
+ *
+ * 1. **点一下就花钱** → 先在对话框里报价、比余额，再让用户按【确认购买】；
+ * 2. **ACK 丢了算不算买成** → 幂等键**按"一次购买意图"持久化**（`[服务器, 账号]` 定位），
+ *    结果未知时留着它，界面变【重试此笔购买】；服务器会识别同一笔，不会买两次；
+ * 3. **切服务器 / 切账号 / 平台调价** → 宿主侧再核一遍（`account/storage-purchase`），
+ *    核不上就**不扣钱**，界面按错误码说人话。
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/** 一次尚未落定的购买（幂等键 + 金额 + 起始时间）。 */
+interface PendingStoragePurchase {
+  gb: number
+  intentKey: string
+  startedAt: number
+}
+
+/** 重试窗口：超过就不许再用同一个幂等键（服务器的幂等记录也有有效期）。 */
+const STORAGE_PURCHASE_RETRY_MS = 24 * 60 * 60 * 1000
+
+/** 1 GiB 的字节数（扩容按 GiB 算；写成常量是为了不在算式里出现 `**`）。 */
+const GIB_BYTES = 1024 * 1024 * 1024
+
+/** 进程内缓存（`sessionStorage` 不可用的宿主上仍能在本次会话里重试）。 */
+const storagePurchases = new Map<string, PendingStoragePurchase>()
+
+/** 待完成购买在浏览器里的键：**按服务器 + 账号**分开，切号不会拿错订单。 */
+export function storagePurchaseKey(serverUrl: string, accountId: string): string {
+  return `convfusion.storage-purchase:${JSON.stringify([serverUrl, accountId])}`
+}
+
+/**
+ * 这一笔报价多少 Token（`ceil(GB · 2³⁰ / bytesPerToken)`）。
+ *
+ * 与服务器同一个口径（`QuotaService`：`cost = ceil(bytes / STORAGE_BYTES_PER_TOKEN)`）。
+ * 拿不到单价 / 金额非法 → `null`（界面不许编一个价出来）。
+ */
+export function storagePurchaseQuote(gb: number, bytesPerToken: number): number | null {
+  if (!Number.isInteger(gb) || gb < 1 || gb > 10_000) return null
+  if (!Number.isSafeInteger(bytesPerToken) || bytesPerToken <= 0) return null
+  return Math.ceil((gb * GIB_BYTES) / bytesPerToken)
+}
+
+/**
+ * 这次失败要不要**留着幂等键**（能原地重试同一笔）。
+ *
+ * | 失败 | 留键？ | 为什么 |
+ * |---|---|---|
+ * | 结果未知（网络 / 5xx / `storage-purchase-unconfirmed` / 无码） | **留** | 钱可能已经扣了，重试必须复用同一笔 |
+ * | 余额不足 / 单价变 / 取值失败 / 旧服务器 / 账号变了 / 参数错 | 不留 | 一分钱没动，重新走一遍确认流程 |
+ */
+export function storagePurchaseIntent(code: string | undefined): 'keep' | 'drop' {
+  return code === undefined ||
+    code === '' ||
+    code === 'transport' ||
+    code === 'internal' ||
+    code === 'unknown' ||
+    code === 'storage-purchase-unconfirmed'
+    ? 'keep'
+    : 'drop'
+}
+
+/** 读回待完成的购买（形状不对就当没有，绝不信任浏览器的内容）。 */
+function readStoragePurchase(key: string): PendingStoragePurchase | null {
+  if (storagePurchases.has(key)) return storagePurchases.get(key) ?? null
+  try {
+    const raw = JSON.parse(sessionStorage.getItem(key) ?? 'null') as PendingStoragePurchase | null
+    if (
+      raw &&
+      Number.isInteger(raw.gb) &&
+      raw.gb >= 1 &&
+      raw.gb <= 10_000 &&
+      typeof raw.intentKey === 'string' &&
+      /^[a-zA-Z0-9-]{1,128}$/.test(raw.intentKey) &&
+      Number.isFinite(raw.startedAt)
+    ) {
+      return raw
+    }
+  } catch {
+    /* 内嵌环境可能没有 sessionStorage：内存里的那一份仍然可用 */
+  }
+  return null
+}
+
+/** 记 / 清待完成购买（两份都写：内存兜底 + 会话存储）。 */
+function saveStoragePurchase(key: string, purchase: PendingStoragePurchase | null): void {
+  if (purchase) storagePurchases.set(key, purchase)
+  else storagePurchases.delete(key)
+  try {
+    if (purchase) sessionStorage.setItem(key, JSON.stringify(purchase))
+    else sessionStorage.removeItem(key)
+  } catch {
+    /* 同上：写不进去也不影响本次会话重试 */
+  }
+}
+
+/** 一次业务意图的幂等键（`randomUUID` 拿不到时退化成随机十六进制，宿主只校验形状）。 */
+function newIntentKey(): string {
+  const cryptoLike = globalThis.crypto as { randomUUID?: () => string } | undefined
+  if (typeof cryptoLike?.randomUUID === 'function') return cryptoLike.randomUUID()
+  let out = ''
+  for (let i = 0; i < 32; i += 1) out += Math.floor(Math.random() * 16).toString(16)
+  return out
+}
+
+/**
+ * **购买存储空间**对话框。
+ *
+ * 与 `TokenDialog` 同一种形态（背板 + 卡片 + 底部按钮），由 `CommunityTab` 挂载；
+ * 打开期间由 `./modal-boundary.js` 登记成"弹窗开着"，后台轮询不会把它冲掉。
+ */
+export function StoragePurchaseDialog({
+  t,
+  account,
+  serverUrl,
+  storage,
+  balance,
+  onPurchase,
+  onPurchased,
+  onRefresh,
+  onClose,
+}: {
+  t: Translate
+  /** 当前账号（`id` 用来定位幂等键与二次核对，`email` 用来让用户确认"给谁买"）。 */
+  account: { id: string; email?: string | undefined }
+  serverUrl: string
+  storage: HostUsage['storage'] | null
+  /** 可用 Token（`null` = 还没读到：此时不拦，等宿主去核）。 */
+  balance: number | null
+  /**
+   * 真正去扣钱的那一下（**由 `CommunityTab` 注入**）。
+   *
+   * ⚠️ 对话框自己**不发请求**（与 `BriefConfirmDialog` / `TokenDialog` 同一条规矩）：
+   * 端点、账号、服务器地址都留在外面，这里只负责把"买几 GB、按什么单价、用哪个幂等键"
+   * 说清楚。所以这一段完全可以被离线渲染验证，而不会偷偷碰网络。
+   */
+  onPurchase: (
+    gb: number,
+    bytesPerToken: number,
+    intentKey: string,
+  ) => Promise<{
+    ok: boolean
+    value?: unknown
+    error?: { code: string; message: string }
+  }>
+  onPurchased: (receipt: { purchasedGb: number; capacityBytes: number; cost: number }) => void
+  onRefresh: () => void
+  onClose: () => void
+}): JSX.Element {
+  const key = storagePurchaseKey(serverUrl, account.id)
+  const [pending, setPending] = React.useState<PendingStoragePurchase | null>(() => readStoragePurchase(key))
+  const [amount, setAmount] = React.useState(() => (pending ? String(pending.gb) : ''))
+  const [submitting, setSubmitting] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [receipt, setReceipt] = React.useState<{
+    purchasedGb: number
+    capacityBytes: number
+    cost: number
+  } | null>(null)
+  const inFlight = React.useRef(false)
+
+  const gb = Number(amount)
+  const validAmount = Number.isInteger(gb) && gb >= 1 && gb <= 10_000
+  const bytesPerToken = storage?.bytesPerToken ?? 0
+  const extraBytes = validAmount ? gb * GIB_BYTES : 0
+  const cost = validAmount ? storagePurchaseQuote(gb, bytesPerToken) : null
+  const insufficient = pending === null && cost !== null && balance !== null && balance < cost
+  const expired = pending !== null && Date.now() - pending.startedAt >= STORAGE_PURCHASE_RETRY_MS
+  const canSubmit = cost !== null && !insufficient && !expired && !submitting && receipt === null
+
+  const submit = async (): Promise<void> => {
+    if (!canSubmit || inFlight.current) return
+    const previous = readStoragePurchase(key) ?? pending
+    if (previous && Date.now() - previous.startedAt >= STORAGE_PURCHASE_RETRY_MS) {
+      setPending(previous)
+      return
+    }
+    // 同一笔重试时**金额不能变**：变了就是另一笔购买，必须先作废旧的幂等键
+    if (previous && previous.gb !== gb) {
+      setAmount(String(previous.gb))
+      setPending(previous)
+      return
+    }
+    const purchase = previous ?? { gb, intentKey: newIntentKey(), startedAt: Date.now() }
+    saveStoragePurchase(key, purchase)
+    inFlight.current = true
+    setSubmitting(true)
+    setError(null)
+    const result = await onPurchase(gb, bytesPerToken, purchase.intentKey)
+    inFlight.current = false
+    setSubmitting(false)
+
+    if (result.ok) {
+      saveStoragePurchase(key, null)
+      const bought = result.value as { purchasedGb: number; capacityBytes: number; cost: number }
+      setReceipt(bought)
+      onPurchased(bought)
+      return
+    }
+
+    const code = result.error?.code
+    const keep = storagePurchaseIntent(code) === 'keep'
+    saveStoragePurchase(key, keep ? purchase : null)
+    setPending(keep ? purchase : null)
+    if (code === 'storage-price-changed' || code === 'storage-price-unavailable' || code === 'insufficient-tokens') {
+      onRefresh()
+    }
+    if (keep) setError(t('community.storagePurchase.unconfirmed'))
+    else if (code === 'insufficient-tokens') setError(t('community.storagePurchase.insufficient'))
+    else if (code === 'storage-price-changed') setError(t('community.storagePurchase.priceChanged'))
+    else if (code === 'storage-price-unavailable') setError(t('community.storagePurchase.priceUnavailable'))
+    else if (code === 'storage-purchase-unavailable') setError(t('community.storagePurchase.unavailable'))
+    else if (code === 'storage-account-changed') setError(t('community.storagePurchase.accountChanged'))
+    else setError(result.error?.message ?? t('community.error.unknown'))
+  }
+
+  return (
+    <div style={S.overlay} role="dialog" aria-modal="true">
+      <div
+        style={{
+          ...S.card,
+          width: 'min(430px, 94vw)',
+          maxHeight: '88vh',
+          overflow: 'auto',
+          background: 'var(--dsw-alias-bg-layer-1)',
+        }}
+      >
+        <div style={S.cardHead}>
+          {t('community.storagePurchase.title')}
+          <span style={{ flex: '1 1 auto' }} />
+          {storage ? (
+            <Badge tone="neutral">
+              {t('community.dash.storageSub', {
+                used: formatBytes(storage.usedBytes),
+                total: formatBytes(storage.capacityBytes),
+              })}
+            </Badge>
+          ) : null}
+        </div>
+        <div style={{ ...S.cardBody, gap: 9 }}>
+          {receipt ? (
+            <div style={S.hint}>
+              {t('community.storagePurchase.receipt', {
+                gb: receipt.purchasedGb,
+                total: formatBytes(receipt.capacityBytes),
+                cost: receipt.cost,
+              })}
+            </div>
+          ) : (
+            <>
+              {account.email ? <div style={S.hint}>{account.email}</div> : null}
+              <div style={S.inlineRow}>
+                <span style={S.label}>{t('community.storagePurchase.amount')}</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={10_000}
+                  step={1}
+                  value={amount}
+                  disabled={submitting || pending !== null}
+                  onChange={(e) => {
+                    setAmount(e.target.value)
+                    setError(null)
+                  }}
+                  style={{ ...S.compactInput, width: 96, flex: '0 0 auto' }}
+                />
+              </div>
+              {cost !== null && storage && pending === null ? (
+                <div style={S.hint}>
+                  {t('community.storagePurchase.quote', {
+                    total: formatBytes(storage.capacityBytes + extraBytes),
+                    cost,
+                  })}
+                  {balance === null ? '' : ` · ${t('community.storagePurchase.balance', { balance })}`}
+                </div>
+              ) : null}
+              {cost !== null && pending !== null && !expired ? (
+                <div style={S.hint}>{t('community.storagePurchase.retryCost', { cost })}</div>
+              ) : null}
+              {bytesPerToken <= 0 && !error ? (
+                <div style={S.hint}>{t('community.storagePurchase.priceUnavailable')}</div>
+              ) : null}
+              {expired || error || pending || insufficient ? (
+                <div
+                  style={{
+                    fontSize: 11.5,
+                    lineHeight: 1.6,
+                    color: 'var(--dsw-alias-state-error-primary)',
+                  }}
+                >
+                  {expired
+                    ? t('community.storagePurchase.retryExpired')
+                    : error ??
+                      t(
+                        pending
+                          ? 'community.storagePurchase.unconfirmed'
+                          : 'community.storagePurchase.insufficient',
+                      )}
+                </div>
+              ) : null}
+            </>
+          )}
+          <div style={S.footer}>
+            <span style={{ flex: '1 1 auto' }} />
+            <button type="button" style={S.ghostBtn} disabled={submitting} onClick={onClose}>
+              {t(receipt ? 'community.action.close' : 'community.action.cancel')}
+            </button>
+            {expired ? (
+              <button
+                type="button"
+                style={S.ghostBtn}
+                onClick={() => {
+                  saveStoragePurchase(key, null)
+                  setPending(null)
+                  setAmount('')
+                  setError(null)
+                  onRefresh()
+                }}
+              >
+                {t('community.storagePurchase.startNew')}
+              </button>
+            ) : receipt === null ? (
+              <button
+                type="button"
+                style={{ ...S.primaryBtn, opacity: canSubmit ? 1 : 0.55 }}
+                disabled={!canSubmit}
+                onClick={() => void submit()}
+              >
+                {t(
+                  submitting
+                    ? 'community.storagePurchase.buying'
+                    : pending
+                      ? 'community.storagePurchase.retry'
+                      : 'community.storagePurchase.confirm',
+                )}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * **退出登录的确认框**（v0.7.3）。
+ *
+ * 为什么要有它：账号行上那个 ⏏ 是**图标按钮**（为了不把账号行撑宽），一眼看不出
+ * "点下去会发生什么"；而登出会清掉凭据、当前服务器的会话立刻结束 —— 误触之后
+ * 用户得重新贴一次 API Key。所以动作拆成两步：点 ⏏ 只开这个框，只有【退出登录】
+ * 才真的发 `account/logout`。
+ *
+ * ⚠️ 无 hook（状态在 `CommunityTab` 里）：离线自检把它当普通函数渲染，才能断言
+ * "取消 / 确认两个按钮都在，且文案走 i18n"。
+ */
+export function SignOutConfirmDialog({
+  t,
+  email,
+  serverUrl,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  t: Translate
+  /** 当前账号（一眼确认"退的是哪一个"）。 */
+  email: string | null
+  serverUrl: string
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}): JSX.Element {
+  return (
+    <div style={S.overlay} role="dialog" aria-modal="true">
+      <div style={{ ...S.card, width: 'min(400px, 94vw)', background: 'var(--dsw-alias-bg-layer-1)' }}>
+        <div style={S.cardHead}>
+          {t('community.signOut.title')}
+          <span style={{ flex: '1 1 auto' }} />
+        </div>
+        <div style={{ ...S.cardBody, gap: 9 }}>
+          {/* 一行说清"退的是哪个账号 / 哪台服务器"—— 用户不可能为这个去翻设置 */}
+          <div style={S.listTitle}>{email ?? t('community.signOut.unknownAccount')}</div>
+          <div style={S.hint}>{t('community.signOut.body')}</div>
+          {serverUrl ? <div style={{ ...S.hint, wordBreak: 'break-all' }}>{serverUrl}</div> : null}
+          <div style={S.footer}>
+            <span style={{ flex: '1 1 auto' }} />
+            <button type="button" style={S.ghostBtn} disabled={busy} onClick={onCancel}>
+              {t('community.action.cancel')}
+            </button>
+            <button
+              type="button"
+              style={{ ...S.primaryBtn, opacity: busy ? 0.55 : 1 }}
+              disabled={busy}
+              onClick={onConfirm}
+            >
+              {busy ? t('community.signOut.busy') : t('community.signOut.confirm')}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -5110,6 +5535,7 @@ function UploadDialog({
   onToggleExpand,
   onExpandTruncated,
   onUpload,
+  onCancelUpload,
   onClose,
 }: {
   t: Translate
@@ -5143,6 +5569,8 @@ function UploadDialog({
   /** 二次确认展开某个分类（父级带上 `expand` 重取计划）。 */
   onExpandTruncated: (categoryId: string) => void
   onUpload: () => void
+  /** 【取消上传】：后台上传任务还在跑、且服务器允许取消时才给。 */
+  onCancelUpload?: (() => void) | undefined
   onClose: () => void
 }): JSX.Element {
   const chosen = workspaces?.find((w) => w.id === workspaceId) ?? null
@@ -5251,8 +5679,18 @@ function UploadDialog({
             </div>
           ) : null}
 
-          {/* 上传中：真实进度（宿主按批上报；慢链路下界面必须动） */}
+          {/* 上传中：真实进度（宿主按批上报；慢链路下界面必须动）+ 能取消 */}
           <TransferProgress t={t} busy={busy} progress={progress} />
+          {onCancelUpload && busy ? (
+            <button
+              type="button"
+              style={{ ...S.linkBtn, alignSelf: 'flex-start', paddingLeft: 0 }}
+              title={t('community.upload.cancelTip')}
+              onClick={onCancelUpload}
+            >
+              {t('community.upload.cancel')}
+            </button>
+          ) : null}
 
           {notice ? (
             <div
@@ -5534,6 +5972,12 @@ export function CommunityTab({
    */
   const [usage, setUsage] = React.useState<HostUsage | null>(null)
   const [usagePhase, setUsagePhase] = React.useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle')
+  /** `account/usage` 的请求代次（只认最后一次回包）。 */
+  const usageRequest = React.useRef(0)
+  /** `account/tokens` 的请求代次（同上）。 */
+  const balanceRequest = React.useRef(0)
+  /** 购买存储空间对话框的 scope（`[服务器, 账号]`；非空且等于当前 scope = 开着）。 */
+  const [storagePurchaseScope, setStoragePurchaseScope] = React.useState<string | null>(null)
   /** 宿主是旧的（没有 `account/usage` → unknown-endpoint）：要把"需重启"说出来。 */
   const [usageStaleHost, setUsageStaleHost] = React.useState(false)
   const [serverDraft, setServerDraft] = React.useState(initial?.serverUrl ?? '')
@@ -5974,6 +6418,16 @@ export function CommunityTab({
    */
   const activeServer = state?.serverUrl ?? ''
   /**
+   * **账号 scope**（服务器 + 账号）：仪表板读数与"购买存储空间"都按它作废 / 校验。
+   *
+   * 为什么不是只看账号：同一台服务器上换账号、或同一个账号换服务器，看到的配额都不是
+   * 同一份；而幂等键（购买）必须绑到**具体的那台服务器 + 那个账号**上，否则重试会打到
+   * 另一处的服务器上。
+   */
+  const accountScope = JSON.stringify([activeServer, account?.id ?? null])
+  const currentAccountScope = React.useRef(accountScope)
+  currentAccountScope.current = accountScope
+  /**
    * 能否用【可指导】视图。
    *
    * 由**服务器给的角色**决定（`MENTOR`；`ADMIN` 一并放行，否则管理员无法自查这一页）。
@@ -6404,6 +6858,91 @@ export function CommunityTab({
     })
   }
 
+  /* ── 后台上传任务（v0.7.3 / 协议 34）─────────────────────────────────────
+   *
+   * 宿主的 `upload/start` **立即返回**、真正的活在后台跑；界面每秒问 `upload/status`。
+   * 这样用户能看到进度、能【取消上传】、关掉对话框也不会丢状态。
+   *
+   * ⚠️ 旧宿主没有这三个端点（`unknown-endpoint`）→ `waitForUpload` 回 `null`，
+   * 调用方退回"阻塞 post + 每秒问 `mentor/uploadProgress`"的老路 —— 行为与今天一致。
+   */
+  type UploadTask = {
+    progress: HostUploadProgress
+    result: Awaited<ReturnType<typeof post>> | null
+    cancelling: boolean
+    canCancel: boolean
+    /** 服务器上有一个**本机没有**的未完成作业（宿主重启过 / 换过机器）。 */
+    orphaned?: boolean
+  }
+  const [uploadTasks, setUploadTasks] = React.useState<Record<string, UploadTask | null>>({})
+  /** 正在 `waitForUpload` 里等结果的 scope（避免同一笔被重复等待）。 */
+  const uploadWaiters = React.useRef(new Set<string>())
+  const uploadScope = (kind: 'mentor' | 'publish', id: string): string => `${kind}:${id}`
+  const uploadTarget = (kind: 'mentor' | 'publish', id: string): Record<string, unknown> =>
+    kind === 'mentor' ? { kind, projectId: id } : { kind, id }
+
+  /** 等一次后台上传的终点结果；宿主不支持作业时回 `null`（调用方走老路）。 */
+  const waitForUpload = async (
+    kind: 'mentor' | 'publish',
+    id: string,
+    payload: Record<string, unknown>,
+  ): Promise<Awaited<ReturnType<typeof post>> | null> => {
+    const scope = uploadScope(kind, id)
+    const target = uploadTarget(kind, id)
+    const intent = newIntentKey()
+    const start = () => post('upload/start', { ...payload, ...target, intent })
+    let res = await start()
+    if (!res.ok && res.error?.code === 'unknown-endpoint') return null
+    uploadWaiters.current.add(scope)
+    try {
+      for (;;) {
+        if (res.ok) {
+          const task = res.value as UploadTask | null
+          if (task) {
+            setUploadTasks((prev) => ({ ...prev, [scope]: task }))
+            if (task.result && !task.cancelling) return task.result
+          }
+        } else if (res.error?.code !== 'transport') {
+          // 非传输类失败（参数 / 未登录 / 服务器拒绝）：直接交回调用方，别无限轮询
+          return res
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+        res = await post('upload/status', target)
+      }
+    } finally {
+      uploadWaiters.current.delete(scope)
+    }
+  }
+
+  /** 【取消上传】：宿主中断本地动作并 `DELETE` 服务器作业（已暂存的部分会被清掉）。 */
+  const cancelUpload = async (kind: 'mentor' | 'publish', id: string): Promise<void> => {
+    const scope = uploadScope(kind, id)
+    const target = uploadTarget(kind, id)
+    let res = await post('upload/cancel', target)
+    // 取消要等宿主把远端清完：`cancelling` 转 false 才算落地
+    for (let attempt = 0; attempt < 120 && res.ok; attempt += 1) {
+      const task = res.value as UploadTask | null
+      if (task) setUploadTasks((prev) => ({ ...prev, [scope]: task }))
+      if (!task?.cancelling) break
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      res = await post('upload/status', target)
+    }
+    if (!res.ok) {
+      setMentorNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
+    }
+  }
+
+  /** 打开对话框时先看一眼有没有**正在跑 / 服务器上遗留**的上传（否则用户以为没在传）。 */
+  const refreshUploadTask = async (kind: 'mentor' | 'publish', id: string): Promise<UploadTask | null> => {
+    const scope = uploadScope(kind, id)
+    if (uploadWaiters.current.has(scope)) return null
+    const res = await post('upload/status', uploadTarget(kind, id))
+    if (!res.ok) return null
+    const task = res.value as UploadTask | null
+    setUploadTasks((prev) => ({ ...prev, [scope]: task }))
+    return task
+  }
+
   /**
    * 回传：把勾选的文件交给宿主（算摘要 → 与服务器比对 → **只传变化的** → 分批上传）。
    *
@@ -6417,6 +6956,27 @@ export function CommunityTab({
     setExchangeBusy(true)
     setExchangeNotice(null)
     setUploadProgress(null)
+    /*
+     * 先走**后台作业**（新宿主）：立即返回，界面能看进度、能取消。
+     * 旧宿主没有 `upload/*` → `null` → 下面的老路（阻塞 post + 每秒问进度）。
+     */
+    const taskResult = await waitForUpload('mentor', target.projectId, {
+      projectId: target.projectId,
+      workspaceId: uploadWorkspaceId,
+      paths: Array.from(uploadSelected),
+      source: viewOf(target).mySide,
+      ...(uploadPlanExpanded.length > 0 ? { expand: uploadPlanExpanded } : {}),
+    })
+    if (taskResult !== null) {
+      setExchangeBusy(false)
+      const res = taskResult
+      if (!res.ok) {
+        setExchangeNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
+        return
+      }
+      void finishUpload(res)
+      return
+    }
     let timer: ReturnType<typeof setInterval> | undefined
     const stopPoll = (): void => {
       if (timer !== undefined) clearInterval(timer)
@@ -6450,7 +7010,12 @@ export function CommunityTab({
       setExchangeNotice({ tone: 'error', text: res.error?.message ?? t('community.error.unknown') })
       return
     }
-    const v = res.value as {
+    void finishUpload(res)
+  }
+
+  /** 回传成功后的回执 + 关窗 + 重读提案（两条上传路径共用）。 */
+  const finishUpload = async (res: Awaited<ReturnType<typeof post>>): Promise<void> => {
+    const v = (res.value ?? {}) as {
       selected?: number
       uploaded?: number
       uploadedBytes?: number
@@ -6472,6 +7037,24 @@ export function CommunityTab({
     // 刷新提案：["导师已指导"] 那行进展由服务器的 review 计数决定，传完要重读
     await loadProposals()
   }
+
+  /** 发布对话框打开时：看一眼这项研究有没有正在跑 / 服务器上遗留的上传任务。 */
+  React.useEffect(() => {
+    const workId = dialog?.work.id
+    if (!workId) return
+    void refreshUploadTask('publish', workId).then((task) => {
+      if (task?.orphaned) setDialogNotice(t('community.upload.orphaned'))
+    })
+  }, [dialog?.work.id, t])
+
+  /** 回传对话框打开时：同上（导师回传的 id 是服务器项目 id，能直接问服务器）。 */
+  React.useEffect(() => {
+    const projectId = exchange?.mode === 'upload' ? exchange.proposal.projectId : undefined
+    if (!projectId) return
+    void refreshUploadTask('mentor', projectId).then((task) => {
+      if (task?.orphaned) setExchangeNotice({ tone: 'error', text: t('community.upload.orphaned') })
+    })
+  }, [exchange?.mode, exchange?.proposal.projectId, t])
 
   /**
    * 点【下载】：让用户**选一个 DSH 工作区**，把 ZIP 存进去（2026-09 用户要求）。
@@ -6968,24 +7551,34 @@ export function CommunityTab({
       if (publishTimer !== undefined) clearInterval(publishTimer)
       publishTimer = undefined
     }
-    publishTimer = setInterval(() => {
-        if (isOtherModalOpen('publish')) return
-      void post('mentor/uploadProgress', { projectId: w.id }).then((p) => {
-        if (!p.ok) return
-        const v = p.value as HostUploadProgress | undefined
-        if (v && typeof v.doneFiles === 'number') setPublishProgress(v)
-      })
-    }, 1000)
+    const payload = {
+      id: w.id,
+      direction,
+      selection,
+      remember,
+      ...(askingFee !== undefined ? { askingFee } : {}),
+      ...(expand.length > 0 ? { expand } : {}),
+    }
     let res: Awaited<ReturnType<typeof post>>
     try {
-      res = await post('work/publish', {
-        id: w.id,
-        direction,
-        selection,
-        remember,
-        ...(askingFee !== undefined ? { askingFee } : {}),
-        ...(expand.length > 0 ? { expand } : {}),
-      })
+      /*
+       * 先走**后台作业**（新宿主）：`upload/start` 立即返回，界面能看进度、能取消。
+       * 旧宿主没有 `upload/*` → `null` → 退回阻塞的 `work/publish`（行为与今天一致）。
+       */
+      const taskResult = await waitForUpload('publish', w.id, payload)
+      if (taskResult !== null) {
+        res = taskResult
+      } else {
+        publishTimer = setInterval(() => {
+          if (isOtherModalOpen('publish')) return
+          void post('mentor/uploadProgress', { projectId: w.id }).then((p) => {
+            if (!p.ok) return
+            const v = p.value as HostUploadProgress | undefined
+            if (v && typeof v.doneFiles === 'number') setPublishProgress(v)
+          })
+        }, 1000)
+        res = await post('work/publish', payload)
+      }
     } finally {
       stopPublishPoll()
     }
@@ -7302,6 +7895,9 @@ export function CommunityTab({
     if (next) setInvite({ code: '', email: '', displayName: '' })
   }
 
+  /** 退出登录的确认框（点 ⏏ 只开框，**不**直接登出）。 */
+  const [signOutOpen, setSignOutOpen] = React.useState(false)
+
   const logout = async (): Promise<void> => {
     setBusy(true)
     await call('account/logout', {})
@@ -7324,10 +7920,18 @@ export function CommunityTab({
    * （2026-09 余额那次的口径）。`usagePhase` 只用来区分"还在读"与"读不到"，
    * 数字本身保持原样 —— 而 `null`（服务器真的没给）则如实显示"未知"。
    */
-  const loadUsage = React.useCallback(async (): Promise<void> => {
+  const loadUsage = React.useCallback(async (keepLast = false): Promise<void> => {
+    /*
+     * ⚠️ 两个护栏，缺一个都会显示**别的账号的数字**（最难发现的一类假信息）：
+     *   ① 请求代次：连点两下 / 网络慢时，先发的回包后到会把新数字盖回旧的；
+     *   ② 账号 scope：换账号 / 换服务器之后，上一个账号的回包不许再落地。
+     */
+    const scope = currentAccountScope.current
+    const request = ++usageRequest.current
     setUsagePhase('loading')
     setUsageStaleHost(false)
     const res = await post('account/usage', {})
+    if (scope !== currentAccountScope.current || request !== usageRequest.current) return
     if (!res.ok) {
       setUsagePhase('unavailable')
       // 旧宿主没有这个端点 → 说清"需重启"，而不是让这一块永远空着（协议 v27）
@@ -7335,7 +7939,8 @@ export function CommunityTab({
       return
     }
     const next = (res.value as { usage: HostUsage | null }).usage ?? null
-    setUsage(next)
+    // `keepLast`：买完存储后刷新一次，读不到时**保留**刚买到的新容量（不清成"未知"）
+    if (next || !keepLast) setUsage(next)
     setUsagePhase(next ? 'ready' : 'unavailable')
   }, [post])
 
@@ -7346,6 +7951,7 @@ export function CommunityTab({
    * 显示**上一个账号**的配额 —— 那是最难发现的一类假信息。
    */
   React.useEffect(() => {
+    setStoragePurchaseScope(null)
     setUsage(null)
     setUsagePhase('idle')
     setUsageStaleHost(false)
@@ -7365,10 +7971,13 @@ export function CommunityTab({
    * 刷新失败**不清空**已有数字（拿不到 ≠ 变 0）。
    */
   const refreshBalance = async (): Promise<number | null> => {
+    const scope = currentAccountScope.current
+    const request = ++balanceRequest.current
     setRefreshingBalance(true)
     const res = await post('account/tokens', {})
+    if (request !== balanceRequest.current) return null
     setRefreshingBalance(false)
-    if (!res.ok) return null
+    if (!res.ok || scope !== currentAccountScope.current) return null
     const tokens = (res.value as { tokens: HostAccountState['tokens'] }).tokens
     if (!tokens) return null
     setState((prev) => (prev ? { ...prev, tokens } : prev))
@@ -7506,6 +8115,9 @@ export function CommunityTab({
    */
   const tokens = state?.tokens ?? null
   const storage = usage?.storage ?? null
+  /** 后台上传任务（发布 / 回传各一个 scope）：进度条与【取消上传】都从它来。 */
+  const publishTask = uploadTasks[uploadScope('publish', dialog?.work.id ?? '')] ?? null
+  const uploadTask = uploadTasks[uploadScope('mentor', exchange?.proposal.projectId ?? '')] ?? null
   /** 可用 / 合计：没有余额或合计为 0 时是 0（不是"满"）。 */
   const tokenFraction = tokens && tokens.total > 0 ? tokens.available / tokens.total : 0
   /** 已用 / 容量：容量未知（0）时画不出比例。 */
@@ -7679,7 +8291,7 @@ export function CommunityTab({
                     // 凭据来自环境变量时无法在界面里清除 —— 悬浮说明说出原因
                     title={fromEnv ? t('community.tip.envKey') : t('community.action.signOut')}
                     aria-label={t('community.action.signOut')}
-                    onClick={() => void logout()}
+                    onClick={() => setSignOutOpen(true)}
                   >
                     ⏏
                   </button>
@@ -7732,6 +8344,21 @@ export function CommunityTab({
                             total: formatBytes(storage.capacityBytes),
                           })
                         : t('community.dash.unknown')
+                    }
+                    action={
+                      <button
+                        type="button"
+                        style={{ ...S.linkBtn, alignSelf: 'flex-start', paddingLeft: 0 }}
+                        disabled={busy}
+                        onClick={() => {
+                          setStoragePurchaseScope(accountScope)
+                          // 报价要用**最新**的单价与容量：没读到就先读一次，余额也顺手刷新
+                          if (!storage) void loadUsage()
+                          void refreshBalance()
+                        }}
+                      >
+                        {t('community.storagePurchase.open')}
+                      </button>
                     }
                   />
                   <DashTile
@@ -8027,8 +8654,17 @@ export function CommunityTab({
             selection={dialog.selection}
             remember={dialog.remember}
             expanded={dialog.expanded}
-            busy={publishing !== null}
-            progress={publishProgress}
+            busy={
+              publishing !== null ||
+              Boolean(publishTask?.progress.running) ||
+              Boolean(publishTask?.cancelling)
+            }
+            progress={publishTask?.progress ?? publishProgress}
+            onCancelUpload={
+              dialog && publishTask?.canCancel
+                ? () => void cancelUpload('publish', dialog.work.id)
+                : undefined
+            }
             notice={dialogNotice}
             onToggleFiles={(relPaths, next) =>
               setDialog((d) => {
@@ -8264,8 +8900,17 @@ export function CommunityTab({
             planLoading={uploadPlanLoading}
             selection={uploadSelected}
             expanded={uploadExpanded}
-            busy={exchangeBusy}
-            progress={uploadProgress}
+            busy={
+              exchangeBusy ||
+              Boolean(uploadTask?.progress.running) ||
+              Boolean(uploadTask?.cancelling)
+            }
+            progress={uploadTask?.progress ?? uploadProgress}
+            onCancelUpload={
+              exchange && uploadTask?.canCancel
+                ? () => void cancelUpload('mentor', exchange.proposal.projectId)
+                : undefined
+            }
             notice={exchangeNotice}
             expandingCategory={uploadTruncatedBusy}
             iAmMentor={viewOf(exchange.proposal).myRole === 'mentor'}
@@ -8316,6 +8961,73 @@ export function CommunityTab({
        * 明细 + 续费说明 + 申请续费。刷新按钮同时重读**余额**与**申请记录**：
        * 管理员在服务器上批准之后，用户点一下就能看到余额变了、申请变成 APPROVED。
        */}
+      {/* ══ 退出登录确认（点账号行的 ⏏）════════════════════════════════════ */}
+      {signOutOpen ? (
+        <ModalBoundary id="signout">
+          <SignOutConfirmDialog
+            t={t}
+            email={account?.email ?? null}
+            serverUrl={activeServer}
+            busy={busy}
+            onCancel={() => setSignOutOpen(false)}
+            onConfirm={() => {
+              // 先关框再发请求：这里**不**留一个"点了没反应"的中间态（busy 挂在按钮上）
+              void logout().finally(() => setSignOutOpen(false))
+            }}
+          />
+        </ModalBoundary>
+      ) : null}
+
+      {/* ══ 购买存储空间（点仪表板"存储空间"格子里的【购买空间】）══════════ */}
+      {account && storagePurchaseScope === accountScope ? (
+        <ModalBoundary id="storage-purchase">
+          <StoragePurchaseDialog
+            key={accountScope}
+            t={t}
+            account={account}
+            serverUrl={activeServer}
+            storage={storage}
+            balance={tokens?.available ?? null}
+            onPurchase={(gb, bytesPerToken, intentKey) =>
+              post('account/storage-purchase', {
+                gb,
+                bytesPerToken,
+                intentKey,
+                accountId: account.id,
+                serverUrl: activeServer,
+              })
+            }
+            onPurchased={(receipt) => {
+              if (currentAccountScope.current !== accountScope) return
+              /*
+               * 就地更新**买完后的总容量**（服务器回执里给的就是总数，不是增量），
+               * 再保留旧值刷新一次：刷新失败也不至于把刚买到的容量变回"未知"。
+               */
+              setUsage((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      storage: {
+                        ...prev.storage,
+                        capacityBytes: receipt.capacityBytes,
+                        availableBytes: Math.max(0, receipt.capacityBytes - prev.storage.usedBytes),
+                      },
+                    }
+                  : prev,
+              )
+              void loadUsage(true)
+              void refreshBalance()
+            }}
+            onRefresh={() => {
+              if (currentAccountScope.current !== accountScope) return
+              void loadUsage()
+              void refreshBalance()
+            }}
+            onClose={() => setStoragePurchaseScope(null)}
+          />
+        </ModalBoundary>
+      ) : null}
+
       {tokenDialog ? (
         <ModalBoundary id="tokens">
           <TokenDialog

@@ -201,6 +201,28 @@ export interface HostAccountState {
     } | null;
 }
 /**
+ * 用量与配额（宿主 `account/usage` 的镜像，服务器 `GET /usage`）。
+ *
+ * 【账号】卡片的**仪表板**用它画"存储空间 / 已发布项目"两块小图。
+ * ⚠️ 它是**尽力而为**的一份数据：读不到时宿主给 `null`（**不是** 0）——
+ * 界面据实显示"未知"，不把"读不到"画成"还剩 0 字节"。
+ */
+interface HostUsage {
+    /** 下一个项目发布要花的 Token。 */
+    nextPublishCost: number;
+    /** 已付费（曾经发布过）的项目数。 */
+    paidProjects: number;
+    /** 项目层级（阶梯号）。 */
+    tier: number;
+    storage: {
+        usedBytes: number;
+        capacityBytes: number;
+        availableBytes: number;
+        /** 每 N 字节 1 Token（扩容单价的分母）。 */
+        bytesPerToken: number;
+    };
+}
+/**
  * 一条续费申请（宿主 `account/recharge-requests` 的镜像）。
  *
  * `PENDING` = 等管理员处理；`APPROVED` = 已发放（`grantTxId` 指向账本那条 `GRANT`）；
@@ -679,7 +701,7 @@ export declare function PriceGuideRow({ t, direction, guide, options, mode, toke
 }): JSX.Element;
 export declare function PublishDialog({ t, data, selection, remember, expanded, busy, progress, 
 /** 对话框内的失败提示（`null` = 没有）：展开重取计划失败时不能只写到列表页去。 */
-notice, onToggleFiles, onToggleExpand, expandingCategory, onExpandTruncated, onRemember, priceMode, priceTokens, priceText, firstPublish, onSelectPricePreset, onSelectPriceCustom, onPriceText, onCancel, onConfirm, }: {
+notice, onToggleFiles, onToggleExpand, expandingCategory, onExpandTruncated, onRemember, priceMode, priceTokens, priceText, firstPublish, onSelectPricePreset, onSelectPriceCustom, onPriceText, onCancel, onCancelUpload, onConfirm, }: {
     t: Translate;
     data: HostUploadPlan;
     selection: ReadonlySet<string>;
@@ -697,6 +719,8 @@ notice, onToggleFiles, onToggleExpand, expandingCategory, onExpandTruncated, onR
     /** 二次确认展开某个分类（父级带上 `expand` 重取计划）。 */
     onExpandTruncated: (categoryId: string) => void;
     onRemember: (next: boolean) => void;
+    /** 【取消上传】：只有后台上传任务还在跑、且服务器允许取消时才给。 */
+    onCancelUpload?: (() => void) | undefined;
     /**
      * 这是**首次发布**吗（该方向在网络上还没有项目）。
      *
@@ -763,6 +787,84 @@ export declare function AcceptConfirmDialog({ t, proposal, party, partyIsMentor,
     funded: number | null;
     /** 赠送额度（只能买自营服务）；旧宿主 → `null`。 */
     grant: number | null;
+    onCancel: () => void;
+    onConfirm: () => void;
+}): JSX.Element;
+/** 待完成购买在浏览器里的键：**按服务器 + 账号**分开，切号不会拿错订单。 */
+export declare function storagePurchaseKey(serverUrl: string, accountId: string): string;
+/**
+ * 这一笔报价多少 Token（`ceil(GB · 2³⁰ / bytesPerToken)`）。
+ *
+ * 与服务器同一个口径（`QuotaService`：`cost = ceil(bytes / STORAGE_BYTES_PER_TOKEN)`）。
+ * 拿不到单价 / 金额非法 → `null`（界面不许编一个价出来）。
+ */
+export declare function storagePurchaseQuote(gb: number, bytesPerToken: number): number | null;
+/**
+ * 这次失败要不要**留着幂等键**（能原地重试同一笔）。
+ *
+ * | 失败 | 留键？ | 为什么 |
+ * |---|---|---|
+ * | 结果未知（网络 / 5xx / `storage-purchase-unconfirmed` / 无码） | **留** | 钱可能已经扣了，重试必须复用同一笔 |
+ * | 余额不足 / 单价变 / 取值失败 / 旧服务器 / 账号变了 / 参数错 | 不留 | 一分钱没动，重新走一遍确认流程 |
+ */
+export declare function storagePurchaseIntent(code: string | undefined): 'keep' | 'drop';
+/**
+ * **购买存储空间**对话框。
+ *
+ * 与 `TokenDialog` 同一种形态（背板 + 卡片 + 底部按钮），由 `CommunityTab` 挂载；
+ * 打开期间由 `./modal-boundary.js` 登记成"弹窗开着"，后台轮询不会把它冲掉。
+ */
+export declare function StoragePurchaseDialog({ t, account, serverUrl, storage, balance, onPurchase, onPurchased, onRefresh, onClose, }: {
+    t: Translate;
+    /** 当前账号（`id` 用来定位幂等键与二次核对，`email` 用来让用户确认"给谁买"）。 */
+    account: {
+        id: string;
+        email?: string | undefined;
+    };
+    serverUrl: string;
+    storage: HostUsage['storage'] | null;
+    /** 可用 Token（`null` = 还没读到：此时不拦，等宿主去核）。 */
+    balance: number | null;
+    /**
+     * 真正去扣钱的那一下（**由 `CommunityTab` 注入**）。
+     *
+     * ⚠️ 对话框自己**不发请求**（与 `BriefConfirmDialog` / `TokenDialog` 同一条规矩）：
+     * 端点、账号、服务器地址都留在外面，这里只负责把"买几 GB、按什么单价、用哪个幂等键"
+     * 说清楚。所以这一段完全可以被离线渲染验证，而不会偷偷碰网络。
+     */
+    onPurchase: (gb: number, bytesPerToken: number, intentKey: string) => Promise<{
+        ok: boolean;
+        value?: unknown;
+        error?: {
+            code: string;
+            message: string;
+        };
+    }>;
+    onPurchased: (receipt: {
+        purchasedGb: number;
+        capacityBytes: number;
+        cost: number;
+    }) => void;
+    onRefresh: () => void;
+    onClose: () => void;
+}): JSX.Element;
+/**
+ * **退出登录的确认框**（v0.7.3）。
+ *
+ * 为什么要有它：账号行上那个 ⏏ 是**图标按钮**（为了不把账号行撑宽），一眼看不出
+ * "点下去会发生什么"；而登出会清掉凭据、当前服务器的会话立刻结束 —— 误触之后
+ * 用户得重新贴一次 API Key。所以动作拆成两步：点 ⏏ 只开这个框，只有【退出登录】
+ * 才真的发 `account/logout`。
+ *
+ * ⚠️ 无 hook（状态在 `CommunityTab` 里）：离线自检把它当普通函数渲染，才能断言
+ * "取消 / 确认两个按钮都在，且文案走 i18n"。
+ */
+export declare function SignOutConfirmDialog({ t, email, serverUrl, busy, onCancel, onConfirm, }: {
+    t: Translate;
+    /** 当前账号（一眼确认"退的是哪一个"）。 */
+    email: string | null;
+    serverUrl: string;
+    busy: boolean;
     onCancel: () => void;
     onConfirm: () => void;
 }): JSX.Element;

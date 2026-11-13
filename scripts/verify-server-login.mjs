@@ -1357,6 +1357,126 @@ section('[6c3] 用量与配额（account/usage）')
  * Token）。这里钉住三件事：请求体正确（snake_case）、鉴权带头、**失败有话可说**。
  * ⚠️ 服务器 `submit` 不幂等 → 防重复是**客户端**的责任（先 list 再决定给不给入口）。
  * ════════════════════════════════════════════════════════════════════════ */
+section('[6c4] 购买存储空间（account/storage-purchase，协议 34）')
+{
+  /*
+   * 这是这一层里**第二个"点一下就花钱"**的入口（第一个是读简报）。纪律相同：
+   * 界面先报价 → 宿主**再核一遍价与账号** → 才扣钱；结果未知时留着幂等键给用户重试。
+   *
+   * 每个错误码对应一个**不同的动作**（重新报价 / 重新登录 / 稍后再试 / 升级服务器），
+   * 并成一个"失败了"就等于把这些动作全丢了。
+   */
+  const GB = 1024 * 1024 * 1024
+  const BYTES_PER_TOKEN = GB
+  const usageBody = (bytesPerToken) => ({
+    status: 200,
+    body: {
+      projects: { next_publish_cost: 1, paid_alive: 0, tier: 1 },
+      storage: { used_bytes: 0, capacity_bytes: 5 * GB, available_bytes: 5 * GB, bytes_per_token: bytesPerToken },
+    },
+  })
+  const receipt = { purchased_gb: 10, cost: 10, capacity_bytes: 15 * GB, total_purchased_gb: 10 }
+  const buy = (over = {}) =>
+    makeHost({
+      config: { convfusionApiKey: KEY },
+      handler: async (call) => {
+        if (call.url.endsWith('/api/v1/auth/me')) return { status: 200, body: ME }
+        if (call.url.endsWith('/api/v1/usage')) return usageBody(BYTES_PER_TOKEN)
+        if (call.url.endsWith('/api/v1/tokens/storage/purchase')) {
+          return over.purchase ?? { status: 201, body: receipt }
+        }
+        return { status: 404, body: err('RESOURCE_NOT_FOUND', 'nope') }
+      },
+    })
+  // 宿主的"当前生效地址"（`makeHost` 用测试环境 → 开发槽）
+  const BASE_URL = CFG.resolveServerUrl(
+    CFG.resolveConfig({ customizationFile: 'x.json', customizationDir: '/tmp/cf-login-test', convfusionApiKey: KEY }),
+    TEST_ENV,
+  ).url
+  const args = (over = {}) => ({
+    gb: 10,
+    bytesPerToken: BYTES_PER_TOKEN,
+    accountId: ME.id,
+    intentKey: 'a5f1c8d6-6bb4-5980-0601-b15ca25a0e6d',
+    serverUrl: BASE_URL,
+    ...over,
+  })
+
+  // ① 成功：单价与账号都核过 → 才 POST；幂等键原样递出去
+  const h = buy()
+  const res = await h.handler('account/storage-purchase', args())
+  assert(res.ok, 'account/storage-purchase 可用')
+  assertEq(res.value.purchasedGb, 10, '带出买到的 GB')
+  assertEq(res.value.cost, 10, '带出实际花费')
+  assertEq(res.value.capacityBytes, 15 * GB, '带出**买完后的总容量**（不是增量）')
+  const purchaseCall = h.calls.find((c) => c.url.endsWith('/tokens/storage/purchase'))
+  assert(purchaseCall !== undefined, '真的发了购买请求')
+  assertEq(purchaseCall.method, 'POST', '购买是 POST')
+  assertEq(purchaseCall.headers['idempotency-key'], args().intentKey, '幂等键原样递给服务器（重试不会买两笔）')
+  assertEq(JSON.parse(String(purchaseCall.body)), { gb: 10 }, '只发 gb（单价由服务器算）')
+  keyLeak(res.value, 'account/storage-purchase')
+
+  // ② 参数不合法：一次请求都不发
+  const zero = buy()
+  const bad = await zero.handler('account/storage-purchase', args({ gb: 0 }))
+  assertEq(bad.error?.code, 'bad-request', 'gb=0 → bad-request')
+  assertEq(zero.calls.length, 0, '参数不合法时**一个请求都不发**')
+  const badKey = await buy().handler('account/storage-purchase', args({ intentKey: 'bad key!' }))
+  assertEq(badKey.error?.code, 'bad-request', '幂等键形状不对 → bad-request')
+
+  // ③ 服务器/账号变了 → 不扣钱
+  const changed = buy()
+  const stale = await changed.handler('account/storage-purchase', args({ serverUrl: 'http://127.0.0.1:9100' }))
+  assertEq(stale.error?.code, 'storage-account-changed', '地址变了 → storage-account-changed')
+  assertEq(changed.calls.length, 0, '地址不匹配时一个请求都不发')
+  const otherAccount = buy()
+  const mismatched = await otherAccount.handler('account/storage-purchase', args({ accountId: 'another-account' }))
+  assertEq(mismatched.error?.code, 'storage-account-changed', '账号变了 → storage-account-changed')
+  assert(
+    otherAccount.calls.every((c) => !c.url.endsWith('/tokens/storage/purchase')),
+    '账号不匹配时不发购买请求',
+  )
+
+  // ④ 单价变了 / 读不到 → 不扣钱（先核对再扣）
+  const priceHost = makeHost({
+    config: { convfusionApiKey: KEY },
+    handler: async (call) => {
+      if (call.url.endsWith('/api/v1/auth/me')) return { status: 200, body: ME }
+      if (call.url.endsWith('/api/v1/usage')) return usageBody(2 * GB)
+      return { status: 201, body: receipt }
+    },
+  })
+  const priceRes = await priceHost.handler('account/storage-purchase', args())
+  assertEq(priceRes.error?.code, 'storage-price-changed', '单价变了 → storage-price-changed')
+  assert(
+    priceHost.calls.every((c) => !c.url.endsWith('/tokens/storage/purchase')),
+    '单价不一致时**不扣钱**',
+  )
+  const noPrice = makeHost({
+    config: { convfusionApiKey: KEY },
+    handler: async (call) => {
+      if (call.url.endsWith('/api/v1/auth/me')) return { status: 200, body: ME }
+      if (call.url.endsWith('/api/v1/usage')) return { status: 500, body: err('INTERNAL', 'boom') }
+      return { status: 201, body: receipt }
+    },
+  })
+  const noPriceRes = await noPrice.handler('account/storage-purchase', args())
+  assertEq(noPriceRes.error?.code, 'storage-price-unavailable', '读不到单价 → storage-price-unavailable')
+
+  // ⑤ 旧服务器（404）/ 5xx（结果未知）/ 402（余额不足）三种收尾
+  const oldServer = buy({ purchase: { status: 404, body: err('RESOURCE_NOT_FOUND', 'nope') } })
+  const old = await oldServer.handler('account/storage-purchase', args())
+  assertEq(old.error?.code, 'storage-purchase-unavailable', '旧服务器没有这个端点 → storage-purchase-unavailable')
+
+  const broken = buy({ purchase: { status: 500, body: err('INTERNAL', 'boom') } })
+  const brokenRes = await broken.handler('account/storage-purchase', args())
+  assertEq(brokenRes.error?.code, 'storage-purchase-unconfirmed', '5xx → storage-purchase-unconfirmed（结果未知，留键重试）')
+
+  const poor = buy({ purchase: { status: 402, body: err('INSUFFICIENT_TOKENS', 'no tokens', { required: 10, available: 3 }) } })
+  const poorRes = await poor.handler('account/storage-purchase', args())
+  assertEq(poorRes.error?.code, 'insufficient-tokens', '402 → insufficient-tokens（业务失败原样透传）')
+}
+
 section('[6c2] 续费申请：提交 + 查看自己的记录')
 {
   const REQ = {

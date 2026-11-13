@@ -548,6 +548,13 @@ export interface SettingsRpcDeps {
      * **不**编造"有更新"）。
      */
     syncStore?: SyncWatermarkStore;
+    /**
+     * 是否**优先**走分阶段上传（`v0.7.3`，服务器 `/projects/{id}/uploads`）。
+     *
+     * 缺省 `true`：真正的判据是"服务器支不支持"（`canUseStagedUploads()` 探一次并缓存），
+     * 这个字段只给测试用（关掉它就能验证"旧服务器 → 老路径"的回退分支）。
+     */
+    workspaceUploads?: boolean;
     /** 服务器请求超时（测试用小值）。 */
     serverTimeoutMs?: number;
     /**

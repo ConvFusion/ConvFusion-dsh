@@ -225,9 +225,20 @@
  *   起因是一个实测报障：`experiments/` 吃完配额后，界面既**不列**那些文件、也**不说**
  *   有多少 —— 于是"文件少了"和"扫描失败"看起来一样。旧宿主的两种错法：不认识 `expand`
  *   → 用户点了确认、计划却原样返回（看起来像按钮没反应）；不给 `bytes` → 确认框只能写
- *   "还有 N 个文件（0 B）"，等于让用户在黑盒里点"是"。所以升号，让设置页说清要先重启。
+ *   "还有 N 个文件（0 B）"，让用户在黑盒里点"是"。所以升号，让设置页说清要先重启。
+ *
+ * - `34`：**购买存储空间 + 可查询可取消的后台上传任务**（对齐 Codex 客户端的两笔改动）。
+ *   · 新增 **`account/storage-purchase`**（`{ gb, bytesPerToken, accountId, intentKey, serverUrl }`
+ *     → `{ purchasedGb, capacityBytes, cost }`）：界面先报价、宿主再核一遍价与账号，然后才扣钱；
+ *   · 新增 **`upload/start` / `upload/status` / `upload/cancel`**：一次发布 / 一次回传变成
+ *     **后台作业**（立即返回、按秒查询、可取消），真正的传输走服务器的分阶段上传
+ *     `/projects/{id}/uploads`（清单去重 → 只传缺的 → complete）；
+ *   · 服务器不支持分阶段上传时，作业壳里跑的仍是老路径（界面无感，只是不能取消远端）。
+ *   旧宿主没有这些端点：界面点【购买空间】只会 `unknown-endpoint`，上传则退回"阻塞 + 每秒问
+ *   `mentor/uploadProgress`"。两种错法都**看不见、说不清**（按钮像没反应 / 进度条不动），
+ *   所以升号，让设置页把"宿主需重启"说出来。
  */
-export const HOST_PROTOCOL = 33
+export const HOST_PROTOCOL = 34
 
 /** 状态响应里的协议字段名（两边共用，避免拼错）。 */
 export const HOST_PROTOCOL_FIELD = 'protocol'
