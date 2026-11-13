@@ -242,13 +242,15 @@ section('[5] 回传我这一份工作区（选工作区 → 清单 → 增量上
 
   /*
    * ⚠️ 两种用途的**刻意不对称**（有断言才不会被"顺手统一"改掉）：
-   *   · 学生发布（`publish`）：`review/` 排除；≥10 MB 的论文 PDF 降级为可选；
+   *   · 学生发布（`publish`）：`review/` **可选、默认不勾**（2026-11 用户改口径：本机自查
+   *     值得给对方看，从服务器下来的导师笔记传回去是回声 → 列出来、但默认不勾）；
+   *     ≥10 MB 的论文 PDF 降级为可选；
    *   · 导师回传（`mentor`）：`review/` 推荐；论文 PDF 不因体积降级 ——
    *     用户原话"要去除机器生成文件，但是要有自己撰写的论文 PDF"。
    */
   {
     const UP = await import(lib('research/upload-selection.js'))
-    assertEq(UP.classify('review/x.md', 100).decision, 'excluded', '发布侧把 review/ 排除')
+    assertEq(UP.classify('review/x.md', 100).decision, 'optional', '发布侧 review/ 是可选（列出来、默认不勾）')
     assertEq(UP.classify('review/x.md', 100, 'mentor').decision, 'recommended', '导师侧 review/ 推荐')
     assertEq(
       UP.classify('papers/p/paper.pdf', 12 * 1024 * 1024).decision,

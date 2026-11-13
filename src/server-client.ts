@@ -281,7 +281,7 @@ export interface WorkBrief {
  * | `not-found` | 404 不存在或不可见 | 刷新列表 |
  * | `idempotency-reused` | 409 同 Key 不同 payload | 客户端 bug（同一意图才能复用 Key） |
  * | `proposal-state` | 409 提案已不在可接受状态 / 项目已有生效关系 | 刷新列表（别人已处理，或已过期） |
- * | `path-reserved` | 403 导师越界写（只允许 `review/**`） | 把文件放进 `review/` 再传 |
+ * | `path-reserved` | 403 **仅旧服务器**：导师越界写（那个版本只允许 `review/**`） | 升级服务器；临时把文件放进 `review/` 再传 |
  */
 export type ServerErrorCode =
   | 'invalid-key'
@@ -603,12 +603,19 @@ function mapHttpError(status: number, body: unknown): ServerError {
         withCode,
       )
     }
-    // 导师越界写（非 review/ 路径）：**不是**"没权限"，而是"服务器只放开了 review/"。
-    // ⚠️ 必须排在 account-inactive 兜底之前 —— 否则会被误报成"账号被停用"。
+    /*
+     * 导师越界写（非 review/ 路径）：**只有旧服务器会这样**。
+     *
+     * 现在的服务器对有效研究关系的另一方**不限制路径**（任意相对路径，
+     * 落 `mentor` 侧，见 `ConvFusion-server` `docs/API.md` §13.1），这个错误码
+     * 只剩"这台服务器还是旧版本"这一种含义 —— 所以文案要说"升级服务器"，
+     * 不要把它讲成一条仍然生效的规则。
+     * ⚠️ 必须排在 account-inactive 兜底之前 —— 否则会被误报成"账号被停用"。
+     */
     if (serverCode === 'FILE_PATH_RESERVED') {
       return new ServerError(
         'path-reserved',
-        `当前服务器只允许导师写 ${MENTOR_REVIEW_PREFIX}/ 目录下的文件；回传整份工作区需要服务器放开这条限制（其余路径由学生本人维护）。`,
+        `这台服务器还是旧版本：只允许导师写 ${MENTOR_REVIEW_PREFIX}/ 目录下的文件。升级服务器后导师可以写任意路径（落在导师那一侧，与学生那一份同名并存）。`,
         { ...withCode, serverCode },
       )
     }

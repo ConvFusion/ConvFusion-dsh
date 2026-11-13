@@ -349,6 +349,7 @@ export declare const dictionaries: {
         'community.merge.refill': string;
         'community.merge.downloadFailedHint': string;
         'community.exchange.uploadTitle': string;
+        'community.exchange.uploadTitleMentor': string;
         'community.exchange.workspaceLabel': string;
         'community.exchange.workspacePlaceholder': string;
         'community.exchange.noSourceFiles': string;
@@ -365,6 +366,7 @@ export declare const dictionaries: {
         'community.exchange.uploadDone': string;
         'community.tip.download': string;
         'community.tip.upload': string;
+        'community.tip.uploadMentor': string;
         'community.hint.mentorSignIn': string;
         'community.hint.mentorEmpty': string;
         'community.error.readMentor': string;
@@ -818,7 +820,7 @@ export declare const dictionaries: {
         readonly 'upload.reason.papers': "Paper text and figures: how results are expressed";
         readonly 'upload.reason.experiments': "Experiment scripts and results: how it was verified";
         readonly 'upload.reason.research-assets': "Evidence, claims, decisions and literature notes: the researcher’s judgement";
-        readonly 'upload.reason.review': "Diagnosis and guidance: who reviewed this work, and on what basis";
+        readonly 'upload.reason.review': "Diagnosis and guidance notes (own review / mentor feedback)";
         readonly 'upload.reason.outputs': "Deliverables (reports, slides, …)";
         readonly 'upload.reason.literature-raw': "Machine-extracted text and raw search payloads: not uploaded by default";
         readonly 'upload.reason.literature-fulltext': "Other people’s papers: not uploaded by default; select individually if needed";
@@ -1041,6 +1043,7 @@ export declare const dictionaries: {
         readonly 'community.merge.refill': "Update command with the real filename";
         readonly 'community.merge.downloadFailedHint': "Do **not** send the command already in the input box — the zip never landed.";
         readonly 'community.exchange.uploadTitle': "Upload research progress";
+        readonly 'community.exchange.uploadTitleMentor': "Upload guidance notes";
         readonly 'community.exchange.workspaceLabel': "Workspace";
         readonly 'community.exchange.workspacePlaceholder': "Choose a workspace to hand back…";
         readonly 'community.exchange.noSourceFiles': "The other side has not uploaded anything yet.";
@@ -1056,7 +1059,8 @@ export declare const dictionaries: {
         readonly 'community.exchange.uploadPartial': "Uploaded {uploaded} files; {skipped} skipped for exceeding the per-file limit.";
         readonly 'community.exchange.uploadDone': "Uploaded {count} files.";
         readonly 'community.tip.download': "Download this project workspace snapshot (ZIP)";
-        readonly 'community.tip.upload': "Send my copy of the workspace back so the student can continue";
+        readonly 'community.tip.upload': "Upload my research progress so the mentor can continue";
+        readonly 'community.tip.uploadMentor': "Upload guidance notes (diagnosis, advice, what to change); the student picks it up";
         readonly 'community.hint.mentorSignIn': "Sign in to send or accept mentorship requests.";
         readonly 'community.hint.mentorEmpty': "No mentorship requests yet — offer one under Can mentor, or bid under Joinable.";
         readonly 'community.error.readMentor': "Failed to load mentorship requests.";

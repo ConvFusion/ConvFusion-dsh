@@ -2640,19 +2640,25 @@ section('[6f] 上传计划（哪些文件值得传）')
   const cat = (id) => plan.categories.find((c) => c.id === id)
   const has = (id, rel) => (cat(id)?.files ?? []).some((f) => f.relPath === rel)
 
-  // 评阅记录**上传时排除**：这一层里有导师从服务器下来的指导结果（回声），
-  // 学生的自查也不是要发布的研究事实 —— 一律不传。
-  assertEq(cat('review')?.decision, 'excluded', 'review/ 归"排除"（分类保留供对账）')
+  /*
+   * 评阅记录（`review/`）：**可选、默认不勾**（2026-11 用户改口径）。
+   *
+   * 旧口径是整类 `excluded`，理由是"回声 + 不是要发布的研究事实"；但那会让**本机新生成的
+   * 评阅**（自查 / 证据评阅 / 修改建议）凭空消失（用户实际报过"清单里没有 review/"）。
+   * 现在：列出来、可勾，但默认不勾 —— 回声那条靠"默认不勾"挡住，判断权交回用户。
+   */
+  assertEq(cat('review')?.decision, 'optional', 'review/ 归"可选"（列出来，默认不勾）')
   assertEq(has('review', 'review/research-quality-review-2026-09-19.md'), true, 'review/ 下文件进该分类')
   assertEq(
     plan.defaultSelection.includes('review/research-quality-review-2026-09-19.md'),
     false,
-    '评阅记录不在默认勾选里',
+    '评阅记录不在默认勾选里（要用户自己勾）',
   )
+  assertEq(UP.isSelectable(cat('review')?.decision), true, '可选分类可勾选（界面里能看见、能勾）')
   assertEq(
     UP.isSelectable('excluded'),
     false,
-    'excluded 不可勾选（发布对话框里看不到 review/）',
+    'excluded 仍不可勾选（机器产物照旧不出现）',
   )
 
   assertEq(has('state', 'project.md'), true, 'project.md → 推荐')
@@ -2720,7 +2726,7 @@ section('[6f] 上传计划（哪些文件值得传）')
 
   /*
    * 导师整包回传（`mentor` 口径，v19）：**同一份目录，口径故意不同** ——
-   *   · `review/**`：导师的指导结果就是要带回去的东西 → 推荐（发布侧相反）；
+   *   · `review/**`：导师的指导结果就是要带回去的东西 → 推荐（发布侧是"可选、默认不勾"）；
    *   · `papers/**`：用户明确要求"要去除机器生成文件，但是要有自己撰写的论文 PDF"
    *     → 不因 ≥10 MB 降级；
    *   · 机器产物：照样排除（用户要求"去除机器生成文件"）。

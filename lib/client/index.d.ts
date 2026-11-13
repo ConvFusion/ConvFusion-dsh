@@ -58,7 +58,7 @@ export { PublishDialog } from './settings.js';
  */
 export { PriceGuideRow, askingFeeText } from './settings.js';
 export { defaultPriceOf, priceOptionsOf, normalizePrice, validatePrice, formatTokenYuan } from './price-guide.js';
-export { canDownloadProposal, downloadSideCount } from './settings.js';
+export { canDownloadProposal, canUploadProposal, downloadSideCount } from './settings.js';
 export { CategoryFileTreeView } from './settings.js';
 /**
  * 「展开配额截断后哪些文件是新出现的」：两个对话框（发布 / 回传）共用同一份判据，

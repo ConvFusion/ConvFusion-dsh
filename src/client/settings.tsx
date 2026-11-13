@@ -1727,6 +1727,35 @@ export function canDownloadProposal(p: HostProposal, view: HostProposalView): bo
 }
 
 /**
+ * 这条关系里**我能不能上传**（【指导中】行上的【上传】按钮）。
+ *
+ * ## 规则（2026-11 用户统一的设计理念）
+ *
+ * 「**导师**上传指导记录，**学生**（非 owner 时）上传研究进展」——
+ * 关键在"无论选题是谁发布的，都是导师指导学生的关系"：
+ *
+ * | 方向 | 我 | iAmOwner | 上传 | 落在哪一侧 |
+ * |---|---|---|---|---|
+ * | A 学生出题 | 导师 | false | ✅ 指导记录 | `mentor` 侧（任意路径；与 owner 侧同名并存） |
+ * | A 学生出题 | 学生 | true | ❌ 走【我的】→【更新】 | — |
+ * | B 导师出题 | **导师** | **true** | **✅ 指导记录** | `owner` 侧（导师就是 owner） |
+ * | B 导师出题 | 学生 | false | ✅ 研究进展 | `mentor` 侧 |
+ *
+ * 旧规则是 `!iAmOwner`（"owner 在【我的】里更新，非 owner 才上传"）。它在方向 B 下
+ * 把**导师**挡在了门外：导师发布的选题里导师是 owner，于是【指导中】没有【上传】，
+ * 只能绕道"把指导记录塞进 `review/` 再用【更新研究工作】传" —— 用户 2026-11 报的就是
+ * 这个绕法。方向 A 的导师本来就有【上传】（他恰好是非 owner），两个方向因此不对称。
+ * 现在判据改成**角色优先**：导师在 ACCEPTED 关系里总能上传。
+ */
+export function canUploadProposal(p: HostProposal, view: HostProposalView): boolean {
+  if (p.status !== 'ACCEPTED') return false
+  // 导师：不管选题是谁发布的，指导关系建立后都要能上传指导记录
+  if (view.myRole === 'mentor') return true
+  // 学生：非 owner 时上传自己这一份进展（方向 B）；方向 A 里学生是 owner，走【更新】
+  return !view.iAmOwner
+}
+
+/**
  * "我要下载的那一侧变了吗"该说的话（没有该说的 → `null`，界面就不显示）。
  *
  * 判据由宿主按侧算好（`syncBySide`），这里只做三件事：
@@ -5047,11 +5076,16 @@ export function DownloadDialog({
  * 清单是 `mentor` 口径：`review/**` 与论文 PDF 都是**推荐**（发布时前者排除、后者按大小降级），
  * 机器产物（`harness/` 缓存、依赖、权重…）照样排除。
  *
- * ## 服务器侧的前提
+ * ## 路径不受限（`review/` 是惯例，不是规则）
  *
- * 回传要写学生的项目文件空间（`review/` 之外），服务器须放开"协作者只能写 `review/**`"。
- * 未放开时 403 `FILE_PATH_RESERVED` → 界面说"服务器需放开这条限制"，**不**说"没权限"、
- * 也**不**偷偷退回只传 `review/`（那会让人以为整包已经上去了）。
+ * 有效研究关系的另一方**可以写任意相对路径**（服务器 `docs/API.md` §13.1：回传的是
+ * "我这一份工作区"，不是某个保留目录），落在**自己那一侧**，与 owner 侧同名并存 ——
+ * 所以导师改 `papers/…`、`plans/…` 都合法，`review/` 只是指导记录的**惯例落点**
+ * （评阅技能的产出处）。
+ *
+ * 只有**旧服务器**（v0.5.3 时代）会 403 `FILE_PATH_RESERVED`（那个版本只许导师写
+ * `review/**`）→ 界面如实说"这台服务器是旧版本，升级后任意路径可写"，
+ * **不**说"没权限"、也**不**偷偷退回只传 `review/`（那会让人以为整包已经上去了）。
  */
 function UploadDialog({
   t,
@@ -5069,6 +5103,8 @@ function UploadDialog({
   progress,
   notice,
   expandingCategory,
+  /** 我是导师吗（决定标题：导师上传的是**指导记录**，学生上传的是**研究进展**）。 */
+  iAmMentor,
   onSelectWorkspace,
   onToggleFiles,
   onToggleExpand,
@@ -5093,6 +5129,14 @@ function UploadDialog({
   notice: { tone: 'success' | 'error'; text: string } | null
   /** 正在重取计划的分类（展开配额截断的那部分时）。 */
   expandingCategory: string | null
+  /**
+   * 我是导师吗 —— 决定对话框标题。
+   *
+   * 「无论选题是谁发布的，都是导师指导学生的关系」：导师上传的是**指导记录**
+   * （诊断 / 建议 / 需要改的地方），学生上传的是**研究进展**。同一个对话框，
+   * 两种说法各自成立，所以按角色取标题，而不是按方向取。
+   */
+  iAmMentor: boolean
   onSelectWorkspace: (id: string) => void
   onToggleFiles: (relPaths: string[], next: boolean) => void
   onToggleExpand: (categoryId: string) => void
@@ -5131,7 +5175,7 @@ function UploadDialog({
         }}
       >
         <div style={S.cardHead}>
-          {t('community.exchange.uploadTitle')}
+          {t(iAmMentor ? 'community.exchange.uploadTitleMentor' : 'community.exchange.uploadTitle')}
           <span style={{ flex: '1 1 auto' }} />
           <Badge tone="neutral">{t('community.mentor.status.ACCEPTED')}</Badge>
         </div>
@@ -8224,6 +8268,7 @@ export function CommunityTab({
             progress={uploadProgress}
             notice={exchangeNotice}
             expandingCategory={uploadTruncatedBusy}
+            iAmMentor={viewOf(exchange.proposal).myRole === 'mentor'}
             onSelectWorkspace={(id) => void selectUploadWorkspace(id)}
             onToggleFiles={toggleUploadFiles}
             onToggleExpand={toggleUploadExpand}
@@ -8583,8 +8628,9 @@ export function CommunityTab({
                       {/*
                         指导关系建立之后才有文件交换：
                           【下载】两端都显示 —— 下载**对方那一侧**的快照继续推进研究；
-                          【上传】只有 **owner 之外** 的一方 —— 项目所有者本来就在
-                          【我的】里更新自己的工作区（方向 A 是学生、方向 B 是导师）。
+                          【上传】按**角色**判（见 `canUploadProposal`）：导师在 ACCEPTED
+                          关系里总能有（两个方向都是"导师指导学生"），学生只有非 owner 时才有
+                          （方向 A 的学生是 owner，用【我的】→【更新】）。
                       */}
                       {canDownloadProposal(p, view) ? (
                         <button
@@ -8596,11 +8642,15 @@ export function CommunityTab({
                           {t('community.action.download')}
                         </button>
                       ) : null}
-                      {p.status === 'ACCEPTED' && !view.iAmOwner ? (
+                      {canUploadProposal(p, view) ? (
                         <button
                           type="button"
                           style={{ ...S.accentBtn, opacity: 0.85 }}
-                          title={t('community.tip.upload')}
+                          title={t(
+                            view.myRole === 'mentor'
+                              ? 'community.tip.uploadMentor'
+                              : 'community.tip.upload',
+                          )}
                           onClick={() => void openExchange(p)}
                         >
                           {t('community.action.upload')}

@@ -69,7 +69,7 @@ export type UploadDecision = 'recommended' | 'optional' | 'excluded'
  *
  * | 用途 | 谁在传 | `review/**` | `papers/**` 的 PDF |
  * |---|---|---|---|
- * | `publish` | 学生把自己的研究发布到网络（`work/uploadPlan`） | `excluded`（回声 + 不是要发布的研究事实） | 小文件推荐，≥10 MB 降级为可选 |
+ * | `publish` | 学生把自己的研究发布到网络（`work/uploadPlan`） | `optional`（默认不勾：本机自评值得给对方看，但从服务器下来的指导笔记传回去是回声） | 小文件推荐，≥10 MB 降级为可选 |
  * | `mentor` | 导师把**自己这一份工作区**整包回传（`mentor/uploadPlan`） | `recommended`（指导结果就是要带回去的东西） | `recommended`，不论大小（用户明确要求） |
  *
  * 其余规则（机器产物一律排除）两种口径相同。
@@ -278,20 +278,21 @@ export function classify(
   const asset = assetCategory(p)
   if (asset) {
     /*
-     * 评阅记录（`review/`）：与 `research/` 平级的一层，**上传时排除**（2026-09 用户拍板）。
+     * 评阅记录（`review/`）：与 `research/` 平级的一层，学生发布时判**可选**、默认不勾
+     * （2026-11 用户改口径；2026-09 时是"整类排除"）。
      *
-     * 为什么排除而不是推荐：
-     *   1. 这一层里的导师指导结果**本来就是从服务器下来的**（导师写 → 上传 → 学生下载），
-     *      再原样传回去是一次回声，最好的情况是空操作；
-     *   2. 学生的自查记录属于"研究的判断过程"，不是要对外发布的研究事实；
-     *   3. 学生的评阅与导师的指导混在同一层，学生无从分辨哪些是别人的 —— 一律不传最省事。
+     * 为什么不再是 `excluded`：那一层里既有**本机新生成的评阅**（自己做完 C09 自查 /
+     * 证据评阅 / 修改建议，属于"研究的判断与进展"，给导师看是有价值的），也有**从服务器
+     * 下载回来的导师指导笔记**。整类排除会让前者凭空消失 —— 用户 2026-11 实际就发现
+     * "清单里怎么没有 review/"。而整类推荐又会把后者原样传回去（回声，服务端多一份 owner
+     * 侧副本）。两头都不对，所以：**列出来、默认不勾**，用户要对方看到这一版再自己勾。
      *
      * ⚠️ 这只影响**学生的发布/更新**（`work/publish` 走本函数）。
      * 导师【上传】走的是另一条通道：`mentor` 用途把 `review/` 判成 `recommended`
      * （见 {@link UploadPurpose}）—— 指导结果正是他要带回去的东西。这一条不对称是刻意的，
      * 两种口径各有断言钉住。
      */
-    if (asset === 'review') return { categoryId: 'review', decision: 'excluded' }
+    if (asset === 'review') return { categoryId: 'review', decision: 'optional' }
     return { categoryId: asset, decision: 'recommended' }
   }
 

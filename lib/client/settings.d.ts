@@ -325,6 +325,28 @@ export declare function downloadSideCount(p: HostProposal, view: HostProposalVie
  * 拿不到 ≠ 没有，不能因为一次探测失败就把一个可能可用的动作藏起来。
  */
 export declare function canDownloadProposal(p: HostProposal, view: HostProposalView): boolean;
+/**
+ * 这条关系里**我能不能上传**（【指导中】行上的【上传】按钮）。
+ *
+ * ## 规则（2026-11 用户统一的设计理念）
+ *
+ * 「**导师**上传指导记录，**学生**（非 owner 时）上传研究进展」——
+ * 关键在"无论选题是谁发布的，都是导师指导学生的关系"：
+ *
+ * | 方向 | 我 | iAmOwner | 上传 | 落在哪一侧 |
+ * |---|---|---|---|---|
+ * | A 学生出题 | 导师 | false | ✅ 指导记录 | `mentor` 侧（任意路径；与 owner 侧同名并存） |
+ * | A 学生出题 | 学生 | true | ❌ 走【我的】→【更新】 | — |
+ * | B 导师出题 | **导师** | **true** | **✅ 指导记录** | `owner` 侧（导师就是 owner） |
+ * | B 导师出题 | 学生 | false | ✅ 研究进展 | `mentor` 侧 |
+ *
+ * 旧规则是 `!iAmOwner`（"owner 在【我的】里更新，非 owner 才上传"）。它在方向 B 下
+ * 把**导师**挡在了门外：导师发布的选题里导师是 owner，于是【指导中】没有【上传】，
+ * 只能绕道"把指导记录塞进 `review/` 再用【更新研究工作】传" —— 用户 2026-11 报的就是
+ * 这个绕法。方向 A 的导师本来就有【上传】（他恰好是非 owner），两个方向因此不对称。
+ * 现在判据改成**角色优先**：导师在 ACCEPTED 关系里总能上传。
+ */
+export declare function canUploadProposal(p: HostProposal, view: HostProposalView): boolean;
 /** **本机**研究工作（宿主 `LocalWorkItem` 的镜像）—— 数据来自磁盘，不需要登录。 */
 /**
  * 一项研究工作的**方向**（宿主 `ProjectDirection` 的镜像）。

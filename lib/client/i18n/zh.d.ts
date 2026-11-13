@@ -344,6 +344,7 @@ export declare const zh: {
     'community.merge.refill': string;
     'community.merge.downloadFailedHint': string;
     'community.exchange.uploadTitle': string;
+    'community.exchange.uploadTitleMentor': string;
     'community.exchange.workspaceLabel': string;
     'community.exchange.workspacePlaceholder': string;
     'community.exchange.noSourceFiles': string;
@@ -360,6 +361,7 @@ export declare const zh: {
     'community.exchange.uploadDone': string;
     'community.tip.download': string;
     'community.tip.upload': string;
+    'community.tip.uploadMentor': string;
     'community.hint.mentorSignIn': string;
     'community.hint.mentorEmpty': string;
     'community.error.readMentor': string;

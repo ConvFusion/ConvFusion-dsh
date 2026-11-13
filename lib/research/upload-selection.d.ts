@@ -62,7 +62,7 @@ export type UploadDecision = 'recommended' | 'optional' | 'excluded';
  *
  * | 用途 | 谁在传 | `review/**` | `papers/**` 的 PDF |
  * |---|---|---|---|
- * | `publish` | 学生把自己的研究发布到网络（`work/uploadPlan`） | `excluded`（回声 + 不是要发布的研究事实） | 小文件推荐，≥10 MB 降级为可选 |
+ * | `publish` | 学生把自己的研究发布到网络（`work/uploadPlan`） | `optional`（默认不勾：本机自评值得给对方看，但从服务器下来的指导笔记传回去是回声） | 小文件推荐，≥10 MB 降级为可选 |
  * | `mentor` | 导师把**自己这一份工作区**整包回传（`mentor/uploadPlan`） | `recommended`（指导结果就是要带回去的东西） | `recommended`，不论大小（用户明确要求） |
  *
  * 其余规则（机器产物一律排除）两种口径相同。

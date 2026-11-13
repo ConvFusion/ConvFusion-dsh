@@ -269,7 +269,7 @@ export interface WorkBrief {
  * | `not-found` | 404 不存在或不可见 | 刷新列表 |
  * | `idempotency-reused` | 409 同 Key 不同 payload | 客户端 bug（同一意图才能复用 Key） |
  * | `proposal-state` | 409 提案已不在可接受状态 / 项目已有生效关系 | 刷新列表（别人已处理，或已过期） |
- * | `path-reserved` | 403 导师越界写（只允许 `review/**`） | 把文件放进 `review/` 再传 |
+ * | `path-reserved` | 403 **仅旧服务器**：导师越界写（那个版本只允许 `review/**`） | 升级服务器；临时把文件放进 `review/` 再传 |
  */
 export type ServerErrorCode = 'invalid-key' | 'account-inactive' | 'invalid-invitation' | 'invitation-used' | 'email-taken' | 'rate-limited' | 'bad-request' | 'bad-url' | 'unreachable' | 'server-error' | 'bad-response' | 'insufficient-tokens' | 'no-relationship' | 'not-found' | 'idempotency-reused'
 /** 409：研究状态乐观锁冲突（`details.current_version` 是服务端最新版本）。 */

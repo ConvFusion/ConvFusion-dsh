@@ -2429,8 +2429,8 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     '"先下载一次"提示与【下载】按钮共用同一个判据（不许各算一套）',
   )
   assert(
-    /p\.status === 'ACCEPTED' && !view\.iAmOwner \? \(\s*<button[\s\S]{0,300}?openExchange\(p\)/.test(src),
-    '【上传】只在非 owner 侧（项目所有者用【我的】里的更新）',
+    /canUploadProposal\(p, view\) \? \(\s*<button[\s\S]{0,500}?openExchange\(p\)/.test(src),
+    '【上传】按 `canUploadProposal` 显示（规则见下方四格真值表）',
   )
   // 下载现在**必须有**对话框（选工作区在那里）
   assert(src.includes('function DownloadDialog('), '下载有工作区选择器对话框')
@@ -2487,6 +2487,63 @@ console.log('\n[13] 指导闭环：下载 / 上传')
     }
   }
   assert(src.includes('function UploadDialog('), '有上传对话框')
+
+  /*
+   * 【上传】的显示判据 —— **导师优先**（2026-11 用户统一的设计理念）。
+   *
+   * 「无论选题是谁发布的，都是导师指导学生的关系」，所以导师在 ACCEPTED 关系里
+   * 总能有【上传】。旧判据是 `!iAmOwner`，在方向 B（导师出题）下把导师挡在门外
+   * ——导师是 owner，于是只能绕道"把指导记录塞进 review/ 再用【更新】传"。
+   * 四格真值表把它钉住。
+   */
+  assert(src.includes('export function canUploadProposal('), '上传可用性有独立判据（不写内联条件）')
+  assert(
+    /canUploadProposal\(p, view\) \? \(\s*<button[\s\S]{0,500}?openExchange\(p\)/.test(src),
+    '【上传】按 canUploadProposal 显示',
+  )
+  assert(
+    !/p\.status === 'ACCEPTED' && !view\.iAmOwner \?/.test(src),
+    '旧判据（!iAmOwner）已删除（方向 B 的导师会被它挡住）',
+  )
+  {
+    let mod4 = null
+    try {
+      let captured = null
+      new Function('window', readFileSync(join(PKG, 'lib', 'client.js'), 'utf8'))({
+        __ModuleLoader__: { load: (m) => { captured = m } },
+      })
+      mod4 = captured.factory(createRequire(import.meta.url))
+    } catch (e) {
+      assert(false, `bundle 可在 node 求值：${e instanceof Error ? e.message : String(e)}`)
+    }
+    const V4 = (over) => ({ iAmOwner: false, otherSide: 'owner', mySide: 'mentor', myRole: 'researcher', ...over })
+    const P4 = (over) => ({ status: 'ACCEPTED', ...over })
+    const can = (p, v) => mod4.canUploadProposal(p, v)
+    assertEq(can(P4({}), V4({ myRole: 'mentor', iAmOwner: false })), true, '方向 A·导师 → 有【上传】')
+    assertEq(can(P4({}), V4({ myRole: 'researcher', iAmOwner: true })), false, '方向 A·学生（owner）→ 没有（走【更新】）')
+    assertEq(
+      can(P4({}), V4({ myRole: 'mentor', iAmOwner: true })),
+      true,
+      '方向 B·导师（owner）→ **有**【上传】（2026-11 修的就是这一格）',
+    )
+    assertEq(can(P4({}), V4({ myRole: 'researcher', iAmOwner: false })), true, '方向 B·学生 → 有【上传】')
+    assertEq(can({ status: 'PROPOSED' }, V4({ myRole: 'mentor' })), false, '关系还没建立 → 一律没有')
+  }
+  // 对话框标题按角色分：导师上传的是**指导记录**，学生上传的是**研究进展**
+  const zhDict4 = readFileSync(join(PKG, 'src', 'client', 'i18n', 'zh.ts'), 'utf8')
+  const enDict4 = readFileSync(join(PKG, 'src', 'client', 'i18n', 'en.ts'), 'utf8')
+  assert(zhDict4.includes("'community.exchange.uploadTitleMentor': '上传指导记录'"), '导师侧标题是「上传指导记录」')
+  assert(enDict4.includes("'community.exchange.uploadTitleMentor'"), '英文同样有导师侧标题')
+  assert(zhDict4.includes("'community.tip.uploadMentor'"), '导师的按钮提示说明传的是指导记录')
+  assert(
+    /t\(iAmMentor \? 'community\.exchange\.uploadTitleMentor' : 'community\.exchange\.uploadTitle'\)/.test(src),
+    '对话框标题按角色取词条（同一个对话框两种说法）',
+  )
+  assert(
+    /iAmMentor=\{viewOf\(exchange\.proposal\)\.myRole === 'mentor'\}/.test(src),
+    '渲染时按"我是不是导师"传 iAmMentor',
+  )
+
 
   // ② 点【下载】= 让用户**选一个 DSH 工作区**，把 ZIP 存下来（不走浏览器默认下载）
   assert(
@@ -2580,7 +2637,10 @@ console.log('\n[13] 指导闭环：下载 / 上传')
   // 不再调起浏览器下载：<a download> 与同源 GET 代理都必须消失
   assert(!/a\.download\s*=/.test(src) && !/document\.createElement\('a'\)/.test(src), '不再用 <a> 触发浏览器下载')
   assert(!/mentor\/archive\?projectId/.test(src), '不再走同源 GET 代理')
-  assert(src.includes("t('community.exchange.uploadTitle')"), '上传对话框标题走 i18n')
+  assert(
+    /t\(iAmMentor \? 'community\.exchange\.uploadTitleMentor' : 'community\.exchange\.uploadTitle'\)/.test(src),
+    '上传对话框标题走 i18n，且按角色分（导师 = 指导记录）',
+  )
   assert(
     /post\('mentor\/uploadState'/.test(src) && /post\('mentor\/uploadPlan'/.test(src),
     '上传对话框：先取可回传的工作区，再取所选工作区的文件清单',

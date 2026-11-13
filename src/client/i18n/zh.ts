@@ -129,7 +129,7 @@ export const zh = {
   'upload.reason.papers': '论文正文与图表：研究结果的表达',
   'upload.reason.experiments': '实验脚本与结果：怎么验证的',
   'upload.reason.research-assets': '证据 / 主张 / 决策 / 文献笔记：研究者的判断',
-  'upload.reason.review': '研究诊断与指导：谁在什么依据下评阅过这项工作',
+  'upload.reason.review': '研究诊断与建议（本机自查 / 导师指导笔记）',
   'upload.reason.outputs': '交付成果（报告 / 演示等）',
   'upload.reason.literature-raw': '机器抽取的原文与检索报文：默认不上传',
   'upload.reason.literature-fulltext': '别人的论文原文：默认不上传，需要时单独勾选',
@@ -426,6 +426,7 @@ export const zh = {
   // 上传 = **回传我这一份工作区**（导师是在学生的 workspace/ 里继续推进研究的）：
   // 选工作区 → 勾文件 → 只说清"传什么、多少"，不解释背景
   'community.exchange.uploadTitle': '上传研究进展',
+  'community.exchange.uploadTitleMentor': '上传指导记录',
   'community.exchange.workspaceLabel': '工作区',
   'community.exchange.workspacePlaceholder': '选择要回传的工作区…',
 'community.exchange.noSourceFiles': '对方还没有上传可下载的内容。',
@@ -442,7 +443,8 @@ export const zh = {
   'community.exchange.uploadPartial': '已上传 {uploaded} 个文件；{skipped} 个超过单文件上限被跳过。',
   'community.exchange.uploadDone': '已上传 {count} 个文件。',
   'community.tip.download': '下载这个项目的工作区快照（ZIP）',
-  'community.tip.upload': '把我这一份工作区传回服务器，学生下载后继续',
+  'community.tip.upload': '上传我这一份研究进展（导师下载后继续）',
+  'community.tip.uploadMentor': '上传指导记录（诊断 / 建议 / 需要改的地方），学生下载后继续',
   'community.hint.mentorSignIn': '登录后可发起或接受指导。',
   'community.hint.mentorEmpty': '还没有指导申请 —— 在【可指导】里发起，或在【可加入】里出价。',
   'community.error.readMentor': '读取指导申请失败。',
