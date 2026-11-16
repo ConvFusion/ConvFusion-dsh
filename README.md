@@ -7,10 +7,10 @@
 <p align="center"><strong>专为 DeepSeek Harness 打造的科研操作系统插件</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.7.0-4a43ea" alt="Version 0.7.0">
+  <img src="https://img.shields.io/badge/version-v0.7.3-4a43ea" alt="Version 0.7.3">
   <img src="https://img.shields.io/badge/DeepSeek_Harness-plugin-4a43ea" alt="DeepSeek Harness Plugin">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e" alt="MIT License"></a>
-  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-v0.7.0-6b7280" alt="版本记录"></a>
+  <a href="./CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-v0.7.3-6b7280" alt="版本记录"></a>
 </p>
 
 <p align="center">
