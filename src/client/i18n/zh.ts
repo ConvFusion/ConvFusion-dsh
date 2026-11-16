@@ -320,6 +320,7 @@ export const zh = {
   // 方向 B（导师出题）里要判断人的是**导师**，看的是出价学生 —— 同一套结构、换个说法
   'community.mentor.profileTitleResearcher': '学生信息',
   'community.mentor.profileEmpty': '该导师尚未填写研究简介。',
+  'community.mentor.profileUnavailable': '服务器未提供这位{role}的研究简介',
   'community.mentor.profileEmptyResearcher': '该学生尚未填写研究简介。',
   'community.mentor.profileBio': '简介',
   'community.mentor.profileFields': '研究领域',
@@ -344,6 +345,7 @@ export const zh = {
   // `review_files` 数的正是**非 owner 那一侧** → owner 侧说"对方"、非 owner 侧说"我"。
   // 命名取"谁在做这个动作"：`*Guided` = 导师的动作，`*Deliver*` = 学生的动作。
   // 规则在 src/client/mentorship-labels.ts（纯函数，自检逐一断言四种组合）。
+  'community.build.tip': '界面构建标记（MMDD-HHmm）：宿主重启 + 页面刷新后应变成最新一次构建',
   'community.mentor.progress.awaitingMentor': '等待指导意见',
   'community.mentor.progress.mentorGuided': '导师已指导',
   'community.mentor.progress.iToGuide': '待我指导',

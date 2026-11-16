@@ -273,6 +273,7 @@ export declare const dictionaries: {
         'community.mentor.profileTitle': string;
         'community.mentor.profileTitleResearcher': string;
         'community.mentor.profileEmpty': string;
+        'community.mentor.profileUnavailable': string;
         'community.mentor.profileEmptyResearcher': string;
         'community.mentor.profileBio': string;
         'community.mentor.profileFields': string;
@@ -287,6 +288,7 @@ export declare const dictionaries: {
         'community.work.budget': string;
         'community.mentor.askingVsOffer': string;
         'community.mentor.feeText': string;
+        'community.build.tip': string;
         'community.mentor.progress.awaitingMentor': string;
         'community.mentor.progress.mentorGuided': string;
         'community.mentor.progress.iToGuide': string;
@@ -993,6 +995,7 @@ export declare const dictionaries: {
         readonly 'community.mentor.profileTitle': "Mentor profile";
         readonly 'community.mentor.profileTitleResearcher': "Student profile";
         readonly 'community.mentor.profileEmpty': "This mentor has not filled in a research profile yet.";
+        readonly 'community.mentor.profileUnavailable': "The server does not provide this {role}'s research profile";
         readonly 'community.mentor.profileEmptyResearcher': "This student has not filled in a research profile yet.";
         readonly 'community.mentor.profileBio': "About";
         readonly 'community.mentor.profileFields': "Research fields";
@@ -1007,6 +1010,7 @@ export declare const dictionaries: {
         readonly 'community.work.budget': "Budget {tokens}";
         readonly 'community.mentor.askingVsOffer': "Asking {asking} / offer {offer} Tokens";
         readonly 'community.mentor.feeText': "{total} Token (deposit {deposit} · success {success})";
+        readonly 'community.build.tip': "Client build stamp (MMDD-HHmm); after a host restart and page reload it shows the latest build";
         readonly 'community.mentor.progress.awaitingMentor': "Awaiting guidance";
         readonly 'community.mentor.progress.mentorGuided': "Mentor has given guidance";
         readonly 'community.mentor.progress.iToGuide': "Guidance pending";

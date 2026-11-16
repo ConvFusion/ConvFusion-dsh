@@ -312,6 +312,7 @@ export const en = {
   // party they look at is the bidding student — same structure, different wording.
   'community.mentor.profileTitleResearcher': 'Student profile',
   'community.mentor.profileEmpty': 'This mentor has not filled in a research profile yet.',
+  'community.mentor.profileUnavailable': "The server does not provide this {role}'s research profile",
   'community.mentor.profileEmptyResearcher': 'This student has not filled in a research profile yet.',
   'community.mentor.profileBio': 'About',
   'community.mentor.profileFields': 'Research fields',
@@ -335,6 +336,7 @@ export const en = {
   // student, so the mentor delivers; direction B (a topic recruiting students) is owned
   // by the mentor, so the student delivers. `review_files` counts the NON-owner side.
   // Rule: src/client/mentorship-labels.ts (pure, asserted for all four combinations).
+  'community.build.tip': 'Client build stamp (MMDD-HHmm); after a host restart and page reload it shows the latest build',
   'community.mentor.progress.awaitingMentor': 'Awaiting guidance',
   'community.mentor.progress.mentorGuided': 'Mentor has given guidance',
   'community.mentor.progress.iToGuide': 'Guidance pending',

@@ -18,3 +18,12 @@ declare module '*.svg' {
  * 才有可比性（见 `src/protocol.ts` 的说明）。
  */
 declare const __HOST_PROTOCOL__: number
+
+/**
+ * **客户端构建标记**（`MMDD-HHmm`），由 `scripts/build-client.mjs` 在构建期注入。
+ *
+ * 用途只有一个：让人一眼看出"页面上跑的是哪一次构建" —— 插件是"宿主启动时读
+ * `lib/client.js`、浏览器按 rev 取模块"的模型，不刷新页面/不重启宿主时很容易
+ * 对着旧界面排查新代码（2026-11 踩过三轮）。
+ */
+declare const __CLIENT_BUILD__: string

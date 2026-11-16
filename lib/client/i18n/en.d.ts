@@ -268,6 +268,7 @@ export declare const en: {
     readonly 'community.mentor.profileTitle': "Mentor profile";
     readonly 'community.mentor.profileTitleResearcher': "Student profile";
     readonly 'community.mentor.profileEmpty': "This mentor has not filled in a research profile yet.";
+    readonly 'community.mentor.profileUnavailable': "The server does not provide this {role}'s research profile";
     readonly 'community.mentor.profileEmptyResearcher': "This student has not filled in a research profile yet.";
     readonly 'community.mentor.profileBio': "About";
     readonly 'community.mentor.profileFields': "Research fields";
@@ -282,6 +283,7 @@ export declare const en: {
     readonly 'community.work.budget': "Budget {tokens}";
     readonly 'community.mentor.askingVsOffer': "Asking {asking} / offer {offer} Tokens";
     readonly 'community.mentor.feeText': "{total} Token (deposit {deposit} · success {success})";
+    readonly 'community.build.tip': "Client build stamp (MMDD-HHmm); after a host restart and page reload it shows the latest build";
     readonly 'community.mentor.progress.awaitingMentor': "Awaiting guidance";
     readonly 'community.mentor.progress.mentorGuided': "Mentor has given guidance";
     readonly 'community.mentor.progress.iToGuide': "Guidance pending";

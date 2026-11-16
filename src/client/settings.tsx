@@ -1243,6 +1243,16 @@ export function ConvFusionProjectSettings({
                 v{state.version}
               </span>
             ) : null}
+            {/*
+              构建标记：与 `v{version}` 并排 —— 版本号相同不代表是同一次构建
+              （插件改了前端、宿主还没重启时最容易骗人）。
+            */}
+            <span
+              style={{ fontSize: 11, color: 'var(--dsw-alias-label-tertiary)', opacity: 0.75 }}
+              title={t('community.build.tip')}
+            >
+              ui {__CLIENT_BUILD__}
+            </span>
             {update ? (
               <a
                 href={update.url || undefined}
@@ -5005,7 +5015,20 @@ function PartyProfileDialog({
             </>
           ) : (
             <div style={S.hint}>
-              {t(isMentor ? 'community.mentor.profileEmpty' : 'community.mentor.profileEmptyResearcher')}
+              {/*
+                两件不同的事，别合并：
+                  · `null`   = 服务器**投影了**这一方、但对方没填 → 「尚未填写」；
+                  · `undefined` = 服务器**没给**这一方的资料（按"谁要判断谁"投影）→ 如实说不可知。
+                合并成「尚未填写」等于替对方撒谎（2026-11 用户要求按钮在每一行都出现后暴露）。
+              */}
+              {t(
+                party.profile === undefined
+                  ? 'community.mentor.profileUnavailable'
+                  : isMentor
+                    ? 'community.mentor.profileEmpty'
+                    : 'community.mentor.profileEmptyResearcher',
+                { role: t(isMentor ? 'community.action.viewMentor' : 'community.action.viewStudent') },
+              )}
             </div>
           )}
           <div style={S.footer}>
@@ -8961,6 +8984,15 @@ export function CommunityTab({
        * 明细 + 续费说明 + 申请续费。刷新按钮同时重读**余额**与**申请记录**：
        * 管理员在服务器上批准之后，用户点一下就能看到余额变了、申请变成 APPROVED。
        */}
+      {/*
+        构建标记（`ui MMDD-HHmm`）：插件是"宿主启动时读 `lib/client.js`、浏览器按 rev 取模块"
+        的模型 —— 不重启宿主 / 不刷新页面时，页面可能还在跑旧代码。这一行让人**一眼**对齐
+        "我现在看的是哪一次构建"，比翻缓存、猜版本可靠（2026-11 排查时绕了三轮才想到）。
+      */}
+      <div style={{ ...S.hint, marginTop: 10, opacity: 0.7 }} title={t('community.build.tip')}>
+        {`ui ${__CLIENT_BUILD__}`}
+      </div>
+
       {/* ══ 退出登录确认（点账号行的 ⏏）════════════════════════════════════ */}
       {signOutOpen ? (
         <ModalBoundary id="signout">
@@ -9323,6 +9355,7 @@ export function CommunityTab({
                             {sideSyncHint(t, p, view)}
                           </div>
                         ) : null}
+
                       </div>
                       {/* 右侧：状态 + 操作，整组不许被压缩、不许换行 */}
                       <div
@@ -9369,15 +9402,22 @@ export function CommunityTab({
                         </button>
                       ) : null}
                       {/*
-                        对方的资料 —— 判据是"服务器**给没给**这一方的 profile 键"，
-                        不是"profile 是不是非空"：
-                          · 键在、值 `null`（投影了但对方没填）→ **显示**按钮，
-                            点开如实说"尚未填写"；
-                          · 键都不在（服务器不给看这一方的资料）→ **不显示**。
+                        对方的资料 —— **只要知道对方是谁就显示按钮**（2026-11 用户要求：
+                        「列表显示工整一些」）。
+
+                        ⚠️ 之前按"服务器**给没给** profile 键"判，于是同一列里出现了两种行：
+                        方向 B（导师出题）有服务器投影的学生 profile → 有【学生】按钮；
+                        方向 A（学生发布）服务器只把**导师**的 profile 投影给**学生** →
+                        导师这一侧没有键 → 这行少一个按钮，看着参差。
+
+                        三态（对话框里说清，不编内容）：
+                          · 对象 = 对方填过 → 显示简介；
+                          · `null` = 投影了但没填 → 「尚未填写」；
+                          · `undefined` = 服务器没给这一方 → 「服务器未提供」。
                         服务器按"谁要判断谁"投影（方向 A 给 researcher 看 mentor 的，
-                        方向 B 给 mentor 看 researcher 的），所以这里不按角色判断。
+                        方向 B 给 mentor 看 researcher 的），客户端不复制这条策略、也不假装有。
                       */}
-                      {view.counterparty?.profile !== undefined ? (
+                      {view.counterparty ? (
                         <button
                           type="button"
                           style={S.ghostBtn}
